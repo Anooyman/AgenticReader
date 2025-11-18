@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📚 LLMReader 智能文档分析系统</title>
+
+    <!-- CSS 样式 -->
+    <link rel="stylesheet" href="/static/css/main.css">
+
+    <!-- Markdown 支持 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+
+    <!-- MathJax 数学公式支持 -->
+    <script type="text/javascript">
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                processEscapes: true,
+                processEnvironments: true,
+                packages: {'[+]': ['ams', 'newcommand', 'configmacros']},
+                tags: 'ams',
+                tagSide: 'right',
+                tagIndent: '.8em',
+                multlineWidth: '85%',
+                autoload: {
+                    color: [],
+                    colorV2: ['color']
+                }
+            },
+            chtml: {
+                scale: 1.0,
+                minScale: 0.5,
+                matchFontHeight: false,
+                fontURL: 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/output/chtml/fonts/woff-v2'
+            },
+            options: {
+                ignoreHtmlClass: 'tex2jax_ignore',
+                processHtmlClass: 'tex2jax_process',
+                renderActions: {
+                    addMenu: [0, '', '']
+                }
+            },
+            startup: {
+                ready: function () {
+                    MathJax.startup.defaultReady();
+                    MathJax.typesetPromise();
+                }
+            }
+        };
+    </script>
+    <script type="text/javascript" id="MathJax-script" async
+        src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+    </script>
+</head>
+<body>
+    <!-- 主容器 -->
+    <div class="app-container">
+        <!-- 顶部导航栏 -->
+        <header class="header">
+            <div class="header-content">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <h1 class="header-title">📚 LLMReader 智能文档分析系统</h1>
+                        <p class="header-subtitle">支持 PDF 与网页内容解析、摘要与基于向量库的问答 | 包含LaTeX数学公式渲染支持</p>
+                    </div>
+                    <div class="header-nav">
+                        <a href="/config" class="nav-link">⚙️ 配置管理</a>
+                        <a href="/data" class="nav-link">📁 数据管理</a>
+                        <a href="/chat" class="nav-link">💬 聊天模式</a>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- 主要内容区域 -->
+        <main class="main-content">
+            <!-- 侧边栏 -->
+            <aside class="sidebar">
+                <div class="sidebar-content">
+                    <h3>📊 系统状态</h3>
+
+
+                    <!-- 当前状态 -->
+                    <div class="config-section">
+                        <h4>📋 文档状态</h4>
+                        <div class="status-info">
+                            <p id="current-doc-status">当前文档: 未处理</p>
+                        </div>
+                    </div>
+
+                    <hr class="sidebar-divider">
+
+                    <!-- 会话管理 -->
+                    <div class="config-section">
+                        <h4>💬 会话管理</h4>
+                        <div class="session-controls">
+                            <button class="btn btn-primary btn-sm session-btn" id="new-session-main-btn">
+                                <span>✨</span>
+                                <span>新建会话</span>
+                            </button>
+                            <button class="btn btn-secondary btn-sm session-btn" id="view-sessions-main-btn">
+                                <span>📋</span>
+                                <span>查看会话</span>
+                            </button>
+                        </div>
+                        <div class="session-info" id="main-session-info">
+                            <p class="session-status">当前会话: 未创建</p>
+                        </div>
+                    </div>
+
+                    <hr class="sidebar-divider">
+
+                    <p class="sidebar-note">💡 提示：使用顶部导航栏访问配置管理和数据管理功能。处理文档后可在聊天模式中进行智能问答。</p>
+                </div>
+            </aside>
+
+            <!-- 内容区域 -->
+            <div class="content-area">
+                <!-- 标签页导航 -->
+                <div class="tab-navigation">
+                    <button class="tab-btn active" data-tab="pdf">📄 PDF 文档</button>
+                    <button class="tab-btn" data-tab="web">🌐 网页内容</button>
+                </div>
+
+                <!-- PDF 标签页 -->
+                <div id="pdf-tab" class="tab-content active">
+                    <div class="tab-header">
+                        <h2>📄 PDF Reader</h2>
+                    </div>
+
+                    <!-- PDF 上传区域 -->
+                    <div class="upload-section">
+                        <div class="upload-area">
+                            <div class="upload-zone" id="pdf-upload-zone">
+                                <div class="upload-icon">📁</div>
+                                <p class="upload-text">拖拽PDF文件到这里，或点击选择文件</p>
+                                <input type="file" id="pdf-file-input" accept=".pdf" style="display: none;">
+                            </div>
+                        </div>
+
+
+                        <div class="upload-options">
+                            <label>
+                                <input type="checkbox" id="save-outputs" checked>
+                                生成并保存摘要到本地 (MD/PDF)
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- PDF 质量设置 -->
+                    <div class="quality-section">
+                        <h4>⚙️ PDF转图片质量设置</h4>
+                        <div class="quality-grid">
+                            <div class="quality-selector">
+                                <label for="pdf-preset">选择PDF转图片质量预设:</label>
+                                <select id="pdf-preset" class="form-select">
+                                    <option value="fast">🚀 快速 (150 DPI + 低质量)</option>
+                                    <option value="balanced">⚖️ 平衡 (200 DPI + 中质量)</option>
+                                    <option value="high" selected>🎯 高质量 (300 DPI + 高质量)</option>
+                                    <option value="ultra">💎 超高质量 (600 DPI + 极致)</option>
+                                </select>
+                            </div>
+                            <div class="quality-info">
+                                <div id="preset-info" class="info-card">
+                                    <strong>当前设置详情:</strong><br>
+                                    📐 DPI: 300<br>
+                                    🎨 质量: high<br>
+                                    📝 说明: 高质量OCR效果，推荐用于重要文档
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 操作按钮 -->
+                    <div class="action-buttons">
+                        <button id="process-pdf-btn" class="btn btn-primary" disabled>🚀 开始处理 PDF</button>
+                        <button id="reset-pdf-chat-btn" class="btn btn-secondary">🔄 重置对话</button>
+                    </div>
+
+                    <!-- 处理状态 -->
+                    <div id="pdf-status" class="status-message" style="display: none;"></div>
+                </div>
+
+                <!-- Web 标签页 -->
+                <div id="web-tab" class="tab-content">
+                    <div class="tab-header">
+                        <h2>🌐 Web Reader</h2>
+                    </div>
+
+                    <!-- URL 输入区域 -->
+                    <div class="url-section">
+                        <div class="url-input-group">
+                            <input type="url" id="web-url-input" placeholder="输入网页 URL (http:// 或 https://)" class="form-input">
+                            <label>
+                                <input type="checkbox" id="web-save-outputs" checked>
+                                生成并保存摘要到本地 (MD/PDF)
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- 操作按钮 -->
+                    <div class="action-buttons">
+                        <button id="process-web-btn" class="btn btn-primary">🚀 开始处理 URL</button>
+                        <button id="reset-web-chat-btn" class="btn btn-secondary">🔄 重置对话</button>
+                    </div>
+
+                    <!-- 处理状态 -->
+                    <div id="web-status" class="status-message" style="display: none;"></div>
+                </div>
+
+                <!-- 总结展示区域 -->
+                <div id="summary-section" class="summary-section" style="display: none;">
+                    <hr class="section-divider">
+                    <h3>📋 自动生成的总结</h3>
+                    <div class="summary-tabs">
+                        <button class="summary-tab-btn active" data-summary="brief">📝 简要总结</button>
+                        <button class="summary-tab-btn" data-summary="detail">📖 详细总结</button>
+                    </div>
+                    <div class="summary-content">
+                        <div id="brief-summary" class="summary-tab-content active">
+                            <div class="expandable-content">
+                                <div class="content-header" data-target="brief-content">
+                                    <span>📝 简要总结内容 (点击展开/收起)</span>
+                                    <span class="expand-icon">▼</span>
+                                </div>
+                                <div id="brief-content" class="content-body collapsed">
+                                    <div class="tex2jax_process" id="brief-summary-text">加载中...</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="detail-summary" class="summary-tab-content">
+                            <div class="expandable-content">
+                                <div class="content-header" data-target="detail-content">
+                                    <span>📖 详细总结内容 (点击展开/收起)</span>
+                                    <span class="expand-icon">▼</span>
+                                </div>
+                                <div id="detail-content" class="content-body collapsed">
+                                    <div class="tex2jax_process" id="detail-summary-text">加载中...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 聊天入口区域 -->
+                <div id="chat-section" class="chat-section">
+                    <hr class="section-divider">
+                    <h3>💬 智能问答</h3>
+                    <p class="chat-subtitle">基于当前已处理文档进行智能问答对话</p>
+
+                    <div class="chat-entry-area">
+                        <div class="chat-entry-card">
+                            <div class="chat-entry-icon">💬</div>
+                            <h4>进入全屏聊天模式</h4>
+                            <p>获得更大的对话空间，并排查看PDF文档，享受更好的智能问答体验</p>
+
+                            <div class="chat-entry-features">
+                                <div class="feature-item">
+                                    <span class="feature-icon">🖥️</span>
+                                    <span>全屏对话界面</span>
+                                </div>
+                                <div class="feature-item">
+                                    <span class="feature-icon">📄</span>
+                                    <span>并排PDF查看</span>
+                                </div>
+                                <div class="feature-item">
+                                    <span class="feature-icon">💡</span>
+                                    <span>智能问题建议</span>
+                                </div>
+                                <div class="feature-item">
+                                    <span class="feature-icon">⚡</span>
+                                    <span>快捷键支持</span>
+                                </div>
+                            </div>
+
+                            <div class="chat-entry-actions">
+                                <div class="chat-buttons-group">
+                                    <a href="/chat" class="btn btn-primary btn-lg chat-entry-btn" id="enter-chat-btn">
+                                        <span class="btn-icon">🚀</span>
+                                        <span>进入聊天模式</span>
+                                    </a>
+                                    <button class="btn btn-secondary btn-lg chat-entry-btn" id="new-chat-btn" style="display: none;">
+                                        <span class="btn-icon">✨</span>
+                                        <span>开始新对话</span>
+                                    </button>
+                                </div>
+                                <div class="chat-entry-status" id="chat-entry-status">
+                                    <span class="status-text">📄 请先处理文档后再进入聊天模式</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 快速预览聊天 -->
+                        <div class="quick-chat-preview" id="quick-chat-preview" style="display: none;">
+                            <h5>💭 快速问答预览</h5>
+                            <div class="quick-chat-messages" id="quick-chat-messages">
+                                <div class="preview-message">
+                                    <span class="preview-icon">🤖</span>
+                                    <span>文档已准备就绪，您可以开始提问了！</span>
+                                </div>
+                            </div>
+                            <div class="quick-chat-input">
+                                <input type="text" placeholder="在这里快速提问，或点击上方按钮进入完整聊天模式..." readonly>
+                                <button disabled>💬</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 会话列表模态框 -->
+    <div class="modal-overlay" id="sessions-modal" style="display: none;">
+        <div class="modal-content sessions-modal">
+            <div class="modal-header">
+                <h3>💬 会话管理</h3>
+                <button class="modal-close-btn" id="close-sessions-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="sessions-list-container">
+                    <div class="sessions-header">
+                        <button class="btn btn-primary btn-sm" id="new-session-modal-btn">
+                            <span>✨</span>
+                            <span>新建会话</span>
+                        </button>
+                        <button class="btn btn-secondary btn-sm" id="clear-all-sessions-modal-btn">
+                            <span>🗑️</span>
+                            <span>清空所有</span>
+                        </button>
+                    </div>
+                    <div class="sessions-list" id="main-sessions-list">
+                        <div class="loading-sessions">加载中...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="/static/js/main.js"></script>
+</body>
+</html>

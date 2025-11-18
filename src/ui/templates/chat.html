@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>💬 LLMReader 聊天模式</title>
+
+    <!-- CSS 样式 -->
+    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="/static/css/chat.css">
+
+    <!-- Markdown 支持 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+
+    <!-- MathJax 数学公式支持 -->
+    <script type="text/javascript">
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                processEscapes: true,
+                processEnvironments: true,
+                packages: {'[+]': ['ams', 'newcommand', 'configmacros']},
+                tags: 'ams',
+                tagSide: 'right',
+                tagIndent: '.8em',
+                multlineWidth: '85%',
+                autoload: {
+                    color: [],
+                    colorV2: ['color']
+                }
+            },
+            chtml: {
+                scale: 1.0,
+                minScale: 0.5,
+                matchFontHeight: false,
+                fontURL: 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/output/chtml/fonts/woff-v2'
+            },
+            svg: {
+                scale: 1.0,
+                minScale: 0.5,
+                matchFontHeight: false,
+                fontCache: 'global'
+            },
+            options: {
+                ignoreHtmlClass: 'tex2jax_ignore',
+                processHtmlClass: 'tex2jax_process',
+                skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+                renderActions: {
+                    addMenu: [0, '', '']
+                }
+            },
+            startup: {
+                ready: function () {
+                    MathJax.startup.defaultReady();
+                    console.log('✓ MathJax 已初始化');
+                    // 配置完成，等待应用调用 typesetPromise
+                }
+            }
+        };
+    </script>
+    <script type="text/javascript" id="MathJax-script" async
+        src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+    </script>
+</head>
+<body class="chat-mode">
+    <!-- 聊天页面容器 -->
+    <div class="chat-app-container">
+        <!-- 顶部导航栏 -->
+        <header class="chat-header">
+            <div class="chat-nav">
+                <div class="nav-left">
+                    <a href="/" class="nav-btn back-btn">
+                        <span>🏠</span>
+                        <span>返回主页</span>
+                    </a>
+                    <h1 class="chat-title">💬 LLMReader 聊天模式</h1>
+                </div>
+                <div class="nav-right">
+                    <div class="document-info" id="chat-doc-status">
+                        <span class="doc-icon">📄</span>
+                        <span id="chat-current-doc">未加载文档</span>
+                    </div>
+                    <button class="nav-btn toggle-pdf-btn" id="toggle-pdf-viewer">
+                        <span>📖</span>
+                        <span class="btn-text">PDF</span>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- 主要聊天区域 -->
+        <main class="chat-main">
+
+            <!-- 聊天容器 -->
+            <div class="chat-conversation" id="chat-conversation">
+                <!-- 聊天消息区域 -->
+                <div class="chat-messages-full" id="chat-messages-full">
+                    <div class="welcome-message-full">
+                        <div class="welcome-content">
+                            <h3>🤖 智能文档问答助手</h3>
+                            <p>您好！我是您的智能文档助手。</p>
+                            <div class="welcome-status" id="welcome-doc-status">
+                                <span class="status-text">请先在主页面处理文档，然后回到这里开始对话</span>
+                            </div>
+                            <div class="quick-suggestions" id="quick-suggestions" style="display: none;">
+                                <h4>💡 建议问题：</h4>
+                                <div class="suggestion-buttons">
+                                    <button class="suggestion-btn" data-question="请总结这篇文档的主要内容">📋 总结主要内容</button>
+                                    <button class="suggestion-btn" data-question="这篇文档有什么创新点？">💡 分析创新点</button>
+                                    <button class="suggestion-btn" data-question="文档中提到的方法有什么优缺点？">⚖️ 分析优缺点</button>
+                                    <button class="suggestion-btn" data-question="能否详细解释文档中的核心概念？">🔍 解释核心概念</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 输入区域 -->
+                <div class="chat-input-area">
+                    <div class="input-container">
+                        <textarea
+                            id="chat-input-full"
+                            placeholder="请输入您的问题…"
+                            rows="2"
+                            disabled></textarea>
+                        <button id="send-btn-full" class="send-btn-full" disabled>
+                            <span class="send-icon">📤</span>
+                            <span class="send-text">发送</span>
+                        </button>
+                    </div>
+                    <div class="input-footer">
+                        <div class="connection-status-full">
+                            <span class="status-indicator-full" id="status-indicator-full">●</span>
+                            <span id="status-text-full">连接中...</span>
+                        </div>
+                        <div class="input-actions">
+                            <button class="action-btn" id="clear-chat-full">🗑️ 清空对话</button>
+                            <button class="action-btn" id="export-chat">💾 导出对话</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PDF查看器 -->
+            <div class="chat-pdf-viewer" id="chat-pdf-viewer">
+                <div class="pdf-viewer-header-full">
+                    <h4>📄 文档预览</h4>
+                    <div class="pdf-controls-full">
+                        <button id="pdf-prev-page-full" class="pdf-control-btn-full" disabled>◀</button>
+                        <span id="pdf-page-info-full">无文档</span>
+                        <button id="pdf-next-page-full" class="pdf-control-btn-full" disabled>▶</button>
+                    </div>
+                    <button class="close-pdf-btn" id="close-pdf-viewer">✕</button>
+                </div>
+                <div class="pdf-viewer-content-full" id="pdf-viewer-content-full">
+                    <div class="no-document-message">
+                        <div class="no-doc-content">
+                            <span class="no-doc-icon">📄</span>
+                            <h3>暂无文档</h3>
+                            <p>请先在主页面上传并处理文档</p>
+                            <a href="/" class="btn btn-primary">前往主页面</a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- JavaScript -->
+    <script src="/static/js/chat.js"></script>
+    
+    <!-- 🔬 LaTeX 深度诊断工具 (仅开发环境) -->
+    <script src="/static/latex-deep-diagnostics.js"></script>
+</body>
+</html>

@@ -1,0 +1,1052 @@
+/* LLMReader 聊天页面专用样式 */
+
+/* 聊天模式基础样式 */
+.chat-mode {
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--bg-color);
+}
+
+/* 聊天应用容器 */
+.chat-app-container {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* 聊天页面顶部导航 */
+.chat-header {
+    background: linear-gradient(135deg, var(--primary-color), var(--primary-hover));
+    color: white;
+    padding: 1rem 1.5rem;
+    box-shadow: var(--box-shadow-lg);
+    flex-shrink: 0;
+    z-index: 1000;
+}
+
+.chat-nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.nav-left {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+}
+
+.nav-right {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.nav-btn {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    text-decoration: none;
+    border: none;
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    transition: var(--transition);
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.nav-btn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    transform: translateY(-1px);
+}
+
+.chat-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.document-info {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: rgba(255, 255, 255, 0.1);
+    padding: 0.5rem 1rem;
+    border-radius: var(--border-radius);
+    font-size: 0.875rem;
+}
+
+.doc-icon {
+    font-size: 1rem;
+}
+
+/* 主要聊天区域 */
+.chat-main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    max-width: 1400px;
+    margin: 0 auto;
+    width: 100%;
+}
+
+/* 聊天对话容器 */
+.chat-conversation {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: white;
+}
+
+/* 全屏聊天消息区域 */
+.chat-messages-full {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.5rem;
+    background: var(--bg-secondary);
+    min-height: 0;
+}
+
+/* 欢迎消息样式 */
+.welcome-message-full {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 400px;
+    text-align: center;
+}
+
+.welcome-content {
+    background: white;
+    padding: 3rem;
+    border-radius: var(--border-radius-lg);
+    box-shadow: var(--box-shadow);
+    max-width: 600px;
+}
+
+.welcome-content h3 {
+    color: var(--primary-color);
+    margin-bottom: 1rem;
+    font-size: 1.75rem;
+}
+
+.welcome-content p {
+    color: var(--text-muted);
+    margin-bottom: 1.5rem;
+    font-size: 1.1rem;
+}
+
+.welcome-status {
+    margin-bottom: 2rem;
+}
+
+.status-text {
+    display: inline-block;
+    background: var(--bg-secondary);
+    padding: 0.75rem 1.5rem;
+    border-radius: var(--border-radius);
+    color: var(--text-color);
+    font-weight: 500;
+}
+
+/* 快速建议按钮 */
+.quick-suggestions {
+    margin-top: 2rem;
+}
+
+.quick-suggestions h4 {
+    color: var(--text-color);
+    margin-bottom: 1rem;
+    font-size: 1.1rem;
+}
+
+.suggestion-buttons {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0.75rem;
+}
+
+.suggestion-btn {
+    background: var(--bg-secondary);
+    border: 2px solid var(--border-light);
+    padding: 1rem;
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    transition: var(--transition);
+    font-size: 0.875rem;
+    text-align: left;
+    color: var(--text-color);
+}
+
+.suggestion-btn:hover {
+    border-color: var(--primary-color);
+    background: rgba(0, 102, 204, 0.05);
+    transform: translateY(-2px);
+}
+
+/* 聊天输入区域 */
+.chat-input-area {
+    background: white;
+    border-top: 1px solid var(--border-light);
+    padding: 1.5rem;
+    flex-shrink: 0;
+}
+
+.input-container {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-end;
+    margin-bottom: 1rem;
+}
+
+#chat-input-full {
+    flex: 1;
+    padding: 1rem;
+    border: 2px solid var(--border-color);
+    border-radius: var(--border-radius-lg);
+    font-size: 1rem;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 60px;
+    max-height: 150px;
+    transition: var(--transition);
+}
+
+#chat-input-full:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(0, 102, 204, 0.25);
+}
+
+.send-btn-full {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1rem 1.5rem;
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: var(--border-radius-lg);
+    cursor: pointer;
+    transition: var(--transition);
+    font-weight: 600;
+    font-size: 1rem;
+}
+
+.send-btn-full:hover:not(:disabled) {
+    background: var(--primary-hover);
+    transform: translateY(-2px);
+}
+
+.send-btn-full:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+}
+
+.input-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+}
+
+.connection-status-full {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    color: var(--text-muted);
+}
+
+.status-indicator-full {
+    font-size: 1.2rem;
+    line-height: 1;
+}
+
+.status-indicator-full.connected {
+    color: var(--success-color);
+}
+
+.status-indicator-full.connecting {
+    color: var(--warning-color);
+}
+
+.status-indicator-full.disconnected {
+    color: var(--danger-color);
+}
+
+.input-actions {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.action-btn {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    padding: 0.5rem 1rem;
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    transition: var(--transition);
+    font-size: 0.875rem;
+    color: var(--text-color);
+}
+
+.action-btn:hover {
+    background: var(--border-light);
+    transform: translateY(-1px);
+}
+
+/* PDF查看器（聊天模式） */
+.chat-pdf-viewer {
+    width: 55%;
+    max-width: none;
+    min-width: 500px;
+    background: white;
+    border-left: 1px solid var(--border-light);
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+.pdf-viewer-header-full {
+    background: var(--bg-secondary);
+    padding: 1rem;
+    border-bottom: 1px solid var(--border-light);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.pdf-viewer-header-full h4 {
+    margin: 0;
+    color: var(--primary-color);
+    font-size: 1.1rem;
+}
+
+.pdf-controls-full {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.pdf-control-btn-full {
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--border-radius);
+    cursor: pointer;
+    transition: var(--transition);
+    font-size: 0.875rem;
+}
+
+.pdf-control-btn-full:hover:not(:disabled) {
+    background: var(--primary-hover);
+}
+
+.pdf-control-btn-full:disabled {
+    background: var(--border-color);
+    cursor: not-allowed;
+}
+
+#pdf-page-info-full {
+    font-size: 0.875rem;
+    color: var(--text-color);
+    white-space: nowrap;
+    min-width: 120px;
+    text-align: center;
+}
+
+.close-pdf-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: var(--border-radius);
+    transition: var(--transition);
+    font-size: 1.25rem;
+    line-height: 1;
+}
+
+.close-pdf-btn:hover {
+    background: var(--danger-color);
+    color: white;
+}
+
+.pdf-viewer-content-full {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 1.5rem;
+    background: #f8f9fa;
+}
+
+/* PDF页面容器 - 增大显示尺寸 */
+.pdf-page-display-full {
+    transform: scale(1.5);
+    transform-origin: top center;
+}
+
+/* 无文档消息 */
+.no-document-message {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+    min-height: 300px;
+}
+
+.no-doc-content {
+    text-align: center;
+    color: var(--text-muted);
+}
+
+.no-doc-icon {
+    font-size: 4rem;
+    margin-bottom: 1rem;
+    display: block;
+}
+
+.no-doc-content h3 {
+    margin-bottom: 1rem;
+    color: var(--text-color);
+}
+
+.no-doc-content p {
+    margin-bottom: 2rem;
+}
+
+/* PDF页面显示 */
+.pdf-page-image-full {
+    width: 100%;
+    height: auto;
+    display: block;
+    border-radius: var(--border-radius);
+    border: 1px solid var(--border-color);
+    box-shadow: var(--box-shadow);
+    background: white;
+}
+
+.pdf-embedded-full {
+    width: 100%;
+    height: 100%;
+    min-height: 500px;
+    border: none;
+    border-radius: var(--border-radius);
+}
+
+/* 聊天消息样式（继承主样式并调整） */
+.chat-message {
+    margin-bottom: 1.5rem;
+    display: flex;
+    gap: 1rem;
+    max-width: 100%;
+}
+
+.chat-message.user {
+    flex-direction: row-reverse;
+}
+
+.message-avatar {
+    width: 45px;
+    height: 45px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    flex-shrink: 0;
+    font-size: 1.25rem;
+}
+
+.message-content {
+    max-width: 80%;
+    padding: 1.25rem;
+    border-radius: var(--border-radius-lg);
+    position: relative;
+    font-size: 1rem;
+    line-height: 1.6;
+    /* 🔥 改进：确保 LaTeX 公式能正确显示 */
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    /* 确保数学公式不会被裁剪 */
+    overflow: visible;
+}
+
+.message-content.user {
+    background: var(--primary-color);
+    color: white;
+    border-bottom-right-radius: var(--spacing-xs);
+}
+
+.message-content.assistant {
+    background: white;
+    border: 1px solid var(--border-light);
+    border-bottom-left-radius: var(--spacing-xs);
+    box-shadow: var(--box-shadow);
+}
+
+.message-time {
+    font-size: 0.75rem;
+    opacity: 0.7;
+    margin-top: var(--spacing-sm);
+}
+
+/* 状态消息 */
+.status-message-chat {
+    text-align: center;
+    color: var(--text-muted);
+    font-style: italic;
+    padding: 1rem;
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: var(--border-radius);
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+}
+
+/* 🔥 改进：LaTeX 公式显示样式 */
+.tex2jax_process {
+    /* 确保数学公式能正确渲染 */
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    white-space: normal;
+}
+
+/* MathJax 输出样式 */
+.mjx-container {
+    display: inline-block !important;
+    margin: 0 0.25em !important;
+    vertical-align: middle !important;
+    /* 🔥 强制显示 */
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+/* 确保块级公式正确显示 */
+.mjx-container[display="true"] {
+    display: block !important;
+    text-align: center !important;
+    margin: 0.5em 0 !important;
+}
+
+/* 行内公式调整 */
+.mjx-container[display="false"] {
+    display: inline-block !important;
+    vertical-align: middle !important;
+}
+
+/* 🔥 MathJax SVG 和 HTML 输出确保可见 */
+.mjx-container > svg,
+.mjx-container > svg > g {
+    display: block !important;
+    visibility: visible !important;
+}
+
+/* 🔥 MathJax CommonHTML 输出支持 */
+.MathJax_Display,
+.MathJax {
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+/* 🔥 修复：确保code标签内的LaTeX公式也能正确显示 */
+.message-content code {
+    /* 允许LaTeX公式在code标签内正常渲染 */
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    font-family: inherit !important;
+}
+
+/* 🔥 专门针对LaTeX公式的code标签处理 */
+.message-content code {
+    background: none !important;
+    border: none !important;
+    padding: 0 !important;
+    font-family: inherit !important;
+    color: inherit !important;
+}
+
+/* 🔥 针对可能被错误包裹的LaTeX公式的修复 */
+.message-content code .mjx-container {
+    display: inline-block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+/* 🔥 新增：处理em/strong标签中的LaTeX公式 */
+.message-content em,
+.message-content strong {
+    background: transparent !important;
+    padding: 0 !important;
+    font-family: inherit !important;
+}
+
+.message-content em .mjx-container,
+.message-content strong .mjx-container {
+    display: inline-block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+/* 🔥 强制显示所有MathJax容器，无论在什么标签内 */
+.mjx-container,
+.mjx-container[display="true"],
+.mjx-container[display="false"] {
+    display: inline-block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    position: static !important;
+    z-index: auto !important;
+}
+
+.mjx-container[display="true"] {
+    display: block !important;
+    text-align: center !important;
+    margin: 0.5em 0 !important;
+}
+
+/* 处理 MathJax 和普通文本的混合内容 */
+.message-content p,
+.message-content li,
+.message-content div {
+    /* 不添加任何隐藏或裁剪的样式 */
+    overflow: visible;
+    text-overflow: initial;
+}
+
+/* 防止代码块内的公式被错误处理 */
+.message-content code,
+.message-content pre {
+    font-family: 'Courier New', monospace;
+    white-space: pre-wrap;
+}
+
+/* 响应式设计 */
+@media (max-width: 1024px) {
+    .chat-main {
+        flex-direction: column;
+    }
+
+    .chat-pdf-viewer {
+        width: 100%;
+        max-width: none;
+        height: 50vh;
+        border-left: none;
+        border-top: 1px solid var(--border-light);
+    }
+
+    .chat-conversation {
+        height: 50vh;
+    }
+
+    .nav-left {
+        gap: 1rem;
+    }
+
+    .chat-title {
+        font-size: 1.25rem;
+    }
+
+    .btn-text {
+        display: none;
+    }
+}
+
+@media (max-width: 768px) {
+    .chat-header {
+        padding: 1rem;
+    }
+
+    .chat-nav {
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+
+    .nav-right {
+        order: 3;
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .document-info {
+        flex: 1;
+        justify-content: center;
+    }
+
+    .chat-input-area {
+        padding: 1rem;
+    }
+
+    .input-footer {
+        flex-direction: column;
+        gap: 1rem;
+        align-items: stretch;
+    }
+
+    .input-actions {
+        justify-content: center;
+    }
+
+    .suggestion-buttons {
+        grid-template-columns: 1fr;
+    }
+
+    .message-content {
+        max-width: 95%;
+    }
+
+    .welcome-content {
+        padding: 2rem;
+        margin: 1rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .chat-title {
+        font-size: 1.1rem;
+    }
+
+    .welcome-content h3 {
+        font-size: 1.5rem;
+    }
+
+    .input-container {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .send-btn-full {
+        align-self: flex-end;
+        width: auto;
+    }
+
+    .pdf-controls-full {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+
+    /* 改善移动端触摸体验 */
+    .suggestion-btn {
+        min-height: 44px;
+        padding: 0.75rem 1rem;
+        font-size: 0.9rem;
+    }
+
+    .chat-input-full {
+        min-height: 44px;
+        font-size: 16px; /* 防止iOS自动缩放 */
+    }
+
+    .send-btn-full {
+        min-height: 44px;
+        min-width: 44px;
+    }
+
+    .nav-btn {
+        min-height: 44px;
+        min-width: 44px;
+    }
+}
+
+/* 隐藏PDF查看器的状态 */
+.chat-pdf-viewer.hidden {
+    display: none;
+}
+
+.chat-conversation.full-width {
+    width: 100%;
+}
+
+/* 专注模式 */
+.chat-mode.focus-mode .chat-pdf-viewer {
+    display: none;
+}
+
+.chat-mode.focus-mode .chat-conversation {
+    width: 100%;
+}
+
+/* 聊天会话管理侧边栏样式 */
+.chat-sidebar {
+    width: 300px;
+    background: white;
+    border-right: 1px solid var(--border-light);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    z-index: 200;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    box-shadow: var(--box-shadow-lg);
+}
+
+.chat-sidebar.visible {
+    transform: translateX(0);
+}
+
+/* 会话头部 */
+.session-header {
+    background: var(--bg-secondary);
+    padding: 1.5rem;
+    border-bottom: 1px solid var(--border-light);
+    flex-shrink: 0;
+}
+
+.session-header h3 {
+    color: var(--primary-color);
+    margin: 0 0 1rem 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.session-header .btn {
+    width: 100%;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+/* 会话列表容器 */
+.session-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem;
+    max-height: calc(100vh - 200px);
+}
+
+.loading-sessions {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 2rem;
+    font-style: italic;
+}
+
+/* 会话项样式 */
+.session-item {
+    background: white;
+    border: 1px solid var(--border-light);
+    border-radius: var(--border-radius);
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    cursor: pointer;
+    transition: var(--transition);
+    position: relative;
+}
+
+.session-item:hover {
+    border-color: var(--primary-color);
+    background: rgba(0, 102, 204, 0.02);
+    transform: translateY(-1px);
+    box-shadow: var(--box-shadow);
+}
+
+.session-item.active {
+    border-color: var(--primary-color);
+    background: rgba(0, 102, 204, 0.05);
+    box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.1);
+}
+
+.session-item.active::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--primary-color);
+    border-radius: 0 2px 2px 0;
+}
+
+/* 会话信息 */
+.session-info {
+    margin-bottom: 0.5rem;
+}
+
+.session-title {
+    font-weight: 600;
+    color: var(--text-color);
+    margin: 0 0 0.25rem 0;
+    font-size: 0.95rem;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.session-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.session-doc {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.session-time {
+    flex-shrink: 0;
+}
+
+.session-preview {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+    margin-top: 0.5rem;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* 会话管理工具 */
+.session-tools {
+    padding: 1rem;
+    border-top: 1px solid var(--border-light);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+}
+
+.session-tools .btn {
+    width: 100%;
+    justify-content: center;
+}
+
+/* 会话操作按钮 */
+.session-actions {
+    display: flex;
+    gap: 0.5rem;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    margin-top: 0.5rem;
+}
+
+.session-item:hover .session-actions {
+    opacity: 1;
+}
+
+.session-action-btn {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    color: var(--text-muted);
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--border-radius);
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.session-action-btn:hover {
+    background: var(--primary-color);
+    color: white;
+    border-color: var(--primary-color);
+}
+
+.session-action-btn.delete:hover {
+    background: var(--danger-color);
+    border-color: var(--danger-color);
+}
+
+/* 空状态消息 */
+.empty-message {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 2rem 1rem;
+    font-style: italic;
+}
+
+.empty-message p:first-child {
+    font-size: 1rem;
+    margin-bottom: 0.5rem;
+    color: var(--text-color);
+}
+
+.empty-message p:last-child {
+    font-size: 0.875rem;
+    margin-bottom: 0;
+}
+
+/* 响应式设计 - 会话管理 */
+@media (max-width: 1024px) {
+    .chat-sidebar {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        z-index: 200;
+        transform: translateX(-100%);
+        box-shadow: var(--box-shadow-lg);
+    }
+
+    .chat-sidebar.visible {
+        transform: translateX(0);
+    }
+
+    .chat-main {
+        position: relative;
+    }
+
+    .chat-conversation {
+        width: 100%;
+    }
+}
+
+@media (max-width: 768px) {
+    .chat-sidebar {
+        width: 280px;
+    }
+
+    .session-header {
+        padding: 1rem;
+    }
+
+    .session-list {
+        padding: 0.75rem;
+    }
+
+    .session-item {
+        padding: 0.75rem;
+    }
+
+    .session-title {
+        font-size: 0.9rem;
+    }
+
+    .session-meta {
+        font-size: 0.75rem;
+    }
+}
+
+@media (max-width: 480px) {
+    .chat-sidebar {
+        width: 260px;
+    }
+
+    .session-actions {
+        opacity: 1; /* 在移动端始终显示操作按钮 */
+    }
+}

@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LaTeX + Markdown 测试页面</title>
+
+    <!-- 复制chat.html中的MathJax配置 -->
+    <script type="text/javascript">
+        window.MathJax = {
+            tex: {
+                inlineMath: [['$', '$'], ['\\(', '\\)']],
+                displayMath: [['$$', '$$'], ['\\[', '\\]']],
+                processEscapes: true,
+                processEnvironments: true,
+                packages: {'[+]': ['ams', 'newcommand', 'configmacros']},
+                tags: 'ams',
+                tagSide: 'right',
+                tagIndent: '.8em',
+                multlineWidth: '85%',
+                autoload: {
+                    color: [],
+                    colorV2: ['color']
+                }
+            },
+            chtml: {
+                scale: 1.0,
+                minScale: 0.5,
+                matchFontHeight: false,
+                fontURL: 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/output/chtml/fonts/woff-v2'
+            },
+            svg: {
+                scale: 1.0,
+                minScale: 0.5,
+                matchFontHeight: false,
+                fontCache: 'global'
+            },
+            options: {
+                ignoreHtmlClass: 'tex2jax_ignore',
+                processHtmlClass: 'tex2jax_process',
+                skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+                renderActions: {
+                    addMenu: [0, '', '']
+                }
+            },
+            startup: {
+                ready: function () {
+                    MathJax.startup.defaultReady();
+                    console.log('✓ MathJax 已初始化');
+                }
+            }
+        };
+    </script>
+    <script type="text/javascript" id="MathJax-script" async
+        src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js">
+    </script>
+
+    <!-- Markdown 支持 -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2rem;
+            line-height: 1.6;
+        }
+        .test-section {
+            margin: 2rem 0;
+            padding: 1rem;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .test-section h3 {
+            color: #333;
+            margin-top: 0;
+        }
+        .rendered-content {
+            background: #f9f9f9;
+            padding: 1rem;
+            border-radius: 4px;
+            margin-top: 1rem;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 0.5rem 0;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .mjx-container {
+            display: inline-block !important;
+            margin: 0 0.25em !important;
+            vertical-align: middle !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+        }
+        .mjx-container[display="true"] {
+            display: block !important;
+            text-align: center !important;
+            margin: 0.5em 0 !important;
+        }
+    </style>
+</head>
+<body>
+    <h1>LaTeX + Markdown 同时渲染测试</h1>
+
+    <div class="test-section">
+        <h3>测试1: 直接LaTeX公式</h3>
+        <p>行内公式: $E=mc^2$</p>
+        <p>块级公式: $$\frac{a}{b} = \frac{c}{d}$$</p>
+    </div>
+
+    <div class="test-section">
+        <h3>测试2: Markdown + LaTeX 混合内容</h3>
+        <textarea id="input" rows="8" style="width: 100%; font-family: monospace;">## 这是标题
+
+这是**粗体**文本，包含行内公式 $E=mc^2$ 和*斜体*文本。
+
+下面是块级公式：
+$$\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}$$
+
+最后是`代码`和另一个公式 $\sin^2(x) + \cos^2(x) = 1$
+        </textarea>
+        <br>
+        <button onclick="testRender()">测试渲染</button>
+        <button onclick="clearResult()">清空结果</button>
+
+        <div class="rendered-content tex2jax_process" id="result">
+            点击"测试渲染"按钮查看结果
+        </div>
+    </div>
+
+    <div class="test-section">
+        <h3>测试3: 诊断信息</h3>
+        <button onclick="checkMathJax()">检查 MathJax 状态</button>
+        <button onclick="forceRender()">强制重新渲染</button>
+        <div id="diagnostics" style="background: #f0f0f0; padding: 1rem; margin-top: 1rem; font-family: monospace; font-size: 0.9rem;">
+            诊断信息将在这里显示
+        </div>
+    </div>
+
+    <script>
+        // 复制chat.js中的renderMarkdown方法
+        function renderMarkdown(content) {
+            if (typeof content !== 'string') {
+                console.warn('⚠️ 内容不是字符串:', typeof content);
+                return content;
+            }
+
+            const hasLatex = /\$\$[\s\S]*?\$\$|\$[^\$\n]+?\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/.test(content);
+
+            console.log(`📝 renderMarkdown 输入分析:`, {
+                contentLength: content.length,
+                hasLatex: hasLatex,
+                preview: content.substring(0, 100)
+            });
+
+            if (typeof marked !== 'undefined') {
+                try {
+                    marked.setOptions({
+                        breaks: true,
+                        gfm: true,
+                        sanitize: false,
+                        smartLists: true,
+                        smartypants: false,
+                        headerIds: false,
+                        mangle: false
+                    });
+
+                    // LaTeX保护机制
+                    let processedContent = content;
+                    const latexBlocks = [];
+                    const latexInline = [];
+
+                    if (hasLatex) {
+                        console.log(`📝 开始处理Markdown，检测到LaTeX: ${hasLatex}`);
+
+                        // Step 1: 提取块级公式 $$...$$ (必须在行内公式之前)
+                        processedContent = processedContent.replace(/\$\$[\s\S]*?\$\$/g, (match) => {
+                            const placeholder = `__LATEX_BLOCK_${latexBlocks.length}__`;
+                            latexBlocks.push(match);
+                            console.log(`🔒 保护块级公式: ${match.substring(0, 40)}... → ${placeholder}`);
+                            return placeholder;
+                        });
+
+                        // Step 2: 提取行内公式 $...$ (但要避免 $$)
+                        processedContent = processedContent.replace(/(?<!\$)\$(?!\$)([^\$\n]+?)\$(?!\$)/g, (match) => {
+                            const placeholder = `__LATEX_INLINE_${latexInline.length}__`;
+                            latexInline.push(match);
+                            console.log(`🔒 保护行内公式: ${match.substring(0, 40)}... → ${placeholder}`);
+                            return placeholder;
+                        });
+
+                        console.log(`✓ 提取完成: ${latexBlocks.length} 个块级 + ${latexInline.length} 个行内`);
+                    }
+
+                    // Step 3: 渲染 Markdown
+                    let rendered = marked.parse(processedContent);
+                    console.log(`✓ Markdown渲染完成，输出长度: ${rendered.length}`);
+
+                    // Step 4: 恢复LaTeX公式
+                    latexBlocks.forEach((latex, index) => {
+                        const placeholder = `__LATEX_BLOCK_${index}__`;
+                        rendered = rendered.replaceAll(placeholder, latex);
+                        console.log(`✓ 恢复块级公式 #${index}: ${latex.substring(0, 50)}`);
+                    });
+
+                    latexInline.forEach((latex, index) => {
+                        const placeholder = `__LATEX_INLINE_${index}__`;
+                        rendered = rendered.replaceAll(placeholder, latex);
+                        console.log(`✓ 恢复行内公式 #${index}: ${latex.substring(0, 50)}`);
+                    });
+
+                    // 🔥 最终修复：处理被Markdown错误包裹的LaTeX公式
+                    if (hasLatex) {
+                        // 修复被code标签包裹的LaTeX公式
+                        rendered = rendered.replace(/<code>(\$[^<]+?\$)<\/code>/g, '$1');
+                        rendered = rendered.replace(/<code>(\$\$[^<]*?\$\$)<\/code>/g, '$1');
+                        rendered = rendered.replace(/<code>(\\(?:\(|\[)[^<]*?\\(?:\)|\]))<\/code>/g, '$1');
+
+                        console.log(`🔧 执行LaTeX后处理修复`);
+                    }
+
+                    return rendered;
+                } catch (error) {
+                    console.warn('❌ Marked渲染失败:', error);
+                    return content.replace(/\n/g, '<br>');
+                }
+            }
+
+            return content.replace(/\n/g, '<br>');
+        }
+
+        function testRender() {
+            const input = document.getElementById('input');
+            const result = document.getElementById('result');
+
+            const content = input.value;
+            console.log('🔄 开始测试渲染...');
+
+            // 渲染Markdown
+            const rendered = renderMarkdown(content);
+            result.innerHTML = rendered;
+
+            // 渲染MathJax
+            setTimeout(() => {
+                renderMath(result);
+            }, 100);
+        }
+
+        function renderMath(element) {
+            if (!element) {
+                console.warn('⚠️ 元素为空，无法渲染数学公式');
+                return;
+            }
+
+            if (typeof MathJax === 'undefined') {
+                console.warn('⚠️ MathJax 未加载，重试中...');
+                setTimeout(() => renderMath(element), 500);
+                return;
+            }
+
+            const hasLatexContent = /\$[\s\S]*?\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/.test(element.innerHTML);
+            console.log('🔄 开始渲染数学公式...');
+            console.log(`📝 元素内容: ${element.innerHTML.substring(0, 150)}`);
+            console.log(`🔍 检测到LaTeX内容: ${hasLatexContent}`);
+
+            if (!hasLatexContent) {
+                console.log('ℹ️ 未检测到LaTeX内容，跳过MathJax渲染');
+                return;
+            }
+
+            // 强制标记元素为需要处理的类
+            element.classList.add('tex2jax_process');
+            element.classList.remove('tex2jax_ignore');
+
+            if (MathJax.startup && MathJax.startup.promise) {
+                MathJax.startup.promise.then(() => {
+                    MathJax.typesetPromise([element])
+                        .then(() => {
+                            console.log('✅ LaTeX 渲染成功');
+                            const mjxContainers = element.querySelectorAll('.mjx-container, [role="img"], mjx-container');
+                            console.log(`MathJax 容器数量: ${mjxContainers.length}`);
+
+                            if (mjxContainers.length === 0) {
+                                console.warn('⚠️ 未发现 MathJax 容器！');
+                            }
+                        })
+                        .catch(err => {
+                            console.error('❌ MathJax 渲染失败:', err);
+                        });
+                });
+            }
+        }
+
+        function clearResult() {
+            document.getElementById('result').innerHTML = '点击"测试渲染"按钮查看结果';
+        }
+
+        function checkMathJax() {
+            const diagnostics = document.getElementById('diagnostics');
+            let info = '=== MathJax 诊断信息 ===\n';
+            info += `MathJax 加载: ${typeof MathJax !== 'undefined' ? '✓ 是' : '✗ 否'}\n`;
+
+            if (typeof MathJax !== 'undefined') {
+                info += `version: ${MathJax.version || 'unknown'}\n`;
+                info += `startup: ${MathJax.startup ? '✓' : '✗'}\n`;
+                info += `typesetPromise: ${typeof MathJax.typesetPromise === 'function' ? '✓' : '✗'}\n`;
+                info += `startup.promise: ${MathJax.startup && MathJax.startup.promise ? '✓' : '✗'}\n`;
+            }
+
+            diagnostics.textContent = info;
+        }
+
+        function forceRender() {
+            const result = document.getElementById('result');
+            if (typeof MathJax !== 'undefined' && MathJax.typesetPromise) {
+                MathJax.typesetPromise().then(() => {
+                    console.log('✅ 全局 MathJax 渲染完成');
+                });
+            }
+        }
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(checkMathJax, 2000);
+        });
+    </script>
+</body>
+</html>
