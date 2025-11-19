@@ -479,6 +479,12 @@ class LLMReaderApp {
 
             this.config = { ...this.config, ...mappedConfig };
 
+            // 如果有保存的文档状态，恢复 documentType
+            if (savedDocState && savedDocState.documentType) {
+                this.config.documentType = savedDocState.documentType;
+                console.log(`📝 恢复文档类型: ${savedDocState.documentType}`);
+            }
+
             // 🔥 新增：延迟加载策略 - 只显示UI，不自动加载PDF内容
             if (savedDocState && savedDocState.currentDocName) {
                 console.log('🔄 检测到本地存储的文档状态:', savedDocState.currentDocName);
@@ -662,11 +668,33 @@ class LLMReaderApp {
             if (response.ok && result.status === 'success') {
                 this.config.currentDocName = result.doc_name;
                 this.config.hasWebReader = true;
+                this.config.hasPdfReader = false; // 明确标记为 Web 模式
+                this.config.documentType = 'web'; // 添加文档类型标记
 
                 // 🔥 关键修复：确保在Web处理完成后创建基于文档的固定聊天会话ID
                 if (!this.currentChatId) {
                     this.currentChatId = this.generateDocumentSessionId(result.doc_name);
                     console.log('🔑 Web处理完成时生成基于文档的固定聊天会话ID:', this.currentChatId);
+                }
+
+                // 初始化 Web 阅读器的聊天服务
+                try {
+                    const initResponse = await fetch(this.getApiUrl(`/api/v1/web/initialize/${result.doc_name}`), {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ url: url })
+                    });
+
+                    const initResult = await initResponse.json();
+                    if (initResult.status === 'success') {
+                        console.log('✅ Web聊天服务初始化成功');
+                    } else {
+                        console.warn('⚠️ Web聊天服务初始化失败:', initResult.message);
+                    }
+                } catch (initError) {
+                    console.error('❌ 初始化Web聊天服务时出错:', initError);
                 }
 
                 // 保存文档状态到本地存储
@@ -680,7 +708,7 @@ class LLMReaderApp {
                 this.updateSessionStatus(); // 🔥 新增：更新会话状态显示
                 this.updateChatEntryStatus(); // 更新聊天入口状态
                 this.showSummarySection();
-                this.loadSummary('brief'); // 加载默认总结
+                this.loadSummary('brief'); // 加载默认总结（会根据文档类型调用不同API）
             } else {
                 this.hideProcessingStatus('web');
                 this.showStatus('error', result.detail || '处理网页内容失败', 'web');
@@ -702,7 +730,15 @@ class LLMReaderApp {
         if (!this.config.currentDocName) return;
 
         try {
-            const response = await fetch(this.getApiUrl(`/api/v1/pdf/summary/${this.config.currentDocName}?summary_type=${summaryType}`));
+            // 根据文档类型选择不同的 API 端点
+            const documentType = this.config.documentType || (this.config.hasPdfReader ? 'pdf' : 'web');
+            const apiEndpoint = documentType === 'web'
+                ? `/api/v1/web/summary/${this.config.currentDocName}?summary_type=${summaryType}`
+                : `/api/v1/pdf/summary/${this.config.currentDocName}?summary_type=${summaryType}`;
+
+            console.log(`📖 加载${documentType}摘要: ${apiEndpoint}`);
+
+            const response = await fetch(this.getApiUrl(apiEndpoint));
             const result = await response.json();
 
             const summaryElement = document.getElementById(`${summaryType}-summary-text`);
@@ -756,6 +792,8 @@ class LLMReaderApp {
 
                 // 更新配置状态
                 this.config.hasPdfReader = status.has_json;
+                this.config.hasWebReader = false; // 明确标记为 PDF 模式
+                this.config.documentType = 'pdf'; // 添加文档类型标记
 
                 // 🔥 关键修复：确保在PDF处理完成后创建基于文档的固定聊天会话ID
                 if (!this.currentChatId) {
@@ -1502,6 +1540,7 @@ class LLMReaderApp {
             currentDocName: this.config.currentDocName,
             hasPdfReader: this.config.hasPdfReader,
             hasWebReader: this.config.hasWebReader,
+            documentType: this.config.documentType, // 保存文档类型
             provider: this.config.provider,
             pdfPreset: this.config.pdfPreset,
             currentChatId: this.currentChatId, // 添加当前聊天会话ID
@@ -2379,7 +2418,7 @@ class LLMReaderApp {
         // 恢复文档状态
         if (sessionData.docName) {
             this.config.currentDocName = sessionData.docName;
-            this.config.hasPdfReader = sessionData.hasPdfReader || true;
+            this.config.hasPdfReader = sessionData.hasPdfReader || false;
             this.config.hasWebReader = sessionData.hasWebReader || false;
             this.config.provider = sessionData.provider || this.config.provider;
 
@@ -2389,26 +2428,47 @@ class LLMReaderApp {
                 hasWebReader: this.config.hasWebReader
             });
 
-            // 自动重新初始化PDF阅读器和加载PDF查看器
+            // 🔥 根据文档类型选择不同的初始化方式
             try {
-                console.log('🔄 正在重新初始化PDF阅读器...');
-                this.showStatus('info', `正在重新初始化PDF: ${sessionData.docName}...`, 'config');
+                let response, result;
+                
+                if (this.config.hasWebReader) {
+                    // Web Reader 初始化
+                    console.log('🔄 正在重新初始化 Web 阅读器...');
+                    this.showStatus('info', `正在重新初始化 Web: ${sessionData.docName}...`, 'config');
 
-                // 调用后端API重新初始化PDF阅读器
-                const response = await fetch(this.getApiUrl(`/api/v1/pdf/reinitialize/${sessionData.docName}`), {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
-                });
+                    // 调用后端API重新初始化 Web 阅读器
+                    response = await fetch(this.getApiUrl(`/api/v1/web/initialize/${sessionData.docName}`), {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ url: null })
+                    });
+                    
+                    result = await response.json();
+                } else {
+                    // PDF Reader 初始化
+                    console.log('🔄 正在重新初始化 PDF 阅读器...');
+                    this.showStatus('info', `正在重新初始化 PDF: ${sessionData.docName}...`, 'config');
 
-                const result = await response.json();
+                    // 调用后端API重新初始化PDF阅读器
+                    response = await fetch(this.getApiUrl(`/api/v1/pdf/reinitialize/${sessionData.docName}`), {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    
+                    result = await response.json();
+                }
 
                 if (response.ok && result.status === 'success') {
-                    console.log('✅ PDF阅读器重新初立化成功:', result.message);
+                    const readerType = this.config.hasWebReader ? 'Web' : 'PDF';
+                    console.log(`✅ ${readerType}阅读器重新初始化成功:`, result.message);
 
-                    // 更新配置状态
-                    this.config.hasPdfReader = true;
+                    // 更新配置状态（保持原有状态）
+                    this.config.hasPdfReader = sessionData.hasPdfReader || false;
                     this.config.hasWebReader = sessionData.hasWebReader || false;
 
                     // 🔥 关键修复：保存状态到localStorage，确保状态同步
@@ -2453,16 +2513,18 @@ class LLMReaderApp {
                     this.showStatus('success', `✅ 会话切换完成: ${sessionData.docName} 已重新加载，可以开始聊天`, 'config');
 
                 } else if (result.status === 'needs_processing') {
-                    console.warn('⚠️ PDF需要重新处理:', result.message);
-                    this.showStatus('warning', `PDF ${sessionData.docName} 需要重新处理`, 'config');
+                    const readerType = this.config.hasWebReader ? 'Web内容' : 'PDF';
+                    console.warn(`⚠️ ${readerType}需要重新处理:`, result.message);
+                    this.showStatus('warning', `${readerType} ${sessionData.docName} 需要重新处理`, 'config');
                     return false;
                 } else {
-                    console.error('❌ PDF重新初始化失败:', result);
+                    const readerType = this.config.hasWebReader ? 'Web' : 'PDF';
+                    console.error(`❌ ${readerType}重新初始化失败:`, result);
                     // 🔥 降级处理：即使API失败，也尝试恢复基本状态
                     console.log('🔄 API失败，尝试降级处理恢复基本状态...');
 
                     // 设置基本配置状态
-                    this.config.hasPdfReader = true;
+                    this.config.hasPdfReader = sessionData.hasPdfReader || false;
                     this.config.hasWebReader = sessionData.hasWebReader || false;
 
                     // 保存状态到localStorage
@@ -2477,7 +2539,7 @@ class LLMReaderApp {
                     try {
                         this.showSummarySection();
                         await this.loadSummary('brief');
-                        this.showStatus('warning', `⚠️ 会话已切换但PDF初始化有问题，部分功能可能受限`, 'config');
+                        this.showStatus('warning', `⚠️ 会话已切换但${readerType}初始化有问题，部分功能可能受限`, 'config');
                     } catch (summaryError) {
                         console.error('摘要加载也失败:', summaryError);
                         this.showStatus('warning', `⚠️ 会话已切换，但文档状态恢复不完整，请重新处理文档`, 'config');
@@ -2487,12 +2549,13 @@ class LLMReaderApp {
                 }
 
             } catch (error) {
-                console.error('❌ PDF自动加载失败:', error);
+                const readerType = this.config.hasWebReader ? 'Web' : 'PDF';
+                console.error(`❌ ${readerType}自动加载失败:`, error);
                 // 🔥 降级处理：即使API请求失败，也尝试恢复基本状态
                 console.log('🔄 API请求失败，尝试降级处理恢复基本状态...');
 
                 // 设置基本配置状态
-                this.config.hasPdfReader = true;
+                this.config.hasPdfReader = sessionData.hasPdfReader || false;
                 this.config.hasWebReader = sessionData.hasWebReader || false;
 
                 // 保存状态到localStorage
@@ -2506,7 +2569,7 @@ class LLMReaderApp {
                 // 尝试显示摘要区域（可能会成功）
                 try {
                     this.showSummarySection();
-                    this.showStatus('warning', `⚠️ 会话已切换但网络异常，请检查PDF处理状态`, 'config');
+                    this.showStatus('warning', `⚠️ 会话已切换但网络异常，请检查${readerType}处理状态`, 'config');
                 } catch (summaryError) {
                     console.error('显示摘要区域失败:', summaryError);
                     this.showStatus('warning', `⚠️ 会话已切换，但界面恢复不完整，请刷新页面`, 'config');

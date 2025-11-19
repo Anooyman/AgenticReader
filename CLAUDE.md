@@ -45,11 +45,15 @@ python src/chat/chat.py          # Test multi-agent system
 
 **UI Mode (FastAPI + WebSocket):**
 ```bash
-# Launch FastAPI web interface
+# Launch FastAPI web interface (recommended for development)
 python src/ui/run_server.py
+
+# Or use uvicorn directly with auto-reload
+uvicorn src.ui.backend.app:app --reload --host 0.0.0.0 --port 8000
 
 # Access at http://localhost:8000
 # API Documentation: http://localhost:8000/docs
+# Data Management: http://localhost:8000/data
 
 # Features:
 # - Modern FastAPI backend with WebSocket real-time communication
@@ -58,6 +62,7 @@ python src/ui/run_server.py
 # - PDF viewer integration with page navigation
 # - Session management with import/export functionality
 # - Automatic data backup and recovery system
+# - Data management with granular deletion control
 ```
 
 ### Development and Testing
@@ -82,7 +87,9 @@ python -c "from src.core.llm.client import LLMBase; client = LLMBase(provider='a
 - **PlanAgent**: Top-level coordinator that analyzes queries, creates execution plans, and evaluates results
 - **ExecutorAgent**: Mid-level executor that manages sub-agents and coordinates plan execution
 - **MemoryAgent**: Specialized agent for intelligent memory management with semantic search
-- Built on LangGraph framework with asynchronous state graph processing
+- Built on **LangGraph** framework with asynchronous state graph processing
+- Uses typed state classes (PlanState, ExecutorState) and Command objects for control flow
+- All agent communications are async using `astream()` pattern
 
 **2. Reader-Based Processing (src/readers/)**
 - **ReaderBase**: Abstract base class providing common functionality (content extraction, summarization, vector DB interaction)
@@ -103,14 +110,16 @@ python -c "from src.core.llm.client import LLMBase; client = LLMBase(provider='a
 
 **5. UI System (src/ui/)**
 - **FastAPI Backend (backend/app.py)**: Modern async web framework with WebSocket support for real-time chat
-  - Modular API structure: `/api/v1/` endpoints for sessions, config, PDF, chat, and web processing
+  - Modular API structure: `/api/v1/` endpoints for sessions, config, PDF, chat, web, and data management
   - Health check endpoint: `/health` for monitoring
   - Auto-generated OpenAPI documentation at `/docs` and `/redoc`
 - **SessionManager (backend/services/session_service.py)**: Comprehensive session persistence with JSON file storage, backup creation, and import/export
+- **DataService (backend/services/data_service.py)**: Granular data management with support for partial deletion of document components
 - **Dual Storage Architecture**: Client-side localStorage + server-side file storage for data redundancy
 - **Jinja2 Templates**: Server-side rendering with template inheritance and component modularity
 - **Vanilla JavaScript Frontend**: ES6 class-based architecture with session management and real-time updates
 - **PDF Viewer Integration**: Client-side PDF display with page navigation and image fallback support
+- **Data Management UI**: Comprehensive interface for viewing and managing all document data with granular control
 
 ### Data Flow Architecture
 
@@ -232,11 +241,57 @@ Final Answer Generation → Response to User
 - **Multi-session Support**: Session switching, import/export, and history management
 - **Auto-save Mechanism**: LLM-response-triggered saving with backup rotation (keeps 10 most recent)
 - **Data Directory Structure**:
-  - `data/sessions/chat_sessions.json` - Main session storage
-  - `data/sessions/backups/` - Automatic backup rotation
+  - `data/sessions/backups/chat_sessions_current.json` - Main session storage (refactored location)
+  - `data/sessions/backups/` - Automatic backup rotation (keeps 10 most recent timestamped backups)
   - `data/sessions/exports/` - User-initiated exports
+  - **Migration Note**: Old `chat_sessions.json` files are automatically migrated to new location on startup
 - **Responsive Design**: Mobile-friendly interface with adaptive layouts
 - **State Synchronization**: Automatic sync between client and server state
+
+### Data Management System (NEW)
+Access via: `http://localhost:8000/data`
+
+**Granular Data Control:**
+Each processed document generates multiple data types that can be managed independently:
+- **JSON Data** - Parsed document content and metadata (`.json` files in `data/json_data/`)
+- **Vector Database** - FAISS index files (directories in `data/vector_db/`)
+- **PDF Images** - Converted image files (directories in `data/pdf_image/`)
+- **Summary Files** - Generated summaries in MD/PDF format (files in `data/output/`)
+
+**Features:**
+- **Storage Overview Dashboard** - Real-time statistics on total documents, storage size, sessions, and last cleanup
+- **Document List View** - Detailed breakdown showing size and status of each data type per document
+- **Partial Deletion** - Delete specific data types (e.g., only images or only summaries) while preserving others
+- **Batch Operations** - Select multiple documents for bulk deletion
+- **Cache Management** - View and clear PDF image cache, vector DB cache, and JSON cache separately
+- **Smart Cleanup** - Automatically delete data older than N days (default: 30)
+- **Data Backup** - Create backups of sessions, output, and config
+- **Session Statistics** - View total sessions, messages, last activity, and backup count
+
+**API Endpoints:**
+```
+GET    /api/v1/data/overview                    - Storage overview stats
+GET    /api/v1/data/documents                   - List all documents with detailed data breakdown
+GET    /api/v1/data/cache/{type}                - Cache info (pdf_image, vector_db, json_data)
+GET    /api/v1/data/sessions/stats              - Session statistics
+
+DELETE /api/v1/data/documents/{name}/parts      - Delete specific data types (granular control)
+       Body: ["json", "vector_db", "images", "summary", "all"]
+DELETE /api/v1/data/documents                   - Batch delete entire documents
+       Body: ["doc1", "doc2", ...]
+DELETE /api/v1/data/cache/{type}                - Clear cache
+
+POST   /api/v1/data/cleanup/smart?days=30       - Smart cleanup old data
+POST   /api/v1/data/backup                      - Create data backup
+POST   /api/v1/data/reset?confirm=CONFIRM_RESET - Full system reset
+```
+
+**Use Cases:**
+- Delete large image files to free space while keeping JSON/summaries
+- Clear vector DB to rebuild indexes
+- Remove old summaries before regenerating
+- Batch cleanup of multiple documents
+- Regular maintenance with smart cleanup
 
 ## Development Patterns
 
@@ -289,6 +344,14 @@ Final Answer Generation → Response to User
 3. Playwright: Uncomment the `playwright` section (lines 21-27 in settings.py)
 4. DuckDuckGo: Ensure `duckduckgo-mcp-server` is installed via `uv pip install`
 5. Test MCP connectivity before running Web Reader features
+
+**Data Management Extensions:**
+1. Add new data types to `DataService.delete_document_data()` in `src/ui/backend/services/data_service.py`
+2. Update data type paths mapping in the `data_type_paths` dictionary
+3. Add corresponding API endpoint in `src/ui/backend/api/v1/data.py`
+4. Update frontend `renderDataDetail()` in `src/ui/static/js/data.js` to display new data type
+5. Session format compatibility: Handle both dict and list formats for sessions (see `get_session_stats()`)
+6. All deletion operations should log actions and return detailed results including freed space
 
 ## Input Processing Behavior
 
@@ -349,8 +412,9 @@ curl http://localhost:8000/health
 **UI Debugging:**
 - **Browser DevTools**: Monitor WebSocket messages, localStorage state, and network requests
 - **Server Logs**: FastAPI automatically logs requests and responses with timestamps
-- **Session Files**: Inspect `data/sessions/chat_sessions.json` for session state debugging
-- **Backup Recovery**: Use backup files in `data/sessions/backups/` for data recovery testing
+- **Session Files**: Inspect `data/sessions/backups/chat_sessions_current.json` for session state debugging
+- **Backup Recovery**: Use backup files in `data/sessions/backups/` (timestamped files) for data recovery testing
+- **Session Migration**: Check logs for automatic migration messages from old to new storage location
 
 **MCP Service Testing:**
 ```bash

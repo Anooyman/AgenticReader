@@ -31,6 +31,7 @@ AgenticReader 是一个基于大语言模型（LLM）的智能文档分析与问
 - **会话持久化**: 自动保存、备份轮换（保留最近 10 个）、导入导出
 - **双存储架构**: 客户端 localStorage + 服务端文件存储
 - **PDF 查看器**: 集成 PDF 在线预览，支持页面导航
+- **数据管理系统**: 细粒度数据管理，支持部分删除、批量操作、智能清理
 - **响应式设计**: 移动端友好的自适应界面
 
 ---
@@ -98,6 +99,7 @@ python src/ui/run_server.py
 
 # 访问地址
 # 主页: http://localhost:8000
+# 数据管理: http://localhost:8000/data
 # API 文档: http://localhost:8000/docs
 # ReDoc: http://localhost:8000/redoc
 ```
@@ -161,10 +163,34 @@ You: 对比 Method 和 Conclusion 的内容
 3. **智能对话**: 在聊天框中提问，支持多轮对话
 4. **会话管理**: 保存、导出、导入会话记录
 5. **PDF 预览**: 在线查看 PDF 文档
+6. **数据管理**: 查看和管理所有文档数据，支持细粒度删除
+
+<details>
+<summary><b>📊 数据管理功能（点击展开）</b></summary>
+
+访问 `http://localhost:8000/data` 进入数据管理界面：
+
+**功能特性:**
+- **存储概览**: 实时查看文档数量、存储大小、会话统计
+- **文档管理**: 每个文档显示详细的数据分类（JSON、向量数据库、图片、摘要）
+- **部分删除**: 可单独删除某个文档的特定数据类型，如只删除图片保留其他数据
+- **批量操作**: 支持多选文档批量删除
+- **缓存管理**: 独立管理 PDF 图片缓存、向量数据库缓存、JSON 数据缓存
+- **智能清理**: 自动清理超过 30 天的旧数据
+- **数据备份**: 创建会话和配置的备份文件
+
+**使用场景:**
+- 释放磁盘空间：只删除大文件（图片）保留其他数据
+- 重建索引：删除向量数据库后重新构建
+- 更新摘要：删除旧摘要重新生成
+- 定期维护：使用智能清理功能自动清理过期数据
+
+</details>
 
 ---
 
-## 项目结构 | Project Structure
+<details>
+<summary><b>📁 项目结构（点击展开）</b></summary>
 
 ```
 AgenticReader/
@@ -172,6 +198,7 @@ AgenticReader/
 ├── requirements.txt           # Python 依赖
 ├── CLAUDE.md                  # Claude Code 开发指南
 ├── README.md                  # 项目说明文档
+├── LICENSE                    # 开源许可协议
 │
 ├── src/
 │   ├── config/                # 配置文件
@@ -200,10 +227,19 @@ AgenticReader/
 │   │   ├── backend/           # FastAPI 后端
 │   │   │   ├── app.py         # 主应用
 │   │   │   ├── api/           # API 路由
+│   │   │   │   └── v1/        # API v1版本
+│   │   │   │       ├── data.py      # 数据管理API
+│   │   │   │       ├── chat.py      # 聊天API
+│   │   │   │       ├── pdf.py       # PDF处理API
+│   │   │   │       └── web.py       # Web处理API
 │   │   │   ├── services/      # 业务逻辑
+│   │   │   │   ├── data_service.py  # 数据管理服务
+│   │   │   │   └── session_service.py # 会话管理服务
 │   │   │   └── models/        # 数据模型
 │   │   ├── templates/         # Jinja2 模板
 │   │   ├── static/            # 静态资源（CSS、JS）
+│   │   │   └── js/
+│   │   │       └── data.js    # 数据管理前端
 │   │   └── run_server.py      # 服务器启动脚本
 │   │
 │   └── utils/                 # 工具函数
@@ -216,10 +252,12 @@ AgenticReader/
     ├── output/                # 生成的摘要文件
     ├── memory/                # 记忆系统数据
     └── sessions/              # Web 界面会话数据
-        ├── chat_sessions.json
-        ├── backups/           # 自动备份
+        ├── backups/
+        │   └── chat_sessions_current.json  # 当前会话
         └── exports/           # 导出的会话
 ```
+
+</details>
 
 ---
 
@@ -250,6 +288,7 @@ AgenticReader/
 5. **Web UI** (src/ui/)
    - FastAPI + WebSocket 实时通信
    - 会话持久化（双存储架构）
+   - 数据管理系统（细粒度控制）
    - 模块化 API 设计
 
 ### 数据流 | Data Flow
@@ -272,7 +311,8 @@ AgenticReader/
 
 ---
 
-## MCP 服务配置 | MCP Service Configuration
+<details>
+<summary><b>🔌 MCP 服务配置（点击展开）</b></summary>
 
 AgenticReader 使用 MCP (Model Context Protocol) 服务扩展功能：
 
@@ -298,9 +338,12 @@ npm install -g rag-memory-mcp
 npx -y rag-memory-mcp
 ```
 
+</details>
+
 ---
 
-## 开发指南 | Development Guide
+<details>
+<summary><b>🛠️ 开发指南（点击展开）</b></summary>
 
 ### 添加新的 LLM 提供商
 1. 在 `src/core/llm/client.py` 中扩展 `LLMBase`
@@ -317,6 +360,12 @@ npx -y rag-memory-mcp
 1. 在 `src/ui/backend/api/v1/` 中创建新路由文件
 2. 在 `src/ui/backend/app.py` 中注册路由
 3. 遵循 RESTful 约定和 FastAPI 最佳实践
+
+### 扩展数据管理功能
+1. 在 `DataService.delete_document_data()` 中添加新数据类型
+2. 更新 `data_type_paths` 字典映射
+3. 在 API 中添加对应端点
+4. 在前端 `renderDataDetail()` 中显示新类型
 
 ### 调试技巧
 ```bash
@@ -335,9 +384,12 @@ python src/chat/memory_agent.py
 python src/chat/chat.py
 ```
 
+</details>
+
 ---
 
-## 常见问题 | FAQ
+<details>
+<summary><b>❓ 常见问题（点击展开）</b></summary>
 
 ### 1. PDF 文件未被识别？
 - 确保文件已放入 `data/pdf/` 目录
@@ -352,6 +404,7 @@ python src/chat/chat.py
 ### 3. 向量数据库加载失败？
 - 首次使用会自动创建，无需担心
 - 如需重建: 删除 `data/vector_db/<文档名>` 文件夹后重新运行
+- 或使用数据管理界面删除向量数据库
 
 ### 4. Web 界面无法启动？
 ```bash
@@ -373,7 +426,7 @@ python src/ui/run_server.py
 ### 6. 会话数据丢失？
 - 检查 `data/sessions/backups/` 目录下的备份文件
 - 使用 Web 界面的导入功能恢复备份
-- 备份文件按时间戳命名
+- 备份文件按时间戳命名，最多保留10个
 
 ### 7. 如何切换 LLM 提供商？
 ```python
@@ -384,28 +437,54 @@ pdf_reader = PDFReader(provider="azure")  # 或 "openai", "ollama"
 # 默认使用 openai（见 src/readers/base.py:35）
 ```
 
+### 8. 如何清理旧数据释放空间？
+- 访问 `http://localhost:8000/data` 进入数据管理界面
+- 使用"智能清理"功能自动清理30天前的数据
+- 或手动选择文档，删除特定数据类型（如只删除图片）
+
+### 9. 误删数据如何恢复？
+- 会话数据可以从 `data/sessions/backups/` 恢复
+- 文档数据建议定期使用"数据备份"功能
+- 备份文件保存在 `data/backups/` 目录
+
+</details>
+
 ---
 
 ## 更新日志 | Changelog
 
-### 2025-11-05
+### 2025-11-19 - 数据管理系统
+- ✨ **新增数据管理界面** 
+  - 实时存储概览仪表板（文档数量、存储大小、会话统计）
+  - 文档详细信息展示（JSON、Vector DB、Images、Summary 独立显示）
+  - **细粒度部分删除功能** - 可单独删除某个文档的特定数据类型
+  - 批量选择和删除操作
+  - 缓存管理（PDF图片、向量数据库、JSON数据独立管理）
+  - 智能清理（自动清理超过N天的旧数据）
+  - 数据备份和完全重置功能
+- 📊 **新增服务层**
+  - `DataService` - 文件系统操作和数据管理逻辑
+  - 支持会话格式兼容性处理
+- 🎨 **前端优化**
+
+### 2025-11-05 - Web界面重构
 - 新增 FastAPI + WebSocket 现代化 Web 界面
 - 实现会话持久化管理和双存储架构
 - 集成 PDF 在线查看器
 - 添加自动备份和导入导出功能
 
-### 2025-09-05
+### 2025-09-05 - 多代理系统
 - 新增智能记忆系统（Memory Agent）
 - 实现多代理系统架构（PlanAgent + ExecutorAgent）
 - 支持多维度记忆管理（时间、地点、人物、标签）
 - 基于 LangGraph 工作流
 
-### 2025-07-30
+### 2025-07-30 - Web Reader
 - 新增 Web Reader 功能
 - 支持通过 URL 解析网页内容
 - 集成 MCP 服务
 
-### 2025-07-23
+### 2025-07-23 - 摘要导出
 - 新增摘要文件导出功能
 - 支持 Markdown 和 PDF 两种格式
 - 新增 `save_data_flag` 控制参数
@@ -433,7 +512,7 @@ pdf_reader = PDFReader(provider="azure")  # 或 "openai", "ollama"
 
 ## 许可协议 | License
 
-MIT License
+本项目采用 MIT License 开源协议。详见 [LICENSE](LICENSE) 文件。
 
 ---
 
