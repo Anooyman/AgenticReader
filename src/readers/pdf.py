@@ -15,6 +15,7 @@ from src.config.settings import (
     PDF_PATH,
     PDF_IMAGE_CONFIG,
 )
+from src.config.constants import ReaderConstants
 from src.config.prompts.reader_prompts import ReaderRole, READER_PROMPTS
 from src.utils.helpers import *
 from src.core.vector_db.vector_db_client import VectorDBClient
@@ -53,7 +54,7 @@ class PDFReader(ReaderBase):
         self.pdf_image_path = PDF_IMAGE_PATH
         self.pdf_path = PDF_PATH
         self.pdf_raw_data = None
-        self.chunk_count = 20  # 每个分块的大小
+        self.chunk_count = ReaderConstants.DEFAULT_CHUNK_COUNT  # 每个分块的大小
         self.retrieval_data_agent = None
 
         # 配置PDF转图片参数

@@ -941,15 +941,112 @@ class LLMReaderChatApp {
             return;
         }
 
-        console.log('🔍 开始加载PDF查看器，文档名:', this.config.currentDocName);
+        // 根据文档类型加载不同内容
+        const documentType = this.config.documentType || (this.config.hasPdfReader ? 'pdf' : 'web');
+        console.log(`🔍 开始加载${documentType}内容，文档名:`, this.config.currentDocName);
+
+        if (documentType === 'web') {
+            // Web 内容：显示摘要
+            await this.loadWebContent();
+        } else {
+            // PDF 内容：显示 PDF 查看器
+            try {
+                console.log('📄 尝试加载PDF文件...');
+                await this.tryLoadPdfFile();
+            } catch (error) {
+                console.log('📄 无法加载PDF文件，尝试加载图片:', error);
+                await this.tryLoadPdfImages();
+            }
+        }
+    }
+
+    async loadWebContent() {
+        console.log('🌐 开始加载Web内容摘要...');
 
         try {
-            console.log('📄 尝试加载PDF文件...');
-            await this.tryLoadPdfFile();
+            const response = await fetch(this.getApiUrl(`/api/v1/web/summary/${this.config.currentDocName}?summary_type=brief`));
+            const result = await response.json();
+
+            if (result.status === 'success' && result.content) {
+                console.log('✅ 成功加载Web摘要');
+                this.displayWebContent(result.content);
+            } else if (result.is_large_file) {
+                // 大文件模式，显示提示信息
+                this.displayWebLargeFileNotice();
+            } else {
+                console.log('❌ Web摘要未生成');
+                this.displayNoWebContent(result.message);
+            }
         } catch (error) {
-            console.log('📄 无法加载PDF文件，尝试加载图片:', error);
-            await this.tryLoadPdfImages();
+            console.error('❌ 加载Web内容失败:', error);
+            this.displayNoWebContent('加载Web内容时发生错误');
         }
+    }
+
+    displayWebContent(markdownContent) {
+        const content = document.getElementById('pdf-viewer-content-full');
+
+        // 使用 marked 库渲染 Markdown（如果可用）
+        let htmlContent;
+        if (typeof marked !== 'undefined') {
+            htmlContent = marked.parse(markdownContent);
+        } else {
+            // 简单的 Markdown 到 HTML 转换
+            htmlContent = markdownContent.replace(/\n/g, '<br>');
+        }
+
+        content.innerHTML = `
+            <div class="web-content-viewer" style="padding: 20px; height: 100%; overflow-y: auto; background: white;">
+                <div class="web-content-header" style="margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #e9ecef;">
+                    <h3 style="margin: 0; color: #2c3e50;">📄 网页内容摘要</h3>
+                    <p style="margin: 5px 0 0 0; color: #6c757d; font-size: 0.9em;">${this.config.currentDocName}</p>
+                </div>
+                <div class="web-content-body" style="line-height: 1.6; color: #333;">
+                    ${htmlContent}
+                </div>
+            </div>
+        `;
+
+        // 隐藏PDF翻页按钮
+        document.getElementById('pdf-page-info-full').textContent = 'Web内容';
+        document.getElementById('pdf-prev-page-full').style.display = 'none';
+        document.getElementById('pdf-next-page-full').style.display = 'none';
+    }
+
+    displayWebLargeFileNotice() {
+        const content = document.getElementById('pdf-viewer-content-full');
+        content.innerHTML = `
+            <div class="no-document-message">
+                <div class="no-doc-content">
+                    <span class="no-doc-icon">🌐</span>
+                    <h3>大文件模式</h3>
+                    <p>该网页内容较大，已使用向量数据库存储。</p>
+                    <p style="color: #6c757d;">请直接使用聊天功能进行问答。</p>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('pdf-page-info-full').textContent = 'Web内容（大文件）';
+        document.getElementById('pdf-prev-page-full').style.display = 'none';
+        document.getElementById('pdf-next-page-full').style.display = 'none';
+    }
+
+    displayNoWebContent(message) {
+        const content = document.getElementById('pdf-viewer-content-full');
+        content.innerHTML = `
+            <div class="no-document-message">
+                <div class="no-doc-content">
+                    <span class="no-doc-icon">🌐</span>
+                    <h3>Web内容未就绪</h3>
+                    <p>${message || 'Web内容摘要尚未生成'}</p>
+                    <p style="color: #6c757d;">请返回主页面重新处理URL。</p>
+                </div>
+            </div>
+        `;
+
+        document.getElementById('pdf-page-info-full').textContent = 'Web内容';
+        document.getElementById('pdf-prev-page-full').style.display = 'none';
+        document.getElementById('pdf-next-page-full').style.display = 'none';
     }
 
     async tryLoadPdfFile() {

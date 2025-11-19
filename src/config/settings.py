@@ -31,7 +31,7 @@ MCP_CONFIG = {
     "ddg-search": {
         "type": "stdio",
         "command": "python",
-        "args": ["external_mcp/duckduckgo-mcp-server/src/duckduckgo_mcp_server/server.py"]
+        "args": ["src/services/duckduckgo_mcp_server.py"]
     },
   },
   MCPToolName.MEMORY: {

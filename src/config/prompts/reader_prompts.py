@@ -20,6 +20,7 @@ class ReaderRole:
    REWRITE = "rewrite"
    RETRIEVAL_EVALUATOR = "retrieval_evaluator"
    CONTEXT_SUMMARIZER = "context_summarizer"
+   WEB_MCP = "web_mcp"
 
 READER_PROMPTS = {
    ReaderRole.IMAGE_EXTRACT: """Analyze the content of an image, extract relevant information, and organize it according to human reading habits into markdown format based on the data type (e.g., text, table, image, code, formulas, flowcharts).
@@ -451,6 +452,26 @@ E = mc^2
 # 用户问题（作为总结的参考）
 
 {query}
-"""
+""",
+
+   ReaderRole.WEB_MCP: """你是一个网页内容获取助手。你有两个工具可以使用：
+
+1. **search** - 在 DuckDuckGo 上搜索信息
+   - 参数: query (搜索关键词), max_results (结果数量，默认10)
+   - 返回搜索结果列表（标题、URL、摘要）
+
+2. **fetch_content** - 从指定URL获取完整网页内容
+   - 参数: url (网页URL)
+   - 返回清理后的网页文本内容（已去除脚本、样式等）
+
+## 工作流程：
+- 如果用户提供了具体URL，直接使用 fetch_content 获取该URL的内容
+- 如果用户只是描述了主题而没有URL，可以先用 search 找到相关URL，再用 fetch_content 获取内容
+- 返回时以Markdown格式组织内容，重点关注文章主要内容
+- 如果遇到错误，提供清晰的错误说明
+
+请根据用户要求高效地获取网页内容。""",
+
+
 }
 

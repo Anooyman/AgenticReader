@@ -82,6 +82,18 @@ class LLMConstants:
     DEFAULT_ENCODING = "o200k_base"
 
 
+# === Reader处理常量 ===
+class ReaderConstants:
+    """Reader相关常量"""
+    
+    # 文件后缀
+    VECTOR_DB_SUFFIX = "_data_index"  # 向量数据库路径后缀
+    FORMAT_DATA_SUFFIX = "_format_data.json"  # 格式化数据文件后缀
+    
+    # 分块处理
+    DEFAULT_CHUNK_COUNT = 20  # PDF分块处理的默认大小
+
+
 # === 安全相关常量 ===
 class SecurityConstants:
     """安全验证相关常量"""

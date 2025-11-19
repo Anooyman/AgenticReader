@@ -9,21 +9,19 @@ from langchain.docstore.document import Document
 from langchain_core.messages import HumanMessage, AIMessage
 
 from src.readers.base import ReaderBase
+from src.readers.retrieval import RetrivalAgent
 from src.core.processing.text_splitter import StrictOverlapSplitter
 from src.config.settings import (
     MCP_CONFIG,
     MCPToolName,
     WEB_MAX_TOKEN_COUNT,
 )
+from src.config.constants import ReaderConstants
 from src.config.prompts.reader_prompts import ReaderRole, READER_PROMPTS
 from src.services.mcp_client import MCPClient
 from src.core.llm.client import LLMBase
 from src.utils.helpers import extract_name_from_url, makedir, extract_data_from_LLM_res
 from src.core.vector_db.vector_db_client import VectorDBClient
-
-# 常量定义
-VECTOR_DB_SUFFIX = "_data_index"  # 向量数据库路径后缀
-FORMAT_DATA_SUFFIX = "_format_data.json"  # 格式化数据文件后缀
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -54,10 +52,11 @@ class WebReader(ReaderBase):
         self.web_content: str = ""  # 初始化网页内容为空字符串
         self.spliter = StrictOverlapSplitter(
             overlap=1,
-            token_threshold=1000,
+            token_threshold=10000,
             delimiter='\n\n',  # 以空行作为文本切分符
         )
         self.vector_db_obj: Optional[VectorDBClient] = None  # 向量数据库客户端，延迟初始化
+        self.retrieval_data_agent: Optional[RetrivalAgent] = None  # 检索代理，延迟初始化
 
     def remove_error_blocks(self, text: str) -> Tuple[str, List[str]]:
         """
@@ -103,17 +102,8 @@ class WebReader(ReaderBase):
         # 初始化LLM客户端和MCP客户端，使用依赖注入模式
         llm_client = LLMBase(provider=self.provider)
         
-        # 使用专门为网页内容获取优化的系统提示
-        web_system_prompt = """你是一个网页内容获取助手。使用可用的工具获取网页内容，并返回所有与文章主要内容相关的文字信息。
-
-要求：
-1. 获取完整的网页内容
-2. 以Markdown格式返回
-3. 重点关注文章主要内容
-4. 如果遇到错误，请尝试其他方法
-5. 避免重复获取相同内容
-
-请根据用户要求获取网页内容。"""
+        # 使用配置中的 Web MCP system prompt
+        web_system_prompt = READER_PROMPTS.get(ReaderRole.WEB_MCP)
         
         mcp_client = MCPClient(llm_client, mcp_config, system_prompt=web_system_prompt)
         await mcp_client.initialize()
@@ -164,7 +154,7 @@ class WebReader(ReaderBase):
             raise ValueError(f"未找到MCP工具配置: {MCPToolName.WEB_SEARCH}")
 
         # 构建获取网页内容的提示词（要求Markdown格式便于后续处理）
-        input_prompt = f"请获取该URL的所有当前内容: {url}，并以Markdown格式返回全部和文章主要内容相关的文字信息。"
+        input_prompt = f"请获取该URL的所有当前内容: {url}，并以Markdown格式返回全部和文章主要内容相关的文字信息。需要保持web页面原始的语言和文字，不要进行修改删除。"
         logger.info(f"开始获取网页内容: {url}")
 
         # 调用MCP服务获取内容
@@ -213,14 +203,17 @@ class WebReader(ReaderBase):
         if token_count <= WEB_MAX_TOKEN_COUNT:
             # 内容较小，直接生成摘要
             self.output_path += f"/{url_name}"  # 构建输出路径
-            if not os.path.exists(self.output_path):  # 避免重复生成摘要
+
+            # 检查是否已生成摘要
+            summary_md_path = os.path.join(self.output_path, "summary.md")
+            if not os.path.exists(summary_md_path):  # 避免重复生成摘要
                 # 构建摘要链
                 summary_chain = self.build_chain(
                     self.chat_model,
                     READER_PROMPTS.get(ReaderRole.SUMMARY)
                 )
                 # 构建摘要提示词
-                query = f"请分析总结当前web页面的内容，按照文章本身的写作顺序给出详细的总结：{content_str}"
+                query = f"请分析总结当前web页面的内容，按照文章本身的写作顺序给出详细的总结：{content_str}。返回中文"
                 summary = summary_chain.invoke(
                     {"input_prompt": query},
                     config={"configurable": {"session_id": "summary"}}
@@ -228,14 +221,17 @@ class WebReader(ReaderBase):
 
                 if save_data_flag:
                     makedir(self.output_path)  # 创建输出目录
-                    self.save_data_to_file(summary, url_name)  # 保存摘要
-                    logger.info(f"摘要已保存到: {self.output_path}")
+                    self.save_data_to_file(summary, "summary", file_type_list=["md"])  # 保存摘要（只保存md格式）
+                    logger.info(f"摘要已保存到: {self.output_path}/summary.md")
                 print(f"Web Summary: {summary}")
+            else:
+                logger.info(f"摘要文件已存在，跳过生成: {summary_md_path}")
+
             self.web_content = content_str  # 保存完整内容用于问答
 
         else:
             # 内容较大，分块存入向量数据库
-            vector_db_path = os.path.join(self.vector_db_path, f"{url_name}{VECTOR_DB_SUFFIX}")
+            vector_db_path = os.path.join(self.vector_db_path, f"{url_name}{ReaderConstants.VECTOR_DB_SUFFIX}")
             self.vector_db_obj = VectorDBClient(vector_db_path, provider=self.provider)
 
             if self.vector_db_obj.vector_db is not None:
@@ -246,7 +242,7 @@ class WebReader(ReaderBase):
                 raw_web_data_list = self.spliter.split_text(content_str)
 
                 # 保存分块数据到本地
-                format_data_path = os.path.join(self.json_data_path, f"{url_name}{FORMAT_DATA_SUFFIX}")
+                format_data_path = os.path.join(self.json_data_path, f"{url_name}{ReaderConstants.FORMAT_DATA_SUFFIX}")
                 with open(format_data_path, 'w', encoding='utf-8') as file:
                     json.dump(raw_web_data_list, file, ensure_ascii=False)
 
@@ -268,7 +264,7 @@ class WebReader(ReaderBase):
 
         回答逻辑：
         1. 若已加载完整网页内容（小文件），直接基于内容生成回答
-        2. 若内容已分块存入向量数据库（大文件），先检索相关分块再生成回答
+        2. 若内容已分块存入向量数据库（大文件），使用 RetrivalAgent 检索相关分块再生成回答
 
         Args:
             input_prompt (str): 用户输入的问题（需与网页内容相关）
@@ -277,39 +273,27 @@ class WebReader(ReaderBase):
             str: 生成的回答内容（自然语言）
         """
         if self.web_content:
-            # 基于完整内容回答
+            # 基于完整内容回答（小文件直接回答）
             logger.info(f"使用完整网页内容回答问题: {input_prompt[:50]}...")
             answer = self.get_answer(self.web_content, input_prompt)
         else:
-            # 基于向量数据库检索回答
+            # 基于向量数据库检索回答（大文件使用 RetrivalAgent）
             if not self.vector_db_obj:
                 raise RuntimeError("向量数据库未初始化，请先调用process_web处理URL")
 
-            # 调用LLM链解析问题
-            response = self.call_llm_chain(
-                ReaderRole.CHAT,
-                input_prompt,
-                "chat",
-                system_format_dict={"agenda_dict": self.agenda_dict}
-            )
-            logger.debug(f"LLM问题解析响应: {response[:200]}...")
-            print("====="*10)
-            print(self.agenda_dict)
-            print("====="*10)
-            print(response)
- 
-            try:
-                # 提取检索关键词
-                extract_response = extract_data_from_LLM_res(response)
-                # 检索相关数据
-                context_data = self.retrieval_data(extract_response)
-                logger.info(f"检索到{len(context_data)}条相关分块数据")
-            except Exception as e:
-                logger.warning(f"LLM响应解析失败，使用原始响应检索: {e}")
-                context_data = response
+            # 初始化 RetrivalAgent（延迟初始化）
+            if self.retrieval_data_agent is None:
+                self.retrieval_data_agent = RetrivalAgent(
+                    agenda_dict=self.agenda_dict,
+                    provider=self.provider,
+                    vector_db_obj=self.vector_db_obj,
+                )
+            
+            # 使用 RetrivalAgent 检索相关数据
+            context_data = self.retrieval_data_agent.retrieval_data(input_prompt)
+            logger.info(f"检索到{len(context_data)}条相关分块数据")
 
             # 基于检索结果生成回答
-            logger.info(f"使用向量数据库检索结果回答问题: {input_prompt[:50]}...")
             answer = self.get_answer(context_data, input_prompt)
 
         logger.info(f"对话回答生成完毕，长度: {len(answer)}字符")

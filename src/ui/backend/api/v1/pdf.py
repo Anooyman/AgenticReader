@@ -267,6 +267,19 @@ async def get_pdf_summary(doc_name: str, summary_type: str = "brief"):
 
         # 读取摘要内容
         content = summary_file.read_text(encoding='utf-8')
+        
+        # 🔥 修复：去除 LLM 生成的代码块包裹符号
+        # 某些 LLM 会将整个 Markdown 内容包裹在 ```markdown``` 或 ``` 中
+        content = content.strip()
+        if content.startswith('```'):
+            # 去除开头的 ``` 或 ```markdown
+            lines = content.split('\n')
+            if lines[0].strip().startswith('```'):
+                lines = lines[1:]  # 去掉第一行
+            # 去除结尾的 ```
+            if lines and lines[-1].strip() == '```':
+                lines = lines[:-1]  # 去掉最后一行
+            content = '\n'.join(lines)
 
         return {
             "status": "success",
