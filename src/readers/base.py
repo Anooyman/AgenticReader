@@ -353,10 +353,6 @@ class ReaderBase(LLMBase):
         agenda_list = []
         logger.info(f"开始处理 {len(chunks)} 个数据块...")
         for index, chunk in enumerate(chunks):
-            # 只在第一个 chunk 提取基本信息
-            if index == 0:
-                basic_info = self.get_basic_info(chunk)
-
             agenda = self.get_agenda(chunk)
             agenda_list.extend(agenda)
 

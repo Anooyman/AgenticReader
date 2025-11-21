@@ -1,8 +1,8 @@
 # AgenticReader
 
-AgenticReader 是一个基于大语言模型（LLM）的智能文档分析与问答工具。支持 PDF 和网页内容解析，集成多种 LLM 提供商（Azure OpenAI、OpenAI、Ollama），可自动提取内容、生成摘要、构建向量数据库并支持多轮智能问答。
+中文 | [English](README_EN.md)
 
-**English:** AgenticReader is an intelligent document analysis and Q&A tool powered by large language models. It supports PDF and web content parsing with multiple LLM providers, automatic content extraction, summary generation, vector database building, and multi-turn intelligent conversations.
+AgenticReader 是一个基于大语言模型（LLM）的智能文档分析与问答工具。支持 PDF 和网页内容解析，集成多种 LLM 提供商（Azure OpenAI、OpenAI、Ollama），可自动提取内容、生成摘要、构建向量数据库并支持多轮智能问答。
 
 ---
 
@@ -43,7 +43,10 @@ AgenticReader 是一个基于大语言模型（LLM）的智能文档分析与问
 - Node.js (可选，用于 MCP 服务)
 - 虚拟环境（推荐）
 
-### 安装 | Installation
+<details>
+<summary><b>📦 安装配置（点击展开）</b></summary>
+
+### 安装步骤
 
 ```bash
 # 1. 克隆项目
@@ -60,7 +63,7 @@ mkdir -p data/pdf data/pdf_image data/json_data data/vector_db data/output data/
 # 参考下方"配置说明"部分
 ```
 
-### 配置说明 | Configuration
+### 配置说明
 
 在项目根目录创建 `.env` 文件：
 
@@ -90,6 +93,8 @@ EMBEDDING_MODEL=text-embedding-ada-002
 LOGGING_LEVEL=INFO
 ```
 
+</details>
+
 ### 运行应用 | Running the Application
 
 #### 方式 1: Web 界面（推荐）
@@ -118,7 +123,8 @@ python main.py
 
 ---
 
-## 使用示例 | Usage Examples
+<details>
+<summary><b>💡 使用示例（点击展开）</b></summary>
 
 ### PDF 文档分析
 ```bash
@@ -164,6 +170,8 @@ You: 对比 Method 和 Conclusion 的内容
 4. **会话管理**: 保存、导出、导入会话记录
 5. **PDF 预览**: 在线查看 PDF 文档
 6. **数据管理**: 查看和管理所有文档数据，支持细粒度删除
+
+</details>
 
 <details>
 <summary><b>📊 数据管理功能（点击展开）</b></summary>
@@ -261,9 +269,10 @@ AgenticReader/
 
 ---
 
-## 技术架构 | Technical Architecture
+<details>
+<summary><b>🏗️ 技术架构（点击展开）</b></summary>
 
-### 核心组件 | Core Components
+### 核心组件
 
 1. **Reader System** (src/readers/)
    - ReaderBase: 抽象基类，提供通用处理流程
@@ -291,7 +300,7 @@ AgenticReader/
    - 数据管理系统（细粒度控制）
    - 模块化 API 设计
 
-### 数据流 | Data Flow
+### 数据流
 
 ```
 输入 (PDF/URL)
@@ -308,6 +317,8 @@ AgenticReader/
   → LLM 生成回答
   → 返回用户
 ```
+
+</details>
 
 ---
 
@@ -491,7 +502,8 @@ pdf_reader = PDFReader(provider="azure")  # 或 "openai", "ollama"
 
 ---
 
-## 贡献指南 | Contributing
+<details>
+<summary><b>🤝 贡献指南（点击展开）</b></summary>
 
 欢迎提交 Issue 和 Pull Request！
 
@@ -507,6 +519,8 @@ pdf_reader = PDFReader(provider="azure")  # 或 "openai", "ollama"
 - 添加必要的注释和文档字符串
 - 确保所有测试通过
 - 更新相关文档
+
+</details>
 
 ---
 
