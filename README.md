@@ -104,7 +104,10 @@ python src/ui/run_server.py
 
 # 访问地址
 # 主页: http://localhost:8000
+# 聊天界面: http://localhost:8000/chat
+# 配置页面: http://localhost:8000/config
 # 数据管理: http://localhost:8000/data
+# 健康检查: http://localhost:8000/health
 # API 文档: http://localhost:8000/docs
 # ReDoc: http://localhost:8000/redoc
 ```
@@ -181,11 +184,13 @@ You: 对比 Method 和 Conclusion 的内容
 **功能特性:**
 - **存储概览**: 实时查看文档数量、存储大小、会话统计
 - **文档管理**: 每个文档显示详细的数据分类（JSON、向量数据库、图片、摘要）
+- **章节信息**: 查看文档的章节结构和详细信息
 - **部分删除**: 可单独删除某个文档的特定数据类型，如只删除图片保留其他数据
 - **批量操作**: 支持多选文档批量删除
 - **缓存管理**: 独立管理 PDF 图片缓存、向量数据库缓存、JSON 数据缓存
 - **智能清理**: 自动清理超过 30 天的旧数据
 - **数据备份**: 创建会话和配置的备份文件
+- **健康检查**: `/health` 端点用于监控应用状态
 
 **使用场景:**
 - 释放磁盘空间：只删除大文件（图片）保留其他数据
@@ -239,7 +244,10 @@ AgenticReader/
 │   │   │   │       ├── data.py      # 数据管理API
 │   │   │   │       ├── chat.py      # 聊天API
 │   │   │   │       ├── pdf.py       # PDF处理API
-│   │   │   │       └── web.py       # Web处理API
+│   │   │   │       ├── web.py       # Web处理API
+│   │   │   │       ├── chapters.py  # 章节API
+│   │   │   │       ├── sessions.py  # 会话API
+│   │   │   │       └── config.py    # 配置API
 │   │   │   ├── services/      # 业务逻辑
 │   │   │   │   ├── data_service.py  # 数据管理服务
 │   │   │   │   └── session_service.py # 会话管理服务
@@ -462,10 +470,19 @@ pdf_reader = PDFReader(provider="azure")  # 或 "openai", "ollama"
 
 ---
 
-## 更新日志 | Changelog
+<details>
+<summary><b>📝 更新日志 | Changelog（点击展开）</b></summary>
+
+### 2025-11-25 - API 增强和章节管理
+- ✨ **新增章节管理API**
+  - `GET /api/v1/chapters/{doc_name}` - 获取文档章节信息
+  - 支持查看文档的完整章节结构
+- 🔧 **健康检查端点**
+  - `GET /health` - 应用健康状态监控
+  - 返回应用名称、版本、运行状态等信息
 
 ### 2025-11-19 - 数据管理系统
-- ✨ **新增数据管理界面** 
+- ✨ **新增数据管理界面**
   - 实时存储概览仪表板（文档数量、存储大小、会话统计）
   - 文档详细信息展示（JSON、Vector DB、Images、Summary 独立显示）
   - **细粒度部分删除功能** - 可单独删除某个文档的特定数据类型
@@ -499,6 +516,8 @@ pdf_reader = PDFReader(provider="azure")  # 或 "openai", "ollama"
 - 新增摘要文件导出功能
 - 支持 Markdown 和 PDF 两种格式
 - 新增 `save_data_flag` 控制参数
+
+</details>
 
 ---
 

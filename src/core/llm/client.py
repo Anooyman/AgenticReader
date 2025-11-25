@@ -640,3 +640,42 @@ class LLMBase:
                 logger.info(f"📝 [{idx+1}/{len(messages)}] 添加 {msg_type}")
 
         logger.info(f"📝 [AFTER ADD] 会话现在有 {len(history.messages)} 条消息")
+
+
+def get_embeddings(**kwargs):
+    """
+    获取全局嵌入模型实例
+    
+    根据配置返回对应的嵌入模型（Azure OpenAI 或 OpenAI）
+    
+    Args:
+        **kwargs: 传递给嵌入模型的额外参数
+        
+    Returns:
+        嵌入模型实例（AzureOpenAIEmbeddings 或 OpenAIEmbeddings）
+    """
+    provider = LLM_EMBEDDING_CONFIG.get("provider", "openai").lower()
+    
+    if provider == "azure":
+        return AzureOpenAIEmbeddings(
+            openai_api_key=kwargs.get("openai_api_key", LLM_EMBEDDING_CONFIG.get("api_key")),
+            openai_api_version=kwargs.get("openai_api_version", LLM_EMBEDDING_CONFIG.get("api_version")),
+            azure_endpoint=kwargs.get("azure_endpoint", LLM_EMBEDDING_CONFIG.get("azure_endpoint")),
+            deployment=kwargs.get("deployment", LLM_EMBEDDING_CONFIG.get("deployment")),
+            model=kwargs.get("model", LLM_EMBEDDING_CONFIG.get("model")),
+            max_retries=kwargs.get("max_retries", 5)
+        )
+    elif provider == "openai":
+        return OpenAIEmbeddings(
+            openai_api_key=kwargs.get("openai_api_key", LLM_EMBEDDING_CONFIG.get("openai_api_key")),
+            model=kwargs.get("model", LLM_EMBEDDING_CONFIG.get("openai_model", "text-embedding-ada-002")),
+            max_retries=kwargs.get("max_retries", 5)
+        )
+    else:
+        # 默认使用 OpenAI
+        logger.warning(f"未知的嵌入模型 provider: {provider}，默认使用 OpenAI")
+        return OpenAIEmbeddings(
+            openai_api_key=kwargs.get("openai_api_key", LLM_EMBEDDING_CONFIG.get("openai_api_key")),
+            model=kwargs.get("model", LLM_EMBEDDING_CONFIG.get("openai_model", "text-embedding-ada-002")),
+            max_retries=kwargs.get("max_retries", 5)
+        )

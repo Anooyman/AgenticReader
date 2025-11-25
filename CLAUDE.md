@@ -54,6 +54,7 @@ uvicorn src.ui.backend.app:app --reload --host 0.0.0.0 --port 8000
 # Access at http://localhost:8000
 # API Documentation: http://localhost:8000/docs
 # Data Management: http://localhost:8000/data
+# Health Check: http://localhost:8000/health
 
 # Features:
 # - Modern FastAPI backend with WebSocket real-time communication
@@ -110,8 +111,8 @@ python -c "from src.core.llm.client import LLMBase; client = LLMBase(provider='a
 
 **5. UI System (src/ui/)**
 - **FastAPI Backend (backend/app.py)**: Modern async web framework with WebSocket support for real-time chat
-  - Modular API structure: `/api/v1/` endpoints for sessions, config, PDF, chat, web, and data management
-  - Health check endpoint: `/health` for monitoring
+  - Modular API structure: `/api/v1/` endpoints for sessions, config, PDF, chat, web, chapters, and data management
+  - Health check endpoint: `GET /health` for monitoring (returns app name, version, status)
   - Auto-generated OpenAPI documentation at `/docs` and `/redoc`
 - **SessionManager (backend/services/session_service.py)**: Comprehensive session persistence with JSON file storage, backup creation, and import/export
 - **DataService (backend/services/data_service.py)**: Granular data management with support for partial deletion of document components
@@ -270,6 +271,7 @@ Each processed document generates multiple data types that can be managed indepe
 
 **API Endpoints:**
 ```
+# Data Management
 GET    /api/v1/data/overview                    - Storage overview stats
 GET    /api/v1/data/documents                   - List all documents with detailed data breakdown
 GET    /api/v1/data/cache/{type}                - Cache info (pdf_image, vector_db, json_data)
@@ -284,6 +286,12 @@ DELETE /api/v1/data/cache/{type}                - Clear cache
 POST   /api/v1/data/cleanup/smart?days=30       - Smart cleanup old data
 POST   /api/v1/data/backup                      - Create data backup
 POST   /api/v1/data/reset?confirm=CONFIRM_RESET - Full system reset
+
+# Chapter Management
+GET    /api/v1/chapters/{doc_name}              - Get document chapter information
+
+# Health Check
+GET    /health                                   - Application health status monitoring
 ```
 
 **Use Cases:**
@@ -406,7 +414,12 @@ uvicorn src.ui.backend.app:app --reload --host 0.0.0.0 --port 8000
 # Test session management APIs
 curl http://localhost:8000/api/v1/config
 curl http://localhost:8000/api/v1/sessions/list
+
+# Test health check
 curl http://localhost:8000/health
+
+# Test chapter API
+curl http://localhost:8000/api/v1/chapters/your_document_name
 ```
 
 **UI Debugging:**
@@ -444,11 +457,13 @@ grep -A 10 "MCP_CONFIG" src/config/settings.py
 - **src/ui/**: FastAPI web system (backend/, templates/, static/)
 
 ### Key Files to Understand
-- **main.py**: CLI entry point with PDF/URL routing logic (lines 17-32)
+- **main.py**: CLI entry point with PDF/URL routing logic
 - **src/readers/base.py**: ReaderBase class with common document processing
 - **src/chat/chat.py**: Multi-agent system with PlanAgent/ExecutorAgent
 - **src/config/settings.py**: Configuration hub with LLM_CONFIG, SYSTEM_PROMPT_CONFIG, MCP_CONFIG
 - **src/ui/backend/app.py**: FastAPI application setup and routing
+- **src/ui/backend/api/v1/chapters.py**: Chapter information API endpoint
+- **src/ui/backend/services/data_service.py**: Data management service layer
 
 ### State Management Pattern
 The multi-agent system uses LangGraph's StateGraph with typed state classes:

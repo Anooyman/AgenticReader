@@ -104,7 +104,10 @@ python src/ui/run_server.py
 
 # Access URLs
 # Homepage: http://localhost:8000
+# Chat Interface: http://localhost:8000/chat
+# Configuration: http://localhost:8000/config
 # Data Management: http://localhost:8000/data
+# Health Check: http://localhost:8000/health
 # API Docs: http://localhost:8000/docs
 # ReDoc: http://localhost:8000/redoc
 ```
@@ -181,11 +184,13 @@ Access `http://localhost:8000/data` to enter data management interface:
 **Features:**
 - **Storage Overview**: Real-time view of document count, storage size, session statistics
 - **Document Management**: Detailed data classification display (JSON, Vector DB, Images, Summary)
+- **Chapter Information**: View document chapter structure and detailed information
 - **Partial Deletion**: Delete specific data types for individual documents (e.g., delete images only while keeping other data)
 - **Batch Operations**: Multi-select documents for batch deletion
 - **Cache Management**: Independent management of PDF image cache, vector DB cache, JSON data cache
 - **Smart Cleanup**: Auto-cleanup of data older than 30 days
 - **Data Backup**: Create backups of sessions and configurations
+- **Health Check**: `/health` endpoint for monitoring application status
 
 **Use Cases:**
 - Free up disk space: Delete large files (images) while keeping other data
@@ -240,7 +245,10 @@ AgenticReader/
 │   │   │   │       ├── data.py      # Data management API
 │   │   │   │       ├── chat.py      # Chat API
 │   │   │   │       ├── pdf.py       # PDF processing API
-│   │   │   │       └── web.py       # Web processing API
+│   │   │   │       ├── web.py       # Web processing API
+│   │   │   │       ├── chapters.py  # Chapters API
+│   │   │   │       ├── sessions.py  # Sessions API
+│   │   │   │       └── config.py    # Configuration API
 │   │   │   ├── services/      # Business logic
 │   │   │   │   ├── data_service.py  # Data management service
 │   │   │   │   └── session_service.py # Session management service
@@ -463,7 +471,17 @@ pdf_reader = PDFReader(provider="azure")  # or "openai", "ollama"
 
 ---
 
-## Changelog
+<details>
+<summary><b>📝 Changelog (Click to expand)</b></summary>
+
+### 2025-11-25 - API Enhancement and Chapter Management
+- ✨ **New Chapter Management API**
+  - `GET /api/v1/chapters/{doc_name}` - Get document chapter information
+  - Support viewing complete document chapter structure
+- 🔧 **Health Check Endpoint**
+  - `GET /health` - Application health status monitoring
+  - Returns application name, version, status, and more
+
 
 ### 2025-11-19 - Data Management System
 - ✨ **New Data Management Interface**
@@ -500,6 +518,8 @@ pdf_reader = PDFReader(provider="azure")  # or "openai", "ollama"
 - Added summary file export functionality
 - Support Markdown and PDF formats
 - Added `save_data_flag` control parameter
+
+</details>
 
 ---
 
