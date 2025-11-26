@@ -107,6 +107,17 @@ def update_document_state(doc_name, has_pdf_reader=False, has_web_reader=False):
     save_config(_current_config)
     logger.info(f"📄 文档状态已更新: {_current_config}")
 
+
+def get_current_provider() -> str:
+    """获取当前配置的 LLM provider（供其他模块调用）"""
+    return _current_config.get("provider", "openai")
+
+
+def get_current_pdf_preset() -> str:
+    """获取当前配置的 PDF preset（供其他模块调用）"""
+    return _current_config.get("pdf_preset", "high")
+
+
 def clear_document_state():
     """清除文档状态（供其他模块调用）"""
     global _current_config

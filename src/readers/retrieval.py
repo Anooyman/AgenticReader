@@ -97,7 +97,7 @@ class RetrivalAgent(LLMBase):
         logger.info(f"成功加载 {len(tools)} 个检索工具")
         return tools
 
-    def retrieval_data(self, query: str, max_iterations: int = 5, max_context_length: int = 10000) -> List[str]:
+    def retrieval_data(self, query: str, max_iterations: int = 5, max_context_length: int = 10000, reset_history: bool = True) -> List[str]:
         """
         主检索方法 - 使用 ReAct 框架智能选择检索策略并评估结果
 
@@ -117,10 +117,15 @@ class RetrivalAgent(LLMBase):
         - retrieval_data_by_context: 基于语义的上下文检索
         - get_document_structure: 获取文档目录结构
 
+        去重机制：
+        - 使用文档内容哈希防止在 ReAct 循环中重复检索相同文档
+        - 每次新查询开始时默认重置检索历史（可通过 reset_history=False 禁用）
+
         Args:
             query (str): 用户查询字符串
             max_iterations (int): 最大迭代次数，默认 5
             max_context_length (int): 触发上下文总结的最大长度，默认 10000
+            reset_history (bool): 是否重置检索历史，默认 True
 
         Returns:
             List[str]: 检索到的文档内容列表（已去重和可能总结）
@@ -140,6 +145,10 @@ class RetrivalAgent(LLMBase):
         if not self.vector_db_obj:
             logger.error("向量数据库未初始化，无法进行检索")
             return []
+
+        # 重置检索历史，防止跨查询的去重干扰
+        if reset_history:
+            self.vector_db_obj.reset_retrieval_history()
 
         # 构建可用的检索工具
         available_tools = self._build_retrieval_tools()
@@ -291,16 +300,16 @@ class RetrivalAgent(LLMBase):
             return []
 
         try:
-            # 使用 type='context' 过滤器进行语义搜索
+            # 使用 type='context' 过滤器进行语义搜索，启用去重
             doc_res = self.vector_db_obj.search_with_metadata_filter(
                 query=query,
-                k=5,
+                k=3,
                 field_name="type",
-                field_value="context"
+                field_value="context",
+                enable_dedup=True  # 启用去重过滤
             )
 
             context_data = []
-            total_page_number = []
             chapter_info_list = []  # 存储章节信息用于汇总
 
             if doc_res and len(doc_res) > 0:
@@ -316,7 +325,6 @@ class RetrivalAgent(LLMBase):
 
                         # 提取章节标题信息
                         chapter_title = metadata.get("title", "未知章节")
-                        chunk_type = metadata.get("type", "unknown")
 
                         # 整理并返回检索到的数据
                         if refactor_data and refactor_data.strip():
@@ -326,60 +334,28 @@ class RetrivalAgent(LLMBase):
                                 # 记录章节信息用于最后汇总
                                 chapter_info_list.append({
                                     "title": chapter_title,
-                                    "pages": sorted(page_number, key=lambda x: int(x) if str(x).isdigit() else 0) if page_number else [],
-                                    "length": len(refactor_data),
-                                    "type": chunk_type
+                                    "pages": sorted(page_number, key=lambda x: int(x) if str(x).isdigit() else 0) if page_number else []
                                 })
-
-                        # 收集页面内容
-                        if page_number:
-                            total_page_number.extend(page_number)
 
                     except Exception as e:
                         logger.error(f"处理第 {idx+1} 个文档时出错: {e}")
                         continue
 
-                # 去重页面内容
-                unique_pages = list(set(total_page_number))
-
                 # ========== 汇总日志 ==========
                 logger.info(f"")
                 logger.info(f"{'='*60}")
-                logger.info(f"✅ [CONTEXT RETRIEVAL SUMMARY] 上下文检索结果汇总")
+                logger.info(f"✅ [CONTEXT RETRIEVAL] 上下文检索结果")
                 logger.info(f"{'='*60}")
-                logger.info(f"📊 [统计] 检索到 {len(context_data)} 条唯一内容片段，来自 {len(chapter_info_list)} 个不同章节")
-                logger.info(f"📄 [页面] 共涉及 {len(unique_pages)} 个页面")
-
-                # 显示页码范围
-                if unique_pages:
-                    sorted_pages = sorted(unique_pages, key=lambda x: int(x) if str(x).isdigit() else 0)
-                    if len(sorted_pages) <= 10:
-                        logger.info(f"📄 [页码列表] {', '.join(map(str, sorted_pages))}")
-                    else:
-                        logger.info(f"📄 [页码范围] {sorted_pages[0]} - {sorted_pages[-1]} (共 {len(sorted_pages)} 页)")
-                        logger.info(f"📄 [页码示例] 前10页: {', '.join(map(str, sorted_pages[:10]))}")
-
-                # 显示所有检索到的章节详情
+                logger.info(f"📊 返回 {len(context_data)} 条内容片段")
+                
+                # 🔥 显示本次返回内容对应的章节和页码
                 if chapter_info_list:
-                    logger.info(f"")
-                    logger.info(f"📚 [章节详情] 检索到以下章节内容:")
-                    for i, chapter_info in enumerate(chapter_info_list, 1):
-                        chapter_title = chapter_info['title']
-                        chapter_pages = chapter_info['pages']
-                        chapter_length = chapter_info['length']
-                        chapter_type = chapter_info['type']
-
-                        # 格式化页码信息
-                        if chapter_pages:
-                            if len(chapter_pages) <= 5:
-                                pages_str = f"页码 {', '.join(map(str, chapter_pages))}"
-                            else:
-                                pages_str = f"页码 {chapter_pages[0]}-{chapter_pages[-1]} (共 {len(chapter_pages)} 页)"
-                        else:
-                            pages_str = "页码信息未知"
-
-                        logger.info(f"  [{i}] 章节: '{chapter_title}'")
-                        logger.info(f"      类型: {chapter_type} | {pages_str} | 内容长度: {chapter_length} 字符")
+                    logger.info(f"📚 检索到的章节:")
+                    for idx, chapter in enumerate(chapter_info_list, 1):
+                        pages_str = f"页码: {', '.join(map(str, chapter['pages']))}" if chapter['pages'] else "无页码"
+                        logger.info(f"   {idx}. {chapter['title']} ({pages_str})")
+                else:
+                    logger.info(f"📚 未检索到任何章节")
 
                 logger.info(f"{'='*60}")
                 logger.info(f"")
@@ -442,7 +418,6 @@ class RetrivalAgent(LLMBase):
             return []
 
         context_data = []
-        total_page_number = []
         successful_retrievals = 0
         cache_hits = 0
 
@@ -465,9 +440,9 @@ class RetrivalAgent(LLMBase):
                     page_number = cached_data.get("page", [])
                     cache_hits += 1
                 else:
-                    # 从向量数据库检索（仅检索 type='title' 的文档）
+                    # 从向量数据库检索（仅检索 type='title' 的文档），启用去重
                     try:
-                        doc_res = self.vector_db_obj.search_by_title(title, doc_type="title")
+                        doc_res = self.vector_db_obj.search_by_title(title, doc_type="title", enable_dedup=True)
 
                         if doc_res and len(doc_res) > 0:
                             # 处理返回的列表中的每个文档
@@ -511,39 +486,37 @@ class RetrivalAgent(LLMBase):
                     if refactor_data not in context_data:
                         context_data.append(refactor_data)
 
-                # 收集页面内容
-                if page_number:
-                    total_page_number.extend(page_number)
-
             except Exception as e:
                 logger.error(f"处理章节 '{title}' 时发生错误: {e}")
                 continue
 
-        # 去重页面内容
-        unique_pages = list(set(total_page_number))
-
-        # 详细的检索结果日志
-        logger.info(f"标题检索完成")
-        logger.info(f"提取的章节: {', '.join(title_list)}")
-        logger.info(f"请求章节: {len(title_list)}, "
-                   f"成功检索: {successful_retrievals}, "
-                   f"缓存命中: {cache_hits}, "
-                   f"上下文条目: {len(context_data)}, "
-                   f"涉及页面: {len(unique_pages)}")
-
-        # 计算成功率
-        success_rate = (successful_retrievals / len(title_list) * 100) if title_list else 0
-        cache_rate = (cache_hits / len(title_list) * 100) if title_list else 0
-        logger.info(f"检索成功率: {success_rate:.1f}%, 缓存命中率: {cache_rate:.1f}%")
-
-        # 显示页码信息
-        if unique_pages:
-            sorted_pages = sorted(unique_pages, key=lambda x: int(x) if str(x).isdigit() else 0)
-            if len(sorted_pages) <= 10:
-                logger.info(f"页码: {', '.join(map(str, sorted_pages))}")
-            else:
-                logger.info(f"页码范围: {sorted_pages[0]} - {sorted_pages[-1]} (共 {len(sorted_pages)} 页)")
-                logger.info(f"前10页: {', '.join(map(str, sorted_pages[:10]))}")
+        # ========== 汇总日志 ==========
+        logger.info(f"")
+        logger.info(f"{'='*60}")
+        logger.info(f"✅ [TITLE RETRIEVAL] 标题检索结果")
+        logger.info(f"{'='*60}")
+        logger.info(f"📊 返回 {len(context_data)} 条内容片段 (新检索: {successful_retrievals}, 缓存: {cache_hits})")
+        
+        # 🔥 显示本次返回内容对应的章节和页码
+        if context_data:
+            logger.info(f"📚 检索到的章节:")
+            for title in title_list:
+                if title in self.retrieval_data_dict:
+                    cached = self.retrieval_data_dict[title]
+                    pages = cached.get('page', [])
+                    if pages:
+                        sorted_pages = sorted(pages, key=lambda x: int(x) if str(x).isdigit() else 0)
+                        pages_str = f"页码: {', '.join(map(str, sorted_pages))}"
+                    else:
+                        pages_str = "无页码"
+                    logger.info(f"   ✓ {title} ({pages_str})")
+                else:
+                    logger.info(f"   ✗ {title} (未找到)")
+        else:
+            logger.info(f"📚 未检索到任何内容")
+        
+        logger.info(f"{'='*60}")
+        logger.info(f"")
 
         return context_data
 

@@ -34,6 +34,12 @@ async def data_page(request: Request):
     return templates.TemplateResponse("data.html", {"request": request})
 
 
+@router.get("/chapters", response_class=HTMLResponse)
+async def chapters_page(request: Request):
+    """章节管理页面"""
+    return templates.TemplateResponse("chapters.html", {"request": request})
+
+
 @router.get("/favicon.ico")
 async def favicon():
     """网站图标"""

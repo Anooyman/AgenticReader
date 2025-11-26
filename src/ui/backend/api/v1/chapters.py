@@ -1,4 +1,4 @@
-"""章节管理 API"""
+""" 章节管理 API"""
 
 from fastapi import APIRouter, HTTPException
 from typing import List, Dict, Any
@@ -7,6 +7,9 @@ import json
 from pathlib import Path
 
 from ...config import settings, get_logger
+from .config import get_current_provider, get_current_pdf_preset
+from src.readers.parallel_processor import ChapterProcessor
+from src.config.prompts.reader_prompts import ReaderRole
 
 logger = get_logger(__name__)
 
@@ -442,6 +445,7 @@ async def rebuild_document_data(
         重建结果
     """
     try:
+        import asyncio
         from src.readers.pdf import PDFReader
         from langchain.docstore.document import Document
         
@@ -481,8 +485,12 @@ async def rebuild_document_data(
             json.dump(agenda_dict, f, ensure_ascii=False, indent=2)
         logger.info(f"📋 章节已按页码排序，共 {len(agenda_dict)} 个章节")
         
+        # 获取当前配置的 provider
+        current_provider = get_current_provider()
+        logger.info(f"🔧 使用 LLM provider: {current_provider}")
+        
         # 初始化PDF阅读器
-        pdf_reader = PDFReader(provider="openai")
+        pdf_reader = PDFReader(provider=current_provider)
         pdf_reader.agenda_dict = agenda_dict
         pdf_reader.output_path = settings.data_dir / "output" / doc_name
         pdf_reader.output_path.mkdir(parents=True, exist_ok=True)
@@ -491,27 +499,47 @@ async def rebuild_document_data(
         
         # 重建向量数据库
         if rebuild_vectordb:
-            logger.info("📊 开始重建向量数据库...")
+            logger.info("📊 开始并行重建向量数据库...")
             try:
                 vector_db_content_docs = []
                 total_summary = {}
                 
+                # 准备章节数据用于并行处理
+                agenda_data_list = []
+                chapters_metadata = {}  # 保存原始数据
                 for title, chapter_info in agenda_dict.items():
                     pages = chapter_info.get('pages', [])
-                    # 从JSON数据中提取该章节的原始数据
                     raw_data = {page: json_data_dict.get(page, '') for page in pages if page in json_data_dict}
-                    
-                    # 生成章节内容和摘要
-                    logger.info(f"  - 处理章节: {title} (页码: {min(pages)}-{max(pages)})")
                     content_list = [raw_data[page] for page in sorted(raw_data.keys()) if raw_data.get(page)]
                     
                     if not content_list:
                         logger.warning(f"  ⚠️ 章节 '{title}' 没有内容，跳过")
                         continue
                     
-                    summary = pdf_reader.summary_content(title, content_list)
-                    refactor = pdf_reader.refactor_content(title, content_list)
+                    agenda_data_list.append({
+                        'title': title,
+                        'data': raw_data,  # ChapterProcessor 需要 data 字段
+                        'pages': pages
+                    })
+                    chapters_metadata[title] = {
+                        'pages': pages,
+                        'raw_data': raw_data
+                    }
+                
+                logger.info(f"  - 共 {len(agenda_data_list)} 个章节需要处理")
+                
+                # 使用 ChapterProcessor 并行处理
+                processor = ChapterProcessor(pdf_reader, max_concurrent=5)
+                results = await processor.process_chapters_summary_and_refactor(
+                    agenda_data_list,
+                    ReaderRole.SUMMARY,
+                    ReaderRole.REFACTOR
+                )
+                
+                # 处理结果
+                for title, summary, refactor, pages, data in results:
                     total_summary[title] = summary
+                    raw_data = chapters_metadata.get(title, {}).get('raw_data', data)
                     
                     # 构建向量数据库文档
                     vector_db_content_docs.append(
@@ -545,7 +573,7 @@ async def rebuild_document_data(
                 # 初始化向量数据库客户端（修正参数名）
                 from src.core.vector_db.vector_db_client import VectorDBClient
                 vector_db_path = str(settings.data_dir / "vector_db" / f"{doc_name}_data_index")
-                vector_db_client = VectorDBClient(db_path=vector_db_path, provider="openai")
+                vector_db_client = VectorDBClient(db_path=vector_db_path, provider=current_provider)
                 
                 # 重建向量数据库
                 logger.info(f"  - 开始构建向量数据库，共 {len(vector_db_content_docs)} 个文档")
@@ -573,19 +601,32 @@ async def rebuild_document_data(
             try:
                 # 如果在重建向量数据库时已经生成了摘要，直接使用
                 if not hasattr(pdf_reader, 'total_summary') or not pdf_reader.total_summary:
-                    logger.info("  - 重新生成章节摘要")
-                    total_summary = {}
+                    logger.info("  - 并行重新生成章节摘要")
+                    
+                    # 准备章节数据用于并行处理
+                    agenda_data_list = []
                     for title, chapter_info in agenda_dict.items():
                         pages = chapter_info.get('pages', [])
                         raw_data = {page: json_data_dict.get(page, '') for page in pages if page in json_data_dict}
-                        content_list = [raw_data[page] for page in sorted(raw_data.keys()) if raw_data.get(page)]
                         
-                        if not content_list:
+                        if not raw_data:
                             continue
                         
-                        summary = pdf_reader.summary_content(title, content_list)
-                        total_summary[title] = summary
+                        agenda_data_list.append({
+                            'title': title,
+                            'data': raw_data,
+                            'pages': pages
+                        })
                     
+                    # 使用 ChapterProcessor 并行处理（只需要 summary）
+                    processor = ChapterProcessor(pdf_reader, max_concurrent=5)
+                    results = await processor.process_chapters_summary_and_refactor(
+                        agenda_data_list,
+                        ReaderRole.SUMMARY,
+                        ReaderRole.REFACTOR
+                    )
+                    
+                    total_summary = {title: summary for title, summary, _, _, _ in results}
                     pdf_reader.total_summary = total_summary
                 
                 # 设置raw_data_dict用于详细摘要

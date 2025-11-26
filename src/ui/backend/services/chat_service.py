@@ -3,6 +3,7 @@
 import sys
 from pathlib import Path
 from typing import Optional, Any
+from langchain_community.chat_message_histories import ChatMessageHistory
 
 # 添加项目根路径到sys.path
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -126,10 +127,10 @@ class ChatService:
                     web_content = json.load(f)
 
                 # 检查是否有向量数据库（大文件）
-                vector_db_path = settings.data_dir / "vector_db" / f"{doc_name}_vector_db"
+                # 🔥 修复：使用正确的后缀 _data_index（与 ReaderConstants.VECTOR_DB_SUFFIX 一致）
+                vector_db_path = settings.data_dir / "vector_db" / f"{doc_name}_data_index"
 
                 # 🔥 初始化聊天历史（无论大小文件都需要）
-                from langchain.memory import ChatMessageHistory
                 if not hasattr(self.web_reader, 'message_history') or self.web_reader.message_history is None:
                     self.web_reader.message_history = {}
                 if "chat" not in self.web_reader.message_history:

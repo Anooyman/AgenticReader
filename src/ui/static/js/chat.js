@@ -66,12 +66,13 @@ class LLMReaderChatApp {
             this.sendMessage();
         });
 
-        // 回车发送（Shift+Enter换行）
+        // Ctrl+Enter 发送（普通 Enter 换行）
         chatInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
                 e.preventDefault();
                 this.sendMessage();
             }
+            // 普通 Enter 不阻止默认行为，允许换行
         });
 
         // 输入框自动调整高度
@@ -305,29 +306,44 @@ class LLMReaderChatApp {
                 ...config,
                 currentDocName: config.current_doc_name,
                 hasPdfReader: config.has_pdf_reader,
-                hasWebReader: config.has_web_reader
+                hasWebReader: config.has_web_reader,
+                provider: config.provider
             };
 
             this.config = { ...this.config, ...mappedConfig };
+            console.log('🔧 LLM配置已加载: provider=' + this.config.provider);
 
-            // 检查本地存储的状态是否与服务器状态一致
-            if (savedDocState && savedDocState.currentDocName) {
-                // 🔥 关键修复：优先使用本地存储状态，因为它代表用户的实际工作状态
-                // 服务器重启后状态会被重置，但本地存储保留了用户的文档选择
-                console.log('🔄 检测到本地存储的文档状态，优先使用本地状态:', savedDocState.currentDocName);
+            // 🔥 关键修复：检测服务器是否刚重启（没有加载任何文档）
+            const serverHasNoDocument = !config.current_doc_name && !config.has_pdf_reader && !config.has_web_reader;
+            
+            if (serverHasNoDocument) {
+                // 服务器没有加载文档
+                if (savedDocState && savedDocState.currentDocName) {
+                    // 本地有旧状态，说明是服务器重启后，清除过期的本地状态
+                    console.log('🔄 服务器重启后没有加载任何文档，清除本地过期状态');
+                    this.clearDocumentStateFromLocal();
+                }
+                this.displayNoPdfContent();
+                this.updateDocumentStatus();
+                return;
+            }
+
+            // 服务器有已加载的文档，恢复本地状态
+            if (savedDocState) {
+                if (savedDocState.documentType) {
+                    this.config.documentType = savedDocState.documentType;
+                }
+                // 合并本地存储的其他状态
                 this.config = { ...this.config, ...savedDocState };
-            } else if (this.config.currentDocName) {
-                // 如果本地存储没有状态，但服务器有状态（这种情况很少见）
-                console.log('📊 使用服务器状态（本地存储为空）:', this.config.currentDocName);
+                console.log('🔄 已恢复本地存储的文档状态');
             }
 
             this.updateDocumentStatus();
 
-            // 🔥 新增：聊天页面采用延迟加载策略
+            // 聊天页面采用延迟加载策略
             if (this.config.currentDocName) {
                 console.log('📄 检测到文档，采用延迟加载策略:', this.config.currentDocName);
                 console.log('💡 PDF查看器将在聊天历史加载后初始化');
-                // 不再自动加载PDF查看器，等待聊天历史加载完成后再决定
             } else {
                 console.log('❌ 没有检测到文档');
                 this.displayNoPdfContent();
@@ -961,20 +977,22 @@ class LLMReaderChatApp {
     }
 
     async loadWebContent() {
-        console.log('🌐 开始加载Web内容摘要...');
+        console.log('🌐 开始加载Web原始内容...');
 
         try {
-            const response = await fetch(this.getApiUrl(`/api/v1/web/summary/${this.config.currentDocName}?summary_type=brief`));
+            // 🔥 修改：调用新的 API 获取原始 JSON 内容
+            const response = await fetch(this.getApiUrl(`/api/v1/web/content/${this.config.currentDocName}`));
             const result = await response.json();
 
             if (result.status === 'success' && result.content) {
-                console.log('✅ 成功加载Web摘要');
-                this.displayWebContent(result.content);
-            } else if (result.is_large_file) {
-                // 大文件模式，显示提示信息
-                this.displayWebLargeFileNotice();
+                console.log('✅ 成功加载Web原始内容');
+                this.displayWebContent(result.content, true);  // true 表示是原始内容
+            } else if (result.status === 'not_found') {
+                // 如果没有原始内容，尝试加载摘要
+                console.log('⚠️ 原始内容不存在，尝试加载摘要');
+                await this.loadWebSummary();
             } else {
-                console.log('❌ Web摘要未生成');
+                console.log('❌ Web内容未找到');
                 this.displayNoWebContent(result.message);
             }
         } catch (error) {
@@ -983,7 +1001,27 @@ class LLMReaderChatApp {
         }
     }
 
-    displayWebContent(markdownContent) {
+    async loadWebSummary() {
+        // 备用方法：加载摘要内容
+        try {
+            const response = await fetch(this.getApiUrl(`/api/v1/web/summary/${this.config.currentDocName}?summary_type=brief`));
+            const result = await response.json();
+
+            if (result.status === 'success' && result.content) {
+                console.log('✅ 成功加载Web摘要');
+                this.displayWebContent(result.content, false);  // false 表示是摘要
+            } else if (result.is_large_file) {
+                this.displayWebLargeFileNotice();
+            } else {
+                this.displayNoWebContent(result.message);
+            }
+        } catch (error) {
+            console.error('❌ 加载Web摘要失败:', error);
+            this.displayNoWebContent('加载Web内容时发生错误');
+        }
+    }
+
+    displayWebContent(markdownContent, isRawContent = false) {
         const content = document.getElementById('pdf-viewer-content-full');
 
         // 使用 marked 库渲染 Markdown（如果可用）
@@ -995,10 +1033,14 @@ class LLMReaderChatApp {
             htmlContent = markdownContent.replace(/\n/g, '<br>');
         }
 
+        // 🔥 根据内容类型显示不同的标题
+        const contentTitle = isRawContent ? '📄 网页原始内容' : '📄 网页内容摘要';
+        const contentSubtitle = isRawContent ? '原始抓取内容' : '内容摘要';
+
         content.innerHTML = `
             <div class="web-content-viewer" style="padding: 20px; height: 100%; overflow-y: auto; background: white;">
                 <div class="web-content-header" style="margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #e9ecef;">
-                    <h3 style="margin: 0; color: #2c3e50;">📄 网页内容摘要</h3>
+                    <h3 style="margin: 0; color: #2c3e50;">${contentTitle}</h3>
                     <p style="margin: 5px 0 0 0; color: #6c757d; font-size: 0.9em;">${this.config.currentDocName}</p>
                 </div>
                 <div class="web-content-body" style="line-height: 1.6; color: #333;">
@@ -1008,7 +1050,7 @@ class LLMReaderChatApp {
         `;
 
         // 隐藏PDF翻页按钮
-        document.getElementById('pdf-page-info-full').textContent = 'Web内容';
+        document.getElementById('pdf-page-info-full').textContent = contentSubtitle;
         document.getElementById('pdf-prev-page-full').style.display = 'none';
         document.getElementById('pdf-next-page-full').style.display = 'none';
     }
@@ -1411,49 +1453,37 @@ class LLMReaderChatApp {
         }
 
         const hasLatex = /\$\$[\s\S]*?\$\$|\$[^\$\n]+?\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/.test(content);
-        const isMarkdownContent = this.isMarkdown(content);
-        const isComplexMarkdownContent = this.isComplexMarkdown(content);
 
         console.log(`📝 renderMarkdown 输入分析:`, {
             contentLength: content.length,
             hasLatex: hasLatex,
-            isMarkdownContent: isMarkdownContent,
-            isComplexMarkdownContent: isComplexMarkdownContent,
             preview: content.substring(0, 100)
         });
 
-        // 🔥 调整修复逻辑：只有在纯LaTeX内容时才跳过Markdown渲染
-        // 对于包含LaTeX的Markdown，使用改进的保护机制
-        if (hasLatex && !isComplexMarkdownContent && !isMarkdownContent) {
-            // 只有当内容不是Markdown且不是复杂结构时，才使用简单处理
-            console.log(`🔧 检测到纯LaTeX内容，使用简单换行处理避免公式被破坏`);
-            return content.replace(/\n/g, '<br>');
-        }
-
-        // 🔥 对于极高密度LaTeX内容（80%以上都是公式），也直接使用简单处理
+        // 🔥 对于极高密度LaTeX内容（80%以上都是公式），直接使用简单处理
         if (hasLatex) {
             const latexMatches = content.match(/\$\$[\s\S]*?\$\$|\$[^\$\n]+?\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]/g) || [];
             const latexLength = latexMatches.reduce((sum, match) => sum + match.length, 0);
             const latexRatio = latexLength / content.length;
 
-            if (latexRatio > 0.8) { // 提高阈值到80%
+            if (latexRatio > 0.8) {
                 console.log(`🔧 检测到极高密度LaTeX公式 (${(latexRatio * 100).toFixed(1)}%)，使用简单处理避免渲染冲突`);
                 return content.replace(/\n/g, '<br>');
             }
         }
 
-        if (isMarkdownContent) {
-            if (typeof marked !== 'undefined') {
-                try {
-                    marked.setOptions({
-                        breaks: true,
-                        gfm: true,
-                        sanitize: false,
-                        smartLists: true,
-                        smartypants: false,
-                        headerIds: false,
-                        mangle: false
-                    });
+        // 🔥 修复：总是尝试用 marked 渲染，不再检查 isMarkdown
+        if (typeof marked !== 'undefined') {
+            try {
+                marked.setOptions({
+                    breaks: true,
+                    gfm: true,
+                    sanitize: false,
+                    smartLists: true,
+                    smartypants: false,
+                    headerIds: false,
+                    mangle: false
+                });
 
                     // 🔧 改进：保护 LaTeX 公式不被 Markdown 渲染器破坏
                     let processedContent = content;
@@ -1589,16 +1619,11 @@ class LLMReaderChatApp {
                     console.warn('❌ Marked渲染失败:', error);
                     return content.replace(/\n/g, '<br>');
                 }
-            }
         }
         
-        // 如果不是Markdown或没有marked库，返回简单处理
+        // marked 库未加载，返回简单处理
         const simpleResult = content.replace(/\n/g, '<br>');
-        console.log(`ℹ️ 内容不是Markdown或没有marked库，使用简单处理`, {
-            isMarkdown: isMarkdownContent,
-            markedAvailable: typeof marked !== 'undefined',
-            result: simpleResult.substring(0, 100)
-        });
+        console.log(`ℹ️ marked库未加载，使用简单处理`);
         return simpleResult;
     }
 

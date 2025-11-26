@@ -1,7 +1,7 @@
 import logging
 import markdown
 from weasyprint import HTML
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from langchain.docstore.document import Document
 from langchain_community.vectorstores import FAISS
@@ -15,6 +15,10 @@ from src.config.settings import (
 from src.config.prompts.reader_prompts import ReaderRole
 from src.config.constants import ProcessingLimits
 from src.utils.helpers import *
+from src.readers.parallel_processor import (
+    run_parallel_chapter_processing,
+    run_parallel_detail_summaries,
+)
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -50,9 +54,7 @@ class ReaderBase(LLMBase):
         self.output_path = OUTPUT_PATH
         self.vector_db_path = VECTOR_DB_PATH
         self.agenda_dict = {}
-        self.retrieval_data_dict = {}
         self.vector_db_obj: Optional[VectorDBClient] = None
-        self.retrieval_dict = {}
         self.total_summary = {}
         self.raw_data_dict = {}
 
@@ -178,7 +180,7 @@ class ReaderBase(LLMBase):
 
     def get_detail_summary(self, raw_data_dict: Dict[str, Any], file_type_list: Optional[List[str]] = None) -> None:
         """
-        生成文章的详细摘要，按原始数据结构逐部分处理
+        生成文章的详细摘要，使用并行处理加速
 
         Args:
             raw_data_dict: 原始数据字典，键为标题，值为包含分页内容的字典
@@ -201,24 +203,20 @@ class ReaderBase(LLMBase):
             return
 
         try:
-            # 初始化总摘要字符串
-            total_answer = ""
-
             # 构造用于生成详细摘要的查询模板
             query_template = ("按照人类的习惯理解并且总结 {title} 的内容。"
                             "需要注意标题(如果标题中有数字则需要写出到结果中)，换行，加粗关键信息。"
                             "仅需要返回相关内容的总结信息，多余的话无需返回。"
                             "不需要对章节进行单独总结。返回中文")
 
-            logger.info(f"开始生成详细摘要，共包含 {len(raw_data_dict)} 个部分...")
+            logger.info(f"开始并行生成详细摘要，共包含 {len(raw_data_dict)} 个部分...")
 
-            # 遍历每个标题对应的内容
+            # 准备要处理的章节数据
+            chapters_to_process = []
             for title, data_dict in raw_data_dict.items():
                 if not title or not isinstance(data_dict, dict):
                     logger.warning(f"跳过无效的标题或数据: {title}")
                     continue
-
-                logger.info(f"正在处理: {title}")
 
                 # 收集并去重同一标题下的所有页面内容
                 context_data = []
@@ -230,21 +228,28 @@ class ReaderBase(LLMBase):
                     logger.warning(f"标题 '{title}' 下没有有效内容，跳过")
                     continue
 
-                logger.info(f"{title} 包含 {len(context_data)} 个非重复内容块")
+                chapters_to_process.append({
+                    'title': title,
+                    'context_data': context_data,
+                    'query': query_template.format(title=title)
+                })
 
-                try:
-                    # 生成当前标题对应的详细摘要
-                    answer = self.get_answer(context_data, query_template.format(title=title))
+            # 使用并行处理工具
+            results = run_parallel_detail_summaries(
+                llm_client=self,
+                chapters=chapters_to_process,
+                answer_role=ReaderRole.ANSWER,
+                max_concurrent=5
+            )
 
-                    if answer and answer.strip():
-                        # 将当前部分的摘要添加到总摘要中
-                        total_answer += f"\n\n --- \n\n {answer}"
-                    else:
-                        logger.warning(f"标题 '{title}' 的摘要生成为空")
-
-                except Exception as e:
-                    logger.error(f"生成标题 '{title}' 的摘要时出错: {e}")
-                    continue
+            # 按原始顺序组装结果
+            title_order = [ch['title'] for ch in chapters_to_process]
+            results_dict = {r[0]: r[1] for r in results if r[1]}
+            
+            total_answer = ""
+            for title in title_order:
+                if title in results_dict:
+                    total_answer += f"\n\n --- \n\n {results_dict[title]}"
 
             # 验证总摘要内容
             if not total_answer.strip():
@@ -365,13 +370,19 @@ class ReaderBase(LLMBase):
         # 重新分组
         agenda_data_list, self.agenda_dict = group_data_by_sections_with_titles(agenda_list, json_data_dict)
         logger.info(f"章节分组完成，共 {len(agenda_data_list)} 个章节")
-        logger.info(f"开始分章节总结...")
-        for agenda_data in agenda_data_list:
-            title = agenda_data.get("title")
-            data = agenda_data.get("data")
-            page = agenda_data.get("pages")
-            summary = self.summary_content(title, list(data.values()))
-            refactor_content = self.refactor_content(title, list(data.values()))
+        logger.info(f"开始并行处理章节总结...")
+
+        # 使用并行处理工具
+        chapter_results = run_parallel_chapter_processing(
+            llm_client=self,
+            agenda_data_list=agenda_data_list,
+            summary_role=ReaderRole.SUMMARY,
+            refactor_role=ReaderRole.REFACTOR,
+            max_concurrent=5
+        )
+
+        # 处理并行执行的结果
+        for title, summary, refactor_content, page, data in chapter_results:
             self.total_summary[title] = summary
             vector_db_content_docs.append(
                 Document(
@@ -601,118 +612,6 @@ class ReaderBase(LLMBase):
             pass
 
         return float('inf')
-
-    def retrieval_data(self, response: Dict[str, Any]) -> List[str]:
-        """
-        检索用户请求相关的章节内容
-
-        Args:
-            response: LLM返回的响应，应包含章节标题列表
-
-        Returns:
-            检索到的上下文内容列表
-
-        Raises:
-            ValueError: 输入参数无效
-            Exception: 向量数据库检索失败
-        """
-        # 输入验证
-        if not response or not isinstance(response, dict):
-            logger.warning("响应数据为空或格式无效")
-            return []
-
-        title_list = response.get("title", [])
-        if not title_list:
-            logger.warning("响应中没有找到标题列表")
-            return []
-
-        if not isinstance(title_list, list):
-            logger.warning("标题列表格式无效")
-            return []
-
-        # 验证向量数据库是否可用
-        if not self.vector_db_obj or not self.vector_db_obj.vector_db:
-            logger.error("向量数据库未初始化")
-            return []
-
-        logger.info(f"开始检索 {len(title_list)} 个章节的内容")
-
-        context_data = []
-        total_page_content = []
-        successful_retrievals = 0
-
-        for title in title_list:
-            if not title or not isinstance(title, str):
-                logger.warning(f"跳过无效标题: {title}")
-                continue
-
-            try:
-                refactor_data = ""
-                page_content = []
-
-                # 检查缓存
-                if title in self.retrieval_data_dict:
-                    logger.info(f"从缓存获取章节 '{title}' 的内容")
-                    cached_data = self.retrieval_data_dict[title]
-                    refactor_data = cached_data.get("data", "")
-                    page_content = cached_data.get("page", [])
-                else:
-                    # 从向量数据库检索
-                    logger.info(f"从向量数据库检索章节: '{title}'")
-
-                    try:
-                        doc_res = self.vector_db_obj.search_by_title(title)
-
-                        if doc_res and len(doc_res) > 0:
-                            document = doc_res[0][0]
-                            metadata = document.metadata
-
-                            refactor_data = metadata.get("refactor", "")
-                            raw_data = metadata.get("raw_data", {})
-                            page_content = list(raw_data.keys()) if isinstance(raw_data, dict) else []
-
-                            # 缓存检索结果
-                            self.retrieval_data_dict[title] = {
-                                "data": refactor_data,
-                                "page": page_content
-                            }
-
-                            logger.info(f"成功检索章节 '{title}' 内容")
-                            successful_retrievals += 1
-                        else:
-                            logger.warning(f"章节 '{title}' 在向量数据库中未找到相关内容")
-
-                    except Exception as e:
-                        logger.error(f"检索章节 '{title}' 时出错: {e}")
-                        continue
-
-                # 添加到上下文数据（去重）
-                if refactor_data and refactor_data.strip():
-                    if refactor_data not in context_data:
-                        context_data.append(refactor_data)
-                    else:
-                        logger.info(f"章节 '{title}' 的内容已存在于上下文中")
-
-                # 收集页面内容
-                if page_content:
-                    total_page_content.extend(page_content)
-
-            except Exception as e:
-                logger.error(f"处理章节 '{title}' 时发生错误: {e}")
-                continue
-
-        # 去重页面内容
-        unique_pages = list(set(total_page_content))
-
-        logger.info(f"检索完成 - 请求章节: {len(title_list)}, "
-                   f"成功检索: {successful_retrievals}, "
-                   f"上下文条目: {len(context_data)}, "
-                   f"涉及页面: {len(unique_pages)}")
-
-        if unique_pages:
-            logger.info(f"涉及页面列表: {sorted(unique_pages, key=lambda x: int(x) if str(x).isdigit() else 0)}")
-
-        return context_data
 
     def get_basic_info(self, raw_data: Any) -> Optional[Dict[str, Any]]:
         """

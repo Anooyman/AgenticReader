@@ -3,6 +3,7 @@
 import sys
 import logging
 import asyncio
+import json
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -16,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from ...config import get_logger, settings
 from ...services.chat_service import chat_service
+from .config import get_current_provider
 
 router = APIRouter(prefix="/web", tags=["Web"])
 logger = get_logger(__name__)
@@ -45,8 +47,8 @@ async def process_web_url(request: WebProcessRequest):
         doc_name = extract_name_from_url(url)
         logger.info(f"📝 生成文档名: {doc_name}")
 
-        # 初始化WebReader（使用settings中配置的provider，默认为openai）
-        provider = getattr(settings, 'llm_provider', 'openai')
+        # 初始化WebReader（使用config中配置的provider）
+        provider = get_current_provider()
         web_reader = WebReader(provider=provider)
 
         # 处理网页内容（异步调用）
@@ -188,6 +190,67 @@ async def get_web_summary(doc_name: str, summary_type: str = "brief"):
         raise HTTPException(status_code=500, detail=f"获取Web摘要失败: {str(e)}")
 
 
+@router.get("/content/{doc_name}")
+async def get_web_raw_content(doc_name: str):
+    """获取Web原始JSON内容（用于聊天模式右侧展示）"""
+    try:
+        # 查找 JSON 文件
+        json_data_dir = settings.data_dir / "json_data"
+        json_path = json_data_dir / f"{doc_name}.json"
+        
+        # 如果标准文件名不存在，尝试查找匹配的文件
+        if not json_path.exists():
+            logger.warning(f"标准文件名不存在: {json_path.name}")
+            
+            if json_data_dir.exists():
+                doc_name_normalized = doc_name.replace(' ', '').lower()
+                
+                for candidate in json_data_dir.glob("*.json"):
+                    # 跳过 _format_data.json 文件
+                    if candidate.stem.endswith('_format_data'):
+                        continue
+                    candidate_normalized = candidate.stem.replace(' ', '').lower()
+                    if candidate_normalized.startswith(doc_name_normalized):
+                        json_path = candidate
+                        logger.info(f"✅ 找到匹配文件: {json_path.name}")
+                        break
+        
+        if not json_path.exists():
+            return {
+                "status": "not_found",
+                "message": f"未找到文档 {doc_name} 的原始内容",
+                "content": ""
+            }
+        
+        # 读取 JSON 内容
+        with open(json_path, 'r', encoding='utf-8') as f:
+            raw_content = json.load(f)
+        
+        # 将 JSON 内容转换为可读的 Markdown 格式
+        if isinstance(raw_content, list):
+            # 如果是列表，将每个元素作为段落
+            formatted_content = "\n\n".join(raw_content)
+        elif isinstance(raw_content, dict):
+            # 如果是字典，格式化显示
+            formatted_content = json.dumps(raw_content, ensure_ascii=False, indent=2)
+        else:
+            formatted_content = str(raw_content)
+        
+        logger.info(f"✅ 成功加载Web原始内容: {json_path.name}, 长度: {len(formatted_content)} 字符")
+        
+        return {
+            "status": "success",
+            "content": formatted_content,
+            "file": str(json_path),
+            "file_name": json_path.name,
+            "content_length": len(formatted_content)
+        }
+    
+    except Exception as e:
+        logger.error(f"❌ 获取Web原始内容失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取Web原始内容失败: {str(e)}")
+
+
 class WebInitializeRequest(BaseModel):
     url: Optional[str] = None
 
@@ -241,8 +304,13 @@ async def initialize_web_reader(
         logger.info(f"🔄 正在初始化Web聊天服务: {doc_name}")
         logger.info(f"📊 初始化前ChatService状态: {chat_service.get_status()}")
 
+        # 获取当前配置的 provider
+        from .config import get_current_provider
+        current_provider = get_current_provider()
+        logger.info(f"🔧 使用 LLM provider: {current_provider}")
+
         # 调用异步初始化方法
-        success = await chat_service.initialize_web_reader(doc_name, url=url, provider="openai")
+        success = await chat_service.initialize_web_reader(doc_name, url=url, provider=current_provider)
 
         logger.info(f"📊 初始化后ChatService状态: {chat_service.get_status()}")
 

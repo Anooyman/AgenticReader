@@ -474,46 +474,47 @@ class LLMReaderApp {
                 currentDocName: config.current_doc_name,
                 hasPdfReader: config.has_pdf_reader,
                 hasWebReader: config.has_web_reader,
-                pdfPreset: config.pdf_preset
+                pdfPreset: config.pdf_preset,
+                provider: config.provider
             };
 
             this.config = { ...this.config, ...mappedConfig };
+            console.log('🔧 LLM配置已加载: provider=' + this.config.provider + ', pdfPreset=' + this.config.pdfPreset);
 
-            // 如果有保存的文档状态，恢复 documentType
+            // 🔥 关键修复：检测服务器是否刚重启（没有加载任何文档）
+            // 只有当服务器没有文档且本地有过期状态时，才清除本地状态
+            const serverHasNoDocument = !config.current_doc_name && !config.has_pdf_reader && !config.has_web_reader;
+            
+            if (serverHasNoDocument) {
+                // 服务器没有加载文档
+                if (savedDocState && savedDocState.currentDocName) {
+                    // 本地有旧状态，说明是服务器重启后，清除过期的本地状态
+                    console.log('🔄 服务器重启后没有加载任何文档，清除本地过期状态');
+                    this.clearDocumentStateFromLocal();
+                }
+                // 显示初始状态
+                this.updateDocumentStatus();
+                this.updateSessionStatus();
+                return;
+            }
+
+            // 服务器有已加载的文档
             if (savedDocState && savedDocState.documentType) {
                 this.config.documentType = savedDocState.documentType;
                 console.log(`📝 恢复文档类型: ${savedDocState.documentType}`);
             }
 
-            // 🔥 新增：延迟加载策略 - 只显示UI，不自动加载PDF内容
-            if (savedDocState && savedDocState.currentDocName) {
-                console.log('🔄 检测到本地存储的文档状态:', savedDocState.currentDocName);
-                console.log('📊 延迟加载策略：只恢复UI状态，不自动加载PDF内容');
+            // 恢复聊天会话ID
+            if (savedDocState && savedDocState.currentChatId) {
+                this.currentChatId = savedDocState.currentChatId;
+                console.log('🔄 恢复聊天会话ID:', this.currentChatId);
+            }
 
-                // 🔥 关键修复：只恢复配置状态，不触发内容加载
-                this.config = { ...this.config, ...savedDocState };
-
-                // 🔥 关键修复：确保恢复聊天会话ID，避免重新创建
-                if (savedDocState.currentChatId) {
-                    this.currentChatId = savedDocState.currentChatId;
-                    console.log('🔄 恢复聊天会话ID:', this.currentChatId);
-                }
-
-                // 🔥 新增：显示session可用状态，但标记为"待加载"
+            // 显示摘要和聊天入口
+            if (this.config.currentDocName) {
+                console.log('📄 检测到文档:', this.config.currentDocName);
                 this.showSummarySection();
                 this.updateChatEntryStatus();
-                this.updateDocumentStatus();
-                this.updateSessionStatus();
-
-                // 🔥 新增：显示文档状态但提示需要选择会话来加载
-                this.showSessionAvailableHint(savedDocState.currentDocName);
-
-            } else if (this.config.currentDocName) {
-                // 如果没有本地状态但服务器有配置，也采用延迟加载
-                console.log('📄 检测到服务器配置状态，采用延迟加载策略:', this.config.currentDocName);
-                this.showSummarySection();
-                this.updateChatEntryStatus();
-                this.showSessionAvailableHint(this.config.currentDocName);
             }
 
             // 更新UI
@@ -1821,7 +1822,7 @@ class LLMReaderApp {
     /* === Markdown和数学公式渲染 === */
 
     renderMarkdown(content) {
-        // 检查内容是否为Markdown格式
+        // 检查内容是否为字符串
         if (typeof content !== 'string') {
             return content;
         }
@@ -1829,38 +1830,35 @@ class LLMReaderApp {
         // 检查是否包含LaTeX数学公式
         const hasLatex = /\$.*\$|\\\(.*\\\)|\\\[[\s\S]*\\\]|\$\$[\s\S]*\$\$/.test(content);
 
-        // 如果内容包含Markdown语法，则渲染
-        if (this.isMarkdown(content)) {
-            if (typeof marked !== 'undefined') {
-                try {
-                    // 配置marked选项，禁用sanitizer以保护LaTeX
-                    marked.setOptions({
-                        breaks: true,
-                        gfm: true,
-                        sanitize: false,
-                        smartLists: true,
-                        smartypants: false, // 关闭智能标点，避免影响LaTeX
-                        headerIds: false,
-                        mangle: false
-                    });
+        // 🔥 修复：总是尝试用 marked 渲染，不再检查 isMarkdown
+        // marked 可以正确处理纯文本，所以不需要预先检测
+        if (typeof marked !== 'undefined') {
+            try {
+                // 配置marked选项
+                marked.setOptions({
+                    breaks: true,
+                    gfm: true,
+                    sanitize: false,
+                    smartLists: true,
+                    smartypants: false, // 关闭智能标点，避免影响LaTeX
+                    headerIds: false,
+                    mangle: false
+                });
 
-                    // 如果包含LaTeX，我们需要小心处理
-                    // 即使包含LaTeX，也尝试渲染markdown，因为marked可以处理大部分情况
-                    const rendered = marked.parse(content);
+                const rendered = marked.parse(content);
 
-                    if (hasLatex) {
-                        console.log('检测到LaTeX内容，Markdown已渲染，LaTeX将在后续处理');
-                    }
-
-                    return rendered;
-                } catch (error) {
-                    console.warn('Marked渲染失败:', error);
-                    return content.replace(/\n/g, '<br>');
+                if (hasLatex) {
+                    console.log('检测到LaTeX内容，Markdown已渲染，LaTeX将在后续处理');
                 }
+
+                return rendered;
+            } catch (error) {
+                console.warn('Marked渲染失败:', error);
+                return content.replace(/\n/g, '<br>');
             }
         }
 
-        // 如果不是Markdown或marked未加载，返回原内容（处理换行）
+        // marked未加载时，返回原内容（处理换行）
         return content.replace(/\n/g, '<br>');
     }
 
@@ -2136,9 +2134,19 @@ class LLMReaderApp {
         this.chatHistory = [];
 
         // 重置文档状态 - 新会话需要重新选择文档
+        // 🔥 关键：保留 provider 和 pdfPreset 配置，不重置
+        const savedProvider = this.config.provider;
+        const savedPdfPreset = this.config.pdfPreset;
+        
         this.config.currentDocName = null;
         this.config.hasPdfReader = false;
         this.config.hasWebReader = false;
+        
+        // 恢复 provider 和 pdfPreset 配置
+        this.config.provider = savedProvider;
+        this.config.pdfPreset = savedPdfPreset;
+        
+        console.log('🔧 保留LLM配置: provider=' + savedProvider + ', pdfPreset=' + savedPdfPreset);
 
         console.log('🌟 创建全局新会话:', this.currentChatId);
         console.log('🔄 重置文档状态，需要重新加载文档');
@@ -2355,29 +2363,8 @@ class LLMReaderApp {
                 } else if (action === 'delete') {
                     this.deleteSession(chatId);
                 }
-            } else if (sessionItem) {
-                const chatId = sessionItem.getAttribute('data-chat-id');
-                console.log(`📂 点击会话项: 会话ID ${chatId}`);
-
-                // 立即关闭弹窗
-                this.hideSessionsModal();
-
-                // 在主页面显示加载状态
-                this.showStatus('info', '正在切换会话，重新加载文档...', 'config');
-
-                try {
-                    console.log('🔄 开始切换会话...');
-                    const success = await this.switchToSession(chatId);
-                    if (!success) {
-                        this.showStatus('error', '会话切换失败', 'config');
-                    }
-                } catch (error) {
-                    console.error('❌ 会话切换失败:', error);
-                    this.showStatus('error', `会话切换失败: ${error.message}`, 'config');
-                }
-            } else {
-                console.log('⚠️ 既不是动作按钮也不是会话项的点击');
             }
+            // 🔥 移除：点击会话项本身不再触发切换，只有点击按钮才会触发
         };
 
         // 绑定事件监听器
@@ -2427,6 +2414,19 @@ class LLMReaderApp {
                 hasPdfReader: this.config.hasPdfReader,
                 hasWebReader: this.config.hasWebReader
             });
+
+            // 🔥 修复：如果 hasPdfReader 和 hasWebReader 都为 false，自动检测文档类型
+            if (!this.config.hasPdfReader && !this.config.hasWebReader) {
+                console.log('⚠️ 会话中未记录阅读器类型，尝试自动检测...');
+                const detectedType = await this.detectDocumentType(sessionData.docName);
+                if (detectedType === 'web') {
+                    this.config.hasWebReader = true;
+                    console.log('🌐 自动检测为 Web 内容');
+                } else {
+                    this.config.hasPdfReader = true;
+                    console.log('📄 自动检测为 PDF 内容');
+                }
+            }
 
             // 🔥 根据文档类型选择不同的初始化方式
             try {
@@ -2772,6 +2772,43 @@ class LLMReaderApp {
             return `${days}天前`;
         } else {
             return new Date(timestamp).toLocaleDateString();
+        }
+    }
+
+    /**
+     * 自动检测文档类型（PDF 还是 Web）
+     * 通过检查本地文件是否存在来判断
+     * @param {string} docName - 文档名称
+     * @returns {Promise<string>} - 'pdf' 或 'web'
+     */
+    async detectDocumentType(docName) {
+        try {
+            // 首先检查是否有 PDF 文件（通过尝试获取 PDF 图片）
+            const pdfResponse = await fetch(this.getApiUrl(`/api/v1/pdf/images/${docName}`));
+            if (pdfResponse.ok) {
+                const result = await pdfResponse.json();
+                if (result.status === 'success' && result.images && result.images.length > 0) {
+                    console.log('✅ 检测到 PDF 图片，判断为 PDF 文档');
+                    return 'pdf';
+                }
+            }
+
+            // 如果没有 PDF 图片，检查是否有 Web 内容（通过检查 vector_db 或 json）
+            const webResponse = await fetch(this.getApiUrl(`/api/v1/web/content/${docName}`));
+            if (webResponse.ok) {
+                const result = await webResponse.json();
+                if (result.status === 'success') {
+                    console.log('✅ 检测到 Web 内容，判断为 Web 文档');
+                    return 'web';
+                }
+            }
+
+            // 默认返回 PDF（最常见的类型）
+            console.log('⚠️ 无法确定文档类型，默认使用 PDF');
+            return 'pdf';
+        } catch (error) {
+            console.error('❌ 检测文档类型失败:', error);
+            return 'pdf'; // 默认返回 PDF
         }
     }
 }

@@ -356,8 +356,25 @@ class LLMReaderConfigApp {
 
     saveToLocalStorage() {
         try {
+            // 保存配置页面自己的配置
             localStorage.setItem('llmreader_config', JSON.stringify(this.config));
             console.log('💾 配置已保存到本地存储');
+            
+            // 🔥 同时更新 llmreader_document_state 中的 provider 和 pdfPreset
+            // 这样其他页面（主页面、聊天页面）可以同步获取最新的LLM配置
+            try {
+                const savedState = localStorage.getItem('llmreader_document_state');
+                if (savedState) {
+                    const documentState = JSON.parse(savedState);
+                    documentState.provider = this.config.provider;
+                    documentState.pdfPreset = this.config.pdfPreset;
+                    documentState.timestamp = Date.now(); // 更新时间戳
+                    localStorage.setItem('llmreader_document_state', JSON.stringify(documentState));
+                    console.log('🔄 已同步更新文档状态中的LLM配置: provider=' + this.config.provider);
+                }
+            } catch (syncError) {
+                console.warn('同步文档状态失败:', syncError);
+            }
         } catch (error) {
             console.error('保存到本地存储失败:', error);
         }

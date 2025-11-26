@@ -13,6 +13,7 @@ AgenticReader 是一个基于大语言模型（LLM）的智能文档分析与问
 - **智能提取**: PDF 转图片 + OCR，网页内容通过 MCP 服务获取
 - **自动切分**: 根据内容长度智能切分文本
 - **向量数据库**: 基于 FAISS 的高效语义检索
+- **并行处理**: 异步并行处理章节总结和摘要生成，大幅提升处理速度
 
 ### 智能问答 | Intelligent Q&A
 - **多轮对话**: 自动缓存历史检索内容，支持上下文连续对话
@@ -20,17 +21,12 @@ AgenticReader 是一个基于大语言模型（LLM）的智能文档分析与问
 - **自动摘要**: 生成简要摘要（brief_summary）和详细摘要（detail_summary）
 - **多格式导出**: 支持 Markdown 和 PDF 格式导出
 
-### 多代理系统 | Multi-Agent System
-- **智能记忆系统**: 基于多代理架构的记忆管理，支持智能存储和检索个人信息
-- **PlanAgent**: 顶层协调器，分析查询、创建执行计划、评估结果
-- **ExecutorAgent**: 中层执行器，管理子代理并协调计划执行
-- **MemoryAgent**: 专用记忆代理，支持多维度标记（时间、地点、人物、标签）
-
 ### 现代化 Web 界面 | Modern Web Interface
 - **FastAPI + WebSocket**: 实时聊天通信
 - **会话持久化**: 自动保存、备份轮换（保留最近 10 个）、导入导出
 - **双存储架构**: 客户端 localStorage + 服务端文件存储
 - **PDF 查看器**: 集成 PDF 在线预览，支持页面导航
+- **章节管理系统**: 独立的章节编辑界面，支持章节增删改查和批量重建
 - **数据管理系统**: 细粒度数据管理，支持部分删除、批量操作、智能清理
 - **响应式设计**: 移动端友好的自适应界面
 
@@ -107,6 +103,7 @@ python src/ui/run_server.py
 # 聊天界面: http://localhost:8000/chat
 # 配置页面: http://localhost:8000/config
 # 数据管理: http://localhost:8000/data
+# 章节管理: http://localhost:8000/chapters
 # 健康检查: http://localhost:8000/health
 # API 文档: http://localhost:8000/docs
 # ReDoc: http://localhost:8000/redoc
@@ -227,7 +224,8 @@ AgenticReader/
 │   ├── readers/               # 文档读取器
 │   │   ├── base.py            # 基础读取器类
 │   │   ├── pdf.py             # PDF 读取器
-│   │   └── web.py             # Web 读取器
+│   │   ├── web.py             # Web 读取器
+│   │   └── parallel_processor.py  # 章节并行处理器
 │   │
 │   ├── chat/                  # 多代理系统
 │   │   ├── chat.py            # PlanAgent + ExecutorAgent
@@ -297,12 +295,7 @@ AgenticReader/
    - 语义相似度检索
    - 章节元数据管理
 
-4. **Multi-Agent System** (src/chat/)
-   - 基于 LangGraph 的状态图管理
-   - 异步任务分解与协调
-   - 智能记忆管理
-
-5. **Web UI** (src/ui/)
+4. **Web UI** (src/ui/)
    - FastAPI + WebSocket 实时通信
    - 会话持久化（双存储架构）
    - 数据管理系统（细粒度控制）
@@ -324,37 +317,6 @@ AgenticReader/
   → 上下文组装
   → LLM 生成回答
   → 返回用户
-```
-
-</details>
-
----
-
-<details>
-<summary><b>🔌 MCP 服务配置（点击展开）</b></summary>
-
-AgenticReader 使用 MCP (Model Context Protocol) 服务扩展功能：
-
-### Web 内容获取
-```bash
-# 选项 1: Playwright MCP（推荐）
-npx @playwright/mcp@latest
-
-# 选项 2: DuckDuckGo MCP
-uv pip install duckduckgo-mcp-server
-```
-
-**配置位置**: `src/config/settings.py` → `MCP_CONFIG`
-- 默认使用 DuckDuckGo
-- 切换到 Playwright: 取消注释 `playwright` 部分（第 21-27 行）
-
-### 记忆服务
-```bash
-# 安装 RAG Memory MCP
-npm install -g rag-memory-mcp
-
-# 或临时运行
-npx -y rag-memory-mcp
 ```
 
 </details>
@@ -473,13 +435,21 @@ pdf_reader = PDFReader(provider="azure")  # 或 "openai", "ollama"
 <details>
 <summary><b>📝 更新日志 | Changelog（点击展开）</b></summary>
 
-### 2025-11-25 - API 增强和章节管理
-- ✨ **新增章节管理API**
-  - `GET /api/v1/chapters/{doc_name}` - 获取文档章节信息
-  - 支持查看文档的完整章节结构
-- 🔧 **健康检查端点**
-  - `GET /health` - 应用健康状态监控
-  - 返回应用名称、版本、运行状态等信息
+### 2025-11-26 - 并行处理优化和章节管理界面
+- ⚡ **并行处理优化**
+  - 新增 `src/utils/async_utils.py` - 通用异步并行处理工具
+  - 新增 `src/readers/parallel_processor.py` - Reader 专用并行处理器
+  - 章节总结和内容重构并行执行，处理速度提升 3-5 倍
+  - 详细摘要生成并行化，支持信号量控制并发数
+- 📁 **独立章节管理界面**
+  - 新增 `/chapters` 页面 - 与配置管理、数据管理并列
+  - 集成 PDF 预览功能，左侧章节列表 + 右侧 PDF 显示
+  - 支持章节编辑、添加、删除操作
+  - 支持批量重建向量数据库和摘要
+  - 处理过程进度提示和章节高亮显示
+- 🛠️ **代码重构**
+  - 将并行处理逻辑抽取为独立模块，提高代码复用性
+  - 优化了 `base.py` 的章节处理流程
 
 ### 2025-11-19 - 数据管理系统
 - ✨ **新增数据管理界面**
@@ -500,12 +470,6 @@ pdf_reader = PDFReader(provider="azure")  # 或 "openai", "ollama"
 - 实现会话持久化管理和双存储架构
 - 集成 PDF 在线查看器
 - 添加自动备份和导入导出功能
-
-### 2025-09-05 - 多代理系统
-- 新增智能记忆系统（Memory Agent）
-- 实现多代理系统架构（PlanAgent + ExecutorAgent）
-- 支持多维度记忆管理（时间、地点、人物、标签）
-- 基于 LangGraph 工作流
 
 ### 2025-07-30 - Web Reader
 - 新增 Web Reader 功能

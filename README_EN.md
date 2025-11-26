@@ -13,6 +13,7 @@ AgenticReader is an intelligent document analysis and Q&A tool powered by large 
 - **Smart Extraction**: PDF to image + OCR, web content via MCP services
 - **Auto Chunking**: Intelligent text splitting based on content length
 - **Vector Database**: Efficient semantic search based on FAISS
+- **Parallel Processing**: Async parallel processing for chapter summaries and content generation, significantly improving processing speed
 
 ### Intelligent Q&A
 - **Multi-turn Dialogue**: Auto-caching retrieval results for continuous context conversations
@@ -20,17 +21,12 @@ AgenticReader is an intelligent document analysis and Q&A tool powered by large 
 - **Auto Summary**: Generate brief and detailed summaries
 - **Multi-format Export**: Support Markdown and PDF format exports
 
-### Multi-Agent System
-- **Intelligent Memory System**: Multi-agent architecture for memory management with intelligent storage and retrieval
-- **PlanAgent**: Top-level coordinator analyzing queries, creating execution plans, and evaluating results
-- **ExecutorAgent**: Mid-level executor managing sub-agents and coordinating plan execution
-- **MemoryAgent**: Dedicated memory agent supporting multi-dimensional tagging (time, location, person, tags)
-
 ### Modern Web Interface
 - **FastAPI + WebSocket**: Real-time chat communication
 - **Session Persistence**: Auto-save, backup rotation (keeps latest 10), import/export
 - **Dual Storage Architecture**: Client localStorage + server file storage
 - **PDF Viewer**: Integrated online PDF preview with page navigation
+- **Chapter Management System**: Independent chapter editing interface with CRUD operations and batch rebuild
 - **Data Management System**: Granular data management with partial deletion, batch operations, and smart cleanup
 - **Responsive Design**: Mobile-friendly adaptive interface
 
@@ -107,6 +103,7 @@ python src/ui/run_server.py
 # Chat Interface: http://localhost:8000/chat
 # Configuration: http://localhost:8000/config
 # Data Management: http://localhost:8000/data
+# Chapter Management: http://localhost:8000/chapters
 # Health Check: http://localhost:8000/health
 # API Docs: http://localhost:8000/docs
 # ReDoc: http://localhost:8000/redoc
@@ -228,7 +225,8 @@ AgenticReader/
 │   ├── readers/               # Document readers
 │   │   ├── base.py            # Base reader class
 │   │   ├── pdf.py             # PDF reader
-│   │   └── web.py             # Web reader
+│   │   ├── web.py             # Web reader
+│   │   └── parallel_processor.py  # Chapter parallel processor
 │   │
 │   ├── chat/                  # Multi-agent system
 │   │   ├── chat.py            # PlanAgent + ExecutorAgent
@@ -298,12 +296,7 @@ AgenticReader/
    - Semantic similarity search
    - Chapter metadata management
 
-4. **Multi-Agent System** (src/chat/)
-   - LangGraph-based state graph management
-   - Asynchronous task decomposition and coordination
-   - Intelligent memory management
-
-5. **Web UI** (src/ui/)
+4. **Web UI** (src/ui/)
    - FastAPI + WebSocket real-time communication
    - Session persistence (dual storage architecture)
    - Data management system (granular control)
@@ -325,37 +318,6 @@ User Query
   → Context Assembly
   → LLM Response Generation
   → Return to User
-```
-
-</details>
-
----
-
-<details>
-<summary><b>🔌 MCP Service Configuration (Click to expand)</b></summary>
-
-AgenticReader uses MCP (Model Context Protocol) services to extend functionality:
-
-### Web Content Fetching
-```bash
-# Option 1: Playwright MCP (recommended)
-npx @playwright/mcp@latest
-
-# Option 2: DuckDuckGo MCP
-uv pip install duckduckgo-mcp-server
-```
-
-**Configuration Location**: `src/config/settings.py` → `MCP_CONFIG`
-- Default uses DuckDuckGo
-- Switch to Playwright: Uncomment `playwright` section (lines 21-27)
-
-### Memory Service
-```bash
-# Install RAG Memory MCP
-npm install -g rag-memory-mcp
-
-# Or run temporarily
-npx -y rag-memory-mcp
 ```
 
 </details>
@@ -474,14 +436,21 @@ pdf_reader = PDFReader(provider="azure")  # or "openai", "ollama"
 <details>
 <summary><b>📝 Changelog (Click to expand)</b></summary>
 
-### 2025-11-25 - API Enhancement and Chapter Management
-- ✨ **New Chapter Management API**
-  - `GET /api/v1/chapters/{doc_name}` - Get document chapter information
-  - Support viewing complete document chapter structure
-- 🔧 **Health Check Endpoint**
-  - `GET /health` - Application health status monitoring
-  - Returns application name, version, status, and more
-
+### 2025-11-26 - Parallel Processing Optimization and Chapter Management UI
+- ⚡ **Parallel Processing Optimization**
+  - Added `src/utils/async_utils.py` - Generic async parallel processing utilities
+  - Added `src/readers/parallel_processor.py` - Reader-specific parallel processor
+  - Chapter summary and content refactoring now execute in parallel, 3-5x speed improvement
+  - Detail summary generation parallelized with semaphore-controlled concurrency
+- 📁 **Independent Chapter Management Interface**
+  - New `/chapters` page - Parallel to config management and data management
+  - Integrated PDF preview with left chapter list + right PDF display
+  - Support chapter edit, add, delete operations
+  - Support batch rebuild of vector database and summaries
+  - Processing progress indicators and chapter highlighting
+- 🛠️ **Code Refactoring**
+  - Extracted parallel processing logic into independent modules for better reusability
+  - Optimized chapter processing flow in `base.py`
 
 ### 2025-11-19 - Data Management System
 - ✨ **New Data Management Interface**
@@ -502,12 +471,6 @@ pdf_reader = PDFReader(provider="azure")  # or "openai", "ollama"
 - Implemented session persistence management and dual storage architecture
 - Integrated online PDF viewer
 - Added auto-backup and import/export functionality
-
-### 2025-09-05 - Multi-Agent System
-- Added intelligent memory system (Memory Agent)
-- Implemented multi-agent architecture (PlanAgent + ExecutorAgent)
-- Support multi-dimensional memory management (time, location, person, tags)
-- Based on LangGraph workflow
 
 ### 2025-07-30 - Web Reader
 - Added Web Reader functionality

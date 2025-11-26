@@ -18,6 +18,7 @@ from ...core.exceptions import PDFNotFoundError, PDFProcessingError
 from ...models.document import PDFImageList, PDFImage
 from ...services.session_service import SessionService
 from ...services.chat_service import chat_service
+from .config import get_current_provider, get_current_pdf_preset
 
 # 导入PDF处理器
 try:
@@ -326,7 +327,13 @@ async def reinitialize_pdf(
         logger.info(f"🔄 正在初始化聊天服务: {doc_name}")
         logger.info(f"📊 初始化前ChatService状态: {chat_service.get_status()}")
 
-        success = chat_service.initialize_pdf_reader(doc_name, provider="openai", pdf_preset="high")
+        # 获取当前配置的 provider 和 pdf_preset
+        from .config import get_current_provider, get_current_pdf_preset
+        current_provider = get_current_provider()
+        current_pdf_preset = get_current_pdf_preset()
+        logger.info(f"🔧 使用配置: provider={current_provider}, pdf_preset={current_pdf_preset}")
+
+        success = chat_service.initialize_pdf_reader(doc_name, provider=current_provider, pdf_preset=current_pdf_preset)
 
         logger.info(f"📊 初始化后ChatService状态: {chat_service.get_status()}")
 

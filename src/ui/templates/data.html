@@ -20,8 +20,17 @@
                         <p class="header-subtitle">管理文档数据、清理缓存文件、监控存储使用情况</p>
                     </div>
                     <div>
-                        <a href="/" class="btn btn-secondary" style="color: white; text-decoration: none;">
-                            🏠 返回主页
+                        <a href="/" class="btn btn-secondary" style="color: white; text-decoration: none; margin-right: 10px;">
+                            🏠 首页
+                        </a>
+                        <a href="/config" class="btn btn-secondary" style="color: white; text-decoration: none; margin-right: 10px;">
+                            ⚙️ 配置管理
+                        </a>
+                        <a href="/chapters" class="btn btn-secondary" style="color: white; text-decoration: none; margin-right: 10px;">
+                            📖 章节管理
+                        </a>
+                        <a href="/chat" class="btn btn-secondary" style="color: white; text-decoration: none;">
+                            💬 聊天模式
                         </a>
                     </div>
                 </div>
@@ -74,7 +83,6 @@
 
                     <div class="management-tabs">
                         <button class="tab-btn active" data-tab="documents">📄 已处理文档</button>
-                        <button class="tab-btn" data-tab="chapters">📚 章节管理</button>
                         <button class="tab-btn" data-tab="cache">🗃️ 缓存文件</button>
                         <button class="tab-btn" data-tab="chat">💬 聊天数据</button>
                     </div>
@@ -91,27 +99,6 @@
 
                         <div class="document-list" id="document-list">
                             <div class="loading-message">正在加载文档列表...</div>
-                        </div>
-                    </div>
-
-                    <!-- 章节管理标签页 -->
-                    <div id="chapters-tab" class="management-tab-content">
-                        <div class="tab-header">
-                            <h4>📚 章节管理</h4>
-                            <div class="tab-actions">
-                                <select id="chapter-document-select" class="btn btn-secondary btn-sm" style="min-width: 200px;">
-                                    <option value="">选择文档...</option>
-                                </select>
-                                <button id="add-chapter-btn" class="btn btn-success btn-sm" style="display: none;">➕ 添加章节</button>
-                                <button id="refresh-chapters-btn" class="btn btn-secondary btn-sm">🔄 刷新章节</button>
-                                <button id="rebuild-vectordb-btn" class="btn btn-primary btn-sm" style="display: none;">🔨 重建数据</button>
-                            </div>
-                        </div>
-
-                        <div id="chapters-container" class="chapters-list">
-                            <div class="empty-message" style="text-align: center; padding: 40px; color: #999;">
-                                📚 请先选择一个文档查看章节信息
-                            </div>
                         </div>
                     </div>
 
