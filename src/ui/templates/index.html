@@ -340,6 +340,20 @@
         </div>
     </div>
 
+    <!-- 全局处理中模态框 -->
+    <div class="modal-overlay processing-modal-overlay" id="processing-modal" style="display: none;">
+        <div class="modal-content processing-modal">
+            <div class="processing-modal-body">
+                <div class="processing-spinner-large"></div>
+                <h3 id="processing-modal-title">正在处理中...</h3>
+                <p id="processing-modal-message">请耐心等待，处理完成后将自动关闭此窗口</p>
+                <div class="processing-progress">
+                    <span id="processing-modal-status">处理中</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- JavaScript -->
     <script src="/static/js/main.js"></script>
 </body>

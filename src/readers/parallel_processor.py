@@ -210,3 +210,167 @@ def run_parallel_detail_summaries(
     return run_async(
         processor.process_detail_summaries(chapters, answer_role)
     )
+
+
+class PageExtractor:
+    """
+    PDF页面并行提取器
+    
+    封装PDF页面图片内容的并行提取操作。
+    """
+    
+    def __init__(self, llm_client: Any, extract_prompt: str, max_concurrent: int = 5):
+        """
+        初始化页面提取器
+        
+        Args:
+            llm_client: LLM客户端实例（需要有 chat_model.invoke 方法）
+            extract_prompt: 图片内容提取的提示词
+            max_concurrent: 最大并发数
+        """
+        self.llm_client = llm_client
+        self.extract_prompt = extract_prompt
+        self.max_concurrent = max_concurrent
+    
+    async def extract_pages_parallel(
+        self,
+        image_paths: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        并行提取多页图片内容
+        
+        Args:
+            image_paths: 图片路径列表（已按页码排序）
+            
+        Returns:
+            提取结果列表（按页码排序），每个元素包含 {"data": str, "page": str}
+        """
+        import base64
+        import re
+        from langchain_core.messages import HumanMessage
+        
+        semaphore = asyncio.Semaphore(self.max_concurrent)
+        
+        async def extract_single_page(idx: int, path: str) -> Dict[str, Any]:
+            """提取单页内容"""
+            async with semaphore:
+                encoded_image = None
+                try:
+                    # 读取并编码图片文件
+                    with open(path, 'rb') as img_file:
+                        img_data = img_file.read()
+                        encoded_image = base64.b64encode(img_data).decode('ascii')
+                        del img_data
+
+                    # 构建LLM消息
+                    message = [HumanMessage(
+                        content=[
+                            {
+                                "type": "text",
+                                "text": self.extract_prompt
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"}
+                            },
+                        ],
+                    )]
+
+                    # 异步调用LLM处理
+                    loop = asyncio.get_event_loop()
+                    response = await loop.run_in_executor(
+                        None, self.llm_client.chat_model.invoke, message
+                    )
+
+                    if not response or not response.content:
+                        logger.warning(f"页面 {idx + 1} LLM返回空内容")
+                        return None
+
+                    # 提取页码
+                    match = re.search(r'page_(\d+)\.png', path)
+                    page_num = match.group(1) if match else str(idx + 1)
+
+                    return {
+                        "data": response.content,
+                        "page": page_num,
+                        "_idx": idx  # 用于排序
+                    }
+
+                except FileNotFoundError:
+                    logger.error(f"图片文件不存在: {path}")
+                    return None
+                except MemoryError:
+                    logger.error(f"处理图片时内存不足: {path}")
+                    import gc
+                    gc.collect()
+                    return None
+                except Exception as e:
+                    logger.error(f"处理图片 {path} 时发生错误: {e}")
+                    return None
+                finally:
+                    if encoded_image is not None:
+                        del encoded_image
+
+        # 创建所有任务
+        tasks = [extract_single_page(idx, path) for idx, path in enumerate(image_paths)]
+        
+        logger.info(f"🚀 开始并行提取 {len(tasks)} 页内容 (最大并发: {self.max_concurrent})")
+        
+        # 并行执行所有任务
+        all_results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 处理结果
+        results = []
+        for result in all_results:
+            if isinstance(result, Exception):
+                logger.error(f"任务执行异常: {result}")
+            elif result is not None:
+                results.append(result)
+        
+        # 按原始顺序排序
+        results.sort(key=lambda x: x.get('_idx', 0))
+        
+        # 移除临时排序字段
+        for r in results:
+            r.pop('_idx', None)
+        
+        logger.info(f"✅ 并行提取完成: 成功 {len(results)} 页, 失败 {len(image_paths) - len(results)} 页")
+        
+        return results
+
+
+def run_parallel_page_extraction(
+    llm_client: Any,
+    image_paths: List[str],
+    extract_prompt: str,
+    max_concurrent: int = 5
+) -> List[Dict[str, Any]]:
+    """
+    同步接口：并行提取PDF页面图片内容
+    
+    这是一个便捷的同步包装函数，内部使用异步并行处理。
+    
+    Args:
+        llm_client: LLM客户端实例（需要有 chat_model.invoke 方法）
+        image_paths: 图片路径列表（应已按页码排序）
+        extract_prompt: 图片内容提取的提示词
+        max_concurrent: 最大并发数（默认5，避免API限流）
+        
+    Returns:
+        提取结果列表（按页码排序），每个元素包含 {"data": str, "page": str}
+        
+    Example:
+        results = run_parallel_page_extraction(
+            llm_client=pdf_reader,
+            image_paths=sorted_image_paths,
+            extract_prompt="请提取图片中的文字内容",
+            max_concurrent=5
+        )
+        for item in results:
+            print(f"Page {item['page']}: {item['data'][:100]}...")
+    """
+    extractor = PageExtractor(llm_client, extract_prompt, max_concurrent)
+    
+    return run_async(
+        extractor.extract_pages_parallel(image_paths)
+    )

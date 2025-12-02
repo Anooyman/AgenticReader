@@ -499,15 +499,27 @@ class LLMReaderApp {
             }
 
             // 服务器有已加载的文档
-            if (savedDocState && savedDocState.documentType) {
-                this.config.documentType = savedDocState.documentType;
-                console.log(`📝 恢复文档类型: ${savedDocState.documentType}`);
-            }
-
-            // 恢复聊天会话ID
-            if (savedDocState && savedDocState.currentChatId) {
-                this.currentChatId = savedDocState.currentChatId;
-                console.log('🔄 恢复聊天会话ID:', this.currentChatId);
+            if (savedDocState && savedDocState.currentDocName === config.current_doc_name) {
+                // 本地状态与服务器一致，恢复额外信息
+                if (savedDocState.documentType) {
+                    this.config.documentType = savedDocState.documentType;
+                    console.log(`📝 恢复文档类型: ${savedDocState.documentType}`);
+                }
+                if (savedDocState.currentChatId) {
+                    this.currentChatId = savedDocState.currentChatId;
+                    console.log('🔄 恢复聊天会话ID:', this.currentChatId);
+                }
+            } else {
+                // 本地状态与服务器不一致，以服务器为准
+                console.log('🔄 以服务器状态为准，文档:', config.current_doc_name);
+                // 根据服务器状态推断文档类型
+                if (config.has_web_reader) {
+                    this.config.documentType = 'web';
+                } else if (config.has_pdf_reader) {
+                    this.config.documentType = 'pdf';
+                }
+                // 保存新状态到本地
+                this.saveDocumentStateToLocal();
             }
 
             // 显示摘要和聊天入口
@@ -594,35 +606,71 @@ class LLMReaderApp {
             // 首先更新PDF预设配置
             await this.updateProvider(this.config.provider);
 
-            const response = await fetch(this.getApiUrl('/api/v1/pdf/upload'), {
+            // 构建带有 provider 和 pdf_preset 参数的 URL
+            const uploadUrl = new URL(this.getApiUrl('/api/v1/pdf/upload'), window.location.origin);
+            uploadUrl.searchParams.append('provider', this.config.provider || 'openai');
+            uploadUrl.searchParams.append('pdf_preset', this.config.pdfPreset || 'high');
+
+            console.log(`📤 上传PDF，使用 provider: ${this.config.provider}, pdf_preset: ${this.config.pdfPreset}`);
+
+            // 🔥 显示全局处理模态框（阻止用户操作）
+            this.showProcessingModal(
+                '📄 正在处理 PDF 文件',
+                `正在处理中，请耐心等待...\n处理完成后将自动关闭此窗口`,
+                '上传并处理中...'
+            );
+
+            // 同步等待处理完成
+            const response = await fetch(uploadUrl.toString(), {
                 method: 'POST',
                 body: formData
             });
 
             const result = await response.json();
 
-            if (response.ok && result.status === 'processing') {
-                this.config.currentDocName = result.doc_name;
+            // 关闭模态框
+            this.hideProcessingModal();
+            this.hideProcessingStatus('pdf');
 
-                // 保存文档状态到本地存储（初始状态）
+            if (response.ok && result.status === 'completed') {
+                console.log('✅ PDF处理完成');
+                this.config.currentDocName = result.doc_name;
+                this.config.hasPdfReader = true;
+                this.config.hasWebReader = false;
+                this.config.documentType = 'pdf';
+
+                // 生成聊天会话ID
+                if (!this.currentChatId) {
+                    this.currentChatId = this.generateDocumentSessionId(result.doc_name);
+                    console.log('🔑 生成聊天会话ID:', this.currentChatId);
+                }
+
+                // 保存文档状态到本地存储
                 this.saveDocumentStateToLocal();
 
-                // 显示正在处理状态
-                this.showProcessingStatus(result.message, 'pdf');
-
-                // 开始轮询处理状态
-                this.pollPdfProcessingStatus(result.doc_name);
-
-                // 更新基本状态
+                // 更新UI状态
                 this.updateDocumentStatus();
+                this.updateSessionStatus();
+                this.updateChatEntryStatus();
+                this.showSummarySection();
+                this.loadSummary('brief');
+
+                this.showStatus('success', 'PDF处理完成！', 'pdf');
+
+                // 恢复处理按钮
+                if (processPdfBtn) {
+                    processPdfBtn.disabled = false;
+                    processPdfBtn.textContent = '🚀 开始处理 PDF';
+                }
+                return;
             } else {
-                this.hideProcessingStatus('pdf');
                 this.showStatus('error', result.detail || result.message || '处理PDF失败', 'pdf');
             }
         } catch (error) {
             console.error('处理PDF失败:', error);
             this.hideProcessingStatus('pdf');
-            this.showStatus('error', '处理PDF时发生错误', 'pdf');
+            this.hideProcessingModal();
+            this.showStatus('error', '处理PDF时发生错误: ' + error.message, 'pdf');
 
             // 恢复处理按钮（仅在异常情况下）
             if (processPdfBtn) {
@@ -759,98 +807,6 @@ class LLMReaderApp {
             summaryElement.innerHTML = '<p style="color: #dc3545;">加载总结时发生错误</p>';
         }
     }
-
-    async checkPdfProcessingStatus(docName) {
-        try {
-            const response = await fetch(this.getApiUrl(`/api/v1/pdf/status/${docName}`));
-            const result = await response.json();
-
-            console.log('📊 PDF处理状态:', result);
-            return result;
-        } catch (error) {
-            console.error('检查PDF状态失败:', error);
-            return { status: 'error', message: '无法检查处理状态' };
-        }
-    }
-
-    async pollPdfProcessingStatus(docName, maxAttempts = 30, interval = 2000) {
-        let attempts = 0;
-        const processPdfBtn = document.getElementById('process-pdf-btn');
-
-        const poll = async () => {
-            attempts++;
-            console.log(`🔄 检查PDF处理状态 (第${attempts}次)`);
-
-            const status = await this.checkPdfProcessingStatus(docName);
-
-            // 更新处理状态显示
-            if (status.status === 'processing') {
-                this.showProcessingStatus(status.message || '正在处理PDF文件...', 'pdf');
-            } else if (status.status === 'completed') {
-                console.log('✅ PDF处理完成');
-                this.hideProcessingStatus('pdf');
-                this.showStatus('success', 'PDF处理完成！', 'pdf');
-
-                // 更新配置状态
-                this.config.hasPdfReader = status.has_json;
-                this.config.hasWebReader = false; // 明确标记为 PDF 模式
-                this.config.documentType = 'pdf'; // 添加文档类型标记
-
-                // 🔥 关键修复：确保在PDF处理完成后创建基于文档的固定聊天会话ID
-                if (!this.currentChatId) {
-                    this.currentChatId = this.generateDocumentSessionId(docName);
-                    console.log('🔑 PDF处理完成时生成基于文档的固定聊天会话ID:', this.currentChatId);
-                }
-
-                this.saveDocumentStateToLocal();
-
-                // 更新UI状态
-                this.updateDocumentStatus();
-                this.updateSessionStatus(); // 🔥 新增：更新会话状态显示
-                this.updateChatEntryStatus();
-                this.showSummarySection();
-                this.loadSummary('brief');
-
-                // 恢复处理按钮
-                if (processPdfBtn) {
-                    processPdfBtn.disabled = false;
-                    processPdfBtn.textContent = '🚀 开始处理 PDF';
-                }
-
-                return; // 处理完成，停止轮询
-            } else if (status.status === 'error') {
-                console.error('❌ PDF处理失败:', status.message);
-                this.hideProcessingStatus('pdf');
-                this.showStatus('error', status.message || 'PDF处理失败', 'pdf');
-
-                // 恢复处理按钮
-                if (processPdfBtn) {
-                    processPdfBtn.disabled = false;
-                    processPdfBtn.textContent = '🚀 开始处理 PDF';
-                }
-
-                return; // 处理失败，停止轮询
-            }
-
-            // 继续轮询
-            if (attempts < maxAttempts) {
-                setTimeout(poll, interval);
-            } else {
-                console.warn('⚠️ PDF处理状态检查超时');
-                this.hideProcessingStatus('pdf');
-                this.showStatus('warning', 'PDF处理时间较长，请稍后查看', 'pdf');
-
-                // 恢复处理按钮
-                if (processPdfBtn) {
-                    processPdfBtn.disabled = false;
-                    processPdfBtn.textContent = '🚀 开始处理 PDF';
-                }
-            }
-        };
-
-        poll();
-    }
-
 
     async clearChat() {
         try {
@@ -1001,6 +957,35 @@ class LLMReaderApp {
 
         // 暂时隐藏状态元素，为后续的成功/错误消息做准备
         statusElement.style.display = 'none';
+    }
+
+    // 🔥 新增：全局处理模态框方法
+    showProcessingModal(title, message, status = '处理中') {
+        const modal = document.getElementById('processing-modal');
+        const titleEl = document.getElementById('processing-modal-title');
+        const messageEl = document.getElementById('processing-modal-message');
+        const statusEl = document.getElementById('processing-modal-status');
+
+        if (modal) {
+            if (titleEl) titleEl.textContent = title;
+            if (messageEl) messageEl.textContent = message;
+            if (statusEl) statusEl.textContent = status;
+            modal.style.display = 'flex';
+        }
+    }
+
+    hideProcessingModal() {
+        const modal = document.getElementById('processing-modal');
+        if (modal) {
+            modal.style.display = 'none';
+        }
+    }
+
+    updateProcessingModalStatus(status) {
+        const statusEl = document.getElementById('processing-modal-status');
+        if (statusEl) {
+            statusEl.textContent = status;
+        }
     }
 
     updateDocumentStatus() {
@@ -1827,8 +1812,33 @@ class LLMReaderApp {
             return content;
         }
 
-        // 检查是否包含LaTeX数学公式
-        const hasLatex = /\$.*\$|\\\(.*\\\)|\\\[[\s\S]*\\\]|\$\$[\s\S]*\$\$/.test(content);
+        // 🔥 保护LaTeX公式，避免被marked错误处理
+        const latexPlaceholders = [];
+        let protectedContent = content;
+
+        // 保护块级公式 $$...$$ 和 \[...\]
+        protectedContent = protectedContent.replace(/\$\$([\s\S]*?)\$\$/g, (match) => {
+            const placeholder = `%%LATEX_BLOCK_${latexPlaceholders.length}%%`;
+            latexPlaceholders.push({ placeholder, content: match });
+            return placeholder;
+        });
+        protectedContent = protectedContent.replace(/\\\[([\s\S]*?)\\\]/g, (match) => {
+            const placeholder = `%%LATEX_BLOCK_${latexPlaceholders.length}%%`;
+            latexPlaceholders.push({ placeholder, content: match });
+            return placeholder;
+        });
+
+        // 保护行内公式 $...$ 和 \(...\)（注意：$...$ 需要避免匹配货币符号）
+        protectedContent = protectedContent.replace(/\$([^\$\n]+?)\$/g, (match) => {
+            const placeholder = `%%LATEX_INLINE_${latexPlaceholders.length}%%`;
+            latexPlaceholders.push({ placeholder, content: match });
+            return placeholder;
+        });
+        protectedContent = protectedContent.replace(/\\\(([\s\S]*?)\\\)/g, (match) => {
+            const placeholder = `%%LATEX_INLINE_${latexPlaceholders.length}%%`;
+            latexPlaceholders.push({ placeholder, content: match });
+            return placeholder;
+        });
 
         // 🔥 修复：总是尝试用 marked 渲染，不再检查 isMarkdown
         // marked 可以正确处理纯文本，所以不需要预先检测
@@ -1845,10 +1855,15 @@ class LLMReaderApp {
                     mangle: false
                 });
 
-                const rendered = marked.parse(content);
+                let rendered = marked.parse(protectedContent);
 
-                if (hasLatex) {
-                    console.log('检测到LaTeX内容，Markdown已渲染，LaTeX将在后续处理');
+                // 🔥 恢复LaTeX公式
+                for (const item of latexPlaceholders) {
+                    rendered = rendered.replace(item.placeholder, item.content);
+                }
+
+                if (latexPlaceholders.length > 0) {
+                    console.log(`检测到 ${latexPlaceholders.length} 个LaTeX公式，已保护并恢复`);
                 }
 
                 return rendered;

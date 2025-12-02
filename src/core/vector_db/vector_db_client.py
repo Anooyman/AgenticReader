@@ -310,7 +310,7 @@ class VectorDBClient(LLMBase):
         self,
         title: str,
         doc_type: str = "title",
-        k: int = 99,
+        k: int = 1,
         fetch_k: Optional[int] = None,
         enable_dedup: bool = True
     ) -> List[tuple]:

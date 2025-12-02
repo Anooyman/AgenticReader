@@ -329,13 +329,24 @@ class LLMReaderChatApp {
             }
 
             // 服务器有已加载的文档，恢复本地状态
-            if (savedDocState) {
+            if (savedDocState && savedDocState.currentDocName === config.current_doc_name) {
+                // 本地状态与服务器一致，恢复额外信息
                 if (savedDocState.documentType) {
                     this.config.documentType = savedDocState.documentType;
                 }
-                // 合并本地存储的其他状态
-                this.config = { ...this.config, ...savedDocState };
-                console.log('🔄 已恢复本地存储的文档状态');
+                if (savedDocState.currentChatId) {
+                    this.currentChatId = savedDocState.currentChatId;
+                }
+                console.log('🔄 本地状态与服务器一致，已恢复');
+            } else {
+                // 本地状态与服务器不一致，以服务器为准
+                console.log('🔄 以服务器状态为准，文档:', config.current_doc_name);
+                // 根据服务器状态推断文档类型
+                if (config.has_web_reader) {
+                    this.config.documentType = 'web';
+                } else if (config.has_pdf_reader) {
+                    this.config.documentType = 'pdf';
+                }
             }
 
             this.updateDocumentStatus();

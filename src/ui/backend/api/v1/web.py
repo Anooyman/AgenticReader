@@ -17,7 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from ...config import get_logger, settings
 from ...services.chat_service import chat_service
-from .config import get_current_provider
+from .config import get_current_provider, update_document_state
 
 router = APIRouter(prefix="/web", tags=["Web"])
 logger = get_logger(__name__)
@@ -67,6 +67,11 @@ async def process_web_url(request: WebProcessRequest):
         # 检查是否生成了向量数据库
         vector_db_path = settings.data_dir / "vector_db" / f"{doc_name}_vector_db"
         has_vector_db = vector_db_path.exists()
+
+        # 🔥 关键修复：更新服务器端文档状态
+        if has_json or has_vector_db:
+            update_document_state(doc_name, has_pdf_reader=False, has_web_reader=True)
+            logger.info(f"📄 文档状态已更新: {doc_name}, has_web_reader=True")
 
         return {
             "status": "success",

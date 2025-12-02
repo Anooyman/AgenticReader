@@ -420,6 +420,7 @@ class RetrivalAgent(LLMBase):
         context_data = []
         successful_retrievals = 0
         cache_hits = 0
+        returned_titles = []  # 🔥 追踪实际返回到 context_data 的标题
 
         for idx, title in enumerate(title_list):
             if not title or not isinstance(title, str):
@@ -432,6 +433,7 @@ class RetrivalAgent(LLMBase):
             try:
                 refactor_data = ""
                 page_number = []  # 初始化 page_number，避免未定义错误
+                is_from_cache = False  # 🔥 追踪是否来自缓存
 
                 # 检查缓存
                 if title in self.retrieval_data_dict:
@@ -439,6 +441,7 @@ class RetrivalAgent(LLMBase):
                     refactor_data = cached_data.get("data", "")
                     page_number = cached_data.get("page", [])
                     cache_hits += 1
+                    is_from_cache = True  # 🔥 标记为缓存命中
                 else:
                     # 从向量数据库检索（仅检索 type='title' 的文档），启用去重
                     try:
@@ -485,6 +488,12 @@ class RetrivalAgent(LLMBase):
                 if refactor_data and refactor_data.strip():
                     if refactor_data not in context_data:
                         context_data.append(refactor_data)
+                        # 🔥 记录实际添加到 context_data 的标题、页码和是否缓存命中
+                        returned_titles.append({
+                            "title": title,
+                            "pages": page_number,
+                            "from_cache": is_from_cache
+                        })
 
             except Exception as e:
                 logger.error(f"处理章节 '{title}' 时发生错误: {e}")
@@ -497,21 +506,23 @@ class RetrivalAgent(LLMBase):
         logger.info(f"{'='*60}")
         logger.info(f"📊 返回 {len(context_data)} 条内容片段 (新检索: {successful_retrievals}, 缓存: {cache_hits})")
         
-        # 🔥 显示本次返回内容对应的章节和页码
-        if context_data:
-            logger.info(f"📚 检索到的章节:")
-            for title in title_list:
-                if title in self.retrieval_data_dict:
-                    cached = self.retrieval_data_dict[title]
-                    pages = cached.get('page', [])
-                    if pages:
-                        sorted_pages = sorted(pages, key=lambda x: int(x) if str(x).isdigit() else 0)
-                        pages_str = f"页码: {', '.join(map(str, sorted_pages))}"
-                    else:
-                        pages_str = "无页码"
-                    logger.info(f"   ✓ {title} ({pages_str})")
+        # 🔥 只显示本次实际返回到 context_data 的章节和页码
+        if returned_titles:
+            logger.info(f"📚 本次返回的章节:")
+            for item in returned_titles:
+                title = item["title"]
+                pages = item["pages"]
+                from_cache = item.get("from_cache", False)
+                
+                # 🔥 添加缓存标记
+                cache_tag = " [缓存]" if from_cache else " [新检索]"
+                
+                if pages:
+                    sorted_pages = sorted(pages, key=lambda x: int(x) if str(x).isdigit() else 0)
+                    pages_str = f"页码: {', '.join(map(str, sorted_pages))}"
                 else:
-                    logger.info(f"   ✗ {title} (未找到)")
+                    pages_str = "无页码"
+                logger.info(f"   ✓ {title} ({pages_str}){cache_tag}")
         else:
             logger.info(f"📚 未检索到任何内容")
         

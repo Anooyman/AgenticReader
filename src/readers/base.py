@@ -511,7 +511,9 @@ class ReaderBase(LLMBase):
                     query="",
                     k=99999,  # 获取所有匹配的文档
                     field_name="type",
-                    field_value="title"
+                    field_value="title",
+                    enable_dedup=False
+
                 )
                 logger.info(f"从向量数据库检索到 {len(all_db_res)} 个章节")
             except Exception as e:

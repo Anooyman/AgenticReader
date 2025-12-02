@@ -5,7 +5,7 @@ import sys
 import logging
 from typing import Optional
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
 from fastapi.responses import FileResponse
 
 # 添加项目根路径到sys.path
@@ -58,6 +58,11 @@ async def process_pdf_async(filename: str, provider: str = "openai", pdf_preset:
 
         if chat_initialized:
             logger.info(f"✅ 聊天服务初始化成功: {doc_name}")
+            
+            # 🔥 关键修复：更新全局文档状态，确保前端能获取到正确状态
+            from .config import update_document_state
+            update_document_state(doc_name, has_pdf_reader=True, has_web_reader=False)
+            logger.info(f"📄 文档状态已更新: {doc_name}")
         else:
             logger.warning(f"⚠️ 聊天服务初始化失败: {doc_name}")
 
@@ -70,13 +75,12 @@ async def process_pdf_async(filename: str, provider: str = "openai", pdf_preset:
 
 @router.post("/upload")
 async def upload_pdf(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     provider: str = "openai",
     pdf_preset: str = "high",
     session_service: SessionService = Depends()
 ):
-    """上传并处理PDF文件"""
+    """上传并同步处理PDF文件"""
     try:
         if not file.filename.lower().endswith('.pdf'):
             raise HTTPException(status_code=400, detail="只支持PDF文件")
@@ -95,16 +99,28 @@ async def upload_pdf(
         # 获取文档名（不包含.pdf后缀）
         doc_name = file.filename.replace('.pdf', '') if file.filename.endswith('.pdf') else file.filename
 
-        # 添加后台处理任务
-        background_tasks.add_task(process_pdf_async, file.filename, provider, pdf_preset)
-
-        return {
-            "status": "processing",
-            "message": f"PDF文件已上传，正在后台处理中...",
-            "doc_name": doc_name,
-            "filename": file.filename,
-            "size": len(content)
-        }
+        # 🔥 同步处理PDF（阻塞直到完成）
+        logger.info(f"🔄 开始同步处理PDF: {doc_name}")
+        success = await process_pdf_async(file.filename, provider, pdf_preset)
+        
+        if success:
+            logger.info(f"✅ PDF处理完成: {doc_name}")
+            return {
+                "status": "completed",
+                "message": f"PDF文件处理完成！",
+                "doc_name": doc_name,
+                "filename": file.filename,
+                "size": len(content),
+                "has_pdf_reader": True
+            }
+        else:
+            logger.error(f"❌ PDF处理失败: {doc_name}")
+            return {
+                "status": "error",
+                "message": f"PDF处理失败，请查看服务器日志",
+                "doc_name": doc_name,
+                "filename": file.filename
+            }
 
     except Exception as e:
         logger.error(f"❌ PDF上传失败: {str(e)}")

@@ -1,12 +1,10 @@
-import base64
 import json
 import os
 import re
 import logging
 from typing import List, Dict, Any
-from tqdm import tqdm
 
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import AIMessage
 
 from src.readers.retrieval import RetrivalAgent
 from src.readers.base import ReaderBase
@@ -18,6 +16,7 @@ from src.config.settings import (
 from src.config.constants import ReaderConstants
 from src.config.prompts.reader_prompts import ReaderRole, READER_PROMPTS
 from src.utils.helpers import *
+from src.readers.parallel_processor import run_parallel_page_extraction
 from src.core.vector_db.vector_db_client import VectorDBClient
 
 # Setup logging
@@ -83,6 +82,7 @@ class PDFReader(ReaderBase):
     def extract_pdf_data(self, pdf_file_path: str) -> List[Dict[str, Any]]:
         """
         将 PDF 转为图片并用 LLM 提取每页内容，结果保存为 JSON
+        支持并行处理以加速提取过程
 
         Args:
             pdf_file_path: PDF 文件名（不含路径和扩展名）
@@ -135,70 +135,16 @@ class PDFReader(ReaderBase):
             sorted_image_paths = sorted(image_paths, key=safe_page_sort)
             logger.info(f"找到 {len(sorted_image_paths)} 个图片文件待处理")
 
-            # 处理每个图片页面
-            image_content_list = []
-            error_pages_list = []
-            successful_extractions = 0
-
-            for idx, path in enumerate(tqdm(sorted_image_paths, desc="提取图片内容")):
-                encoded_image = None
-                try:
-                    # 读取并编码图片文件
-                    with open(path, 'rb') as img_file:
-                        img_data = img_file.read()
-                        encoded_image = base64.b64encode(img_data).decode('ascii')
-                        del img_data  # 立即释放内存
-
-                    # 构建LLM消息
-                    message = [HumanMessage(
-                        content=[
-                            {
-                                "type": "text",
-                                "text": READER_PROMPTS.get(ReaderRole.IMAGE_EXTRACT, "请提取图片中的文字内容")
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": f"data:image/jpeg;base64,{encoded_image}"}
-                            },
-                        ],
-                    )]
-
-                    # 调用LLM处理
-                    response = self.chat_model.invoke(message)
-
-                    if not response or not response.content:
-                        logger.warning(f"页面 {idx + 1} LLM返回空内容")
-                        continue
-
-                    # 提取页码
-                    page_num = extract_page_num(path)
-                    if not page_num:
-                        page_num = str(idx + 1)  # 使用索引作为备用页码
-
-                    # 保存结果
-                    image_content_list.append({
-                        "data": response.content,
-                        "page": page_num
-                    })
-
-                    successful_extractions += 1
-
-                except FileNotFoundError:
-                    logger.error(f"图片文件不存在: {path}")
-                    error_pages_list.append(path)
-                except MemoryError:
-                    logger.error(f"处理图片时内存不足: {path}")
-                    error_pages_list.append(path)
-                    # 强制垃圾回收
-                    import gc
-                    gc.collect()
-                except Exception as e:
-                    logger.error(f"处理图片 {path} 时发生错误: {e}")
-                    error_pages_list.append(path)
-                finally:
-                    # 确保释放编码后的图片数据内存
-                    if encoded_image is not None:
-                        del encoded_image
+            # 🔥 使用并行处理提取图片内容
+            extract_prompt = READER_PROMPTS.get(
+                ReaderRole.IMAGE_EXTRACT, "请提取图片中的文字内容"
+            )
+            image_content_list = run_parallel_page_extraction(
+                llm_client=self,
+                image_paths=sorted_image_paths,
+                extract_prompt=extract_prompt,
+                max_concurrent=5
+            )
 
             # 保存提取结果到JSON文件
             if image_content_list:
@@ -210,24 +156,19 @@ class PDFReader(ReaderBase):
                         json.dump(image_content_list, file, ensure_ascii=False, indent=2)
 
                     logger.info(f"数据已保存到: {output_json_path}")
-                    logger.info(f"提取统计: 成功{successful_extractions}页, 失败{len(error_pages_list)}页")
+                    logger.info(f"提取统计: 成功{len(image_content_list)}页")
                 except Exception as e:
                     logger.error(f"保存JSON文件失败: {e}")
                     raise
             else:
                 logger.error("没有成功提取任何页面内容")
 
-            # 报告错误页面
-            if error_pages_list:
-                logger.warning(f"以下页面提取失败: {error_pages_list}")
-                logger.warning("请检查这些页面的图片质量或手动处理")
-
             return image_content_list
 
         except Exception as e:
             logger.error(f"PDF数据提取过程中发生错误: {e}")
             raise
-   
+
     def split_pdf_raw_data(self):
         """
         将 self.pdf_raw_data 按照 self.chunk_count 进行切分。
