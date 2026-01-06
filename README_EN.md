@@ -17,6 +17,7 @@ AgenticReader is an intelligent document analysis and Q&A tool powered by large 
 
 ### Intelligent Q&A
 - **Multi-turn Dialogue**: Auto-caching retrieval results for continuous context conversations
+- **Intelligent History Management**: Automatic LLM-powered conversation history summarization, saving context space (90%+ compression rate)
 - **Chapter-based Search**: Recommend asking with chapter names for better retrieval
 - **Auto Summary**: Generate brief and detailed summaries
 - **Multi-format Export**: Support Markdown and PDF format exports

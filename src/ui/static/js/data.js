@@ -554,7 +554,7 @@ class LLMReaderDataApp {
         if (messageElement) messageElement.textContent = message;
         this.confirmationCallback = callback;
 
-        if (dialog) dialog.style.display = 'block';
+        if (dialog) dialog.style.display = 'flex';
     }
 
     showStatus(type, message) {

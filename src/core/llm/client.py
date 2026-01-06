@@ -1,205 +1,49 @@
 """
-client.py - LLM provider and message history management for LLMReader
+client.py - Main LLM client for managing conversations and providers
 
-This module provides classes for managing chat message history with limits, and for abstracting over different LLM providers (Azure, OpenAI, Ollama).
+This module provides the main LLMBase class for managing chat conversations,
+integrating with different LLM providers and handling message history.
 
 Enhanced Features:
+- Multi-provider support (Azure, OpenAI, Ollama)
 - Tool calling support for MCP integration
 - Async operations support
+- Session-based message history management
+- Smart history management with LLM summarization
 - Enhanced error handling and logging
 - Flexible configuration management
+
+Note:
+    - Message history management moved to history.py
+    - Provider implementations moved to providers.py
 """
 import asyncio
 import logging
-from typing import Any, Optional, List, Dict, Union
-from pydantic import Field
-from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
+from typing import Any, Optional, List, Dict
+from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, MessagesPlaceholder
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain_core.chat_history import InMemoryChatMessageHistory
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_community.chat_models import ChatOllama
-from langchain_community.embeddings import OllamaEmbeddings
 
-from abc import ABC, abstractmethod
-
-from src.config.settings import (
-    LLM_CONFIG,
-    LLM_EMBEDDING_CONFIG,
-)
+from src.config.settings import LLM_CONFIG, LLM_EMBEDDING_CONFIG
 from src.config.prompts import SYSTEM_PROMPT_CONFIG
 from src.config.constants import ProcessingLimits, LLMConstants
+
+# Import from refactored modules
+from src.core.llm.history import LimitedChatMessageHistory
+from src.core.llm.providers import (
+    AzureLLMProvider,
+    OpenAILLMProvider,
+    OllamaLLMProvider
+)
+
 logging.basicConfig(
     level=logging.INFO,  # 可根据需要改为 DEBUG
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-
-class LimitedChatMessageHistory(InMemoryChatMessageHistory):
-    """
-    带有限制功能的聊天消息历史记录管理类
-
-    扩展InMemoryChatMessageHistory，增加以下功能：
-    - 消息数量限制：通过max_messages参数控制最大消息条数
-    - Token数量限制：通过max_tokens参数控制总Token数不超过模型上下文窗口
-    - 自动清理：当消息数量或Token数超出限制时，自动移除最早的消息
-
-    Attributes:
-        max_messages (int): 最大消息数量限制，默认从ProcessingLimits.DEFAULT_MAX_MESSAGES获取
-        max_tokens (int): 最大Token数量限制，默认从ProcessingLimits.DEFAULT_MAX_TOKENS获取
-        encoding_name (str): Token编码名称，默认从LLMConstants.DEFAULT_ENCODING获取
-    """
-
-    # 使用Pydantic字段定义自定义属性
-    max_messages: int = Field(default_factory=lambda: ProcessingLimits.DEFAULT_MAX_MESSAGES)
-    max_tokens: int = Field(default_factory=lambda: ProcessingLimits.DEFAULT_MAX_TOKENS)
-    encoding_name: str = Field(default_factory=lambda: LLMConstants.DEFAULT_ENCODING)
-
-    def __init__(self, max_messages: int = None, max_tokens: int = None,
-                 encoding_name: str = None, **kwargs):
-        """
-        初始化限制型聊天消息历史
-
-        Args:
-            max_messages (int): 最大消息数量限制
-            max_tokens (int): 最大Token数量限制
-            encoding_name (str): Token编码名称
-            **kwargs: 传递给父类的其他参数
-        """
-        # 设置自定义字段的值
-        if max_messages is not None:
-            kwargs['max_messages'] = max_messages
-        if max_tokens is not None:
-            kwargs['max_tokens'] = max_tokens
-        if encoding_name is not None:
-            kwargs['encoding_name'] = encoding_name
-            
-        super().__init__(**kwargs)
-
-        logger.debug(f"LimitedChatMessageHistory初始化: max_messages={self.max_messages}, "
-                    f"max_tokens={self.max_tokens}, encoding={self.encoding_name}")
-
-    def _count_tokens(self, message):
-        """
-        计算单条消息的Token数量
-        Args:
-            message: 聊天消息对象，需包含content属性
-        Returns:
-            int: 消息内容的Token数量
-        Note:
-            优先使用tiktoken进行精确计算，如未安装则使用字符数/4进行估算
-        """
-        try:
-            import tiktoken
-            encoding = tiktoken.get_encoding(self.encoding_name)
-            if hasattr(message, "content"):
-                return len(encoding.encode(message.content))
-            else:
-                return 0
-        except ImportError:
-            logger.warning("tiktoken not installed, using rough token estimate.")
-            if hasattr(message, "content"):
-                return len(message.content) // 4
-            else:
-                return 0
-        except Exception as e:
-            logger.error(f"Error counting tokens: {e}")
-            return 0
-
-    def _total_tokens(self):
-        """计算所有消息的总Token数"""
-        return sum(self._count_tokens(m) for m in self.messages)
-
-    def add_message(self, message):
-        """
-        添加消息到历史，并自动根据 max_messages 和 max_tokens 进行裁剪。
-        """
-        super().add_message(message)
-        # 1. 限制消息条数 - 保留最新的max_messages条消息
-        if len(self.messages) > self.max_messages:
-            logger.info(f"[LimitedChatMessageHistory] 消息数量超出限制({self.max_messages})，已截断。")
-            self.messages = self.messages[-self.max_messages:]
-        # 2. 限制Token总数 - 循环移除最早消息直到Token数达标
-        while self._total_tokens() > self.max_tokens and len(self.messages) > 1:
-            logger.info(f"[LimitedChatMessageHistory] Token总数超出限制({self.max_tokens})，移除最早消息。")
-            self.messages.pop(0)
-    
-    def delete_last_message(self):
-        """删除最后一条消息"""
-        if self.messages:
-            removed_message = self.messages.pop()
-            logger.info(f"[LimitedChatMessageHistory] 删除最后一条消息: {removed_message}")
-        else:
-            logger.warning("[LimitedChatMessageHistory] 无消息可删除。")
-
-class LLMProviderBase(ABC):
-    """
-    LLM Provider 抽象基类，定义统一接口。
-    """
-    @abstractmethod
-    def get_chat_model(self, **kwargs):
-        pass
-
-    @abstractmethod
-    def get_embedding_model(self, **kwargs):
-        pass
-
-class AzureLLMProvider(LLMProviderBase):
-
-    def get_chat_model(self, **kwargs):
-        return AzureChatOpenAI(
-            openai_api_key=kwargs.get("openai_api_key", LLM_CONFIG.get("api_key")),
-            openai_api_version=kwargs.get("openai_api_version", LLM_CONFIG.get("api_version")),
-            azure_endpoint=kwargs.get("azure_endpoint", LLM_CONFIG.get("azure_endpoint")),
-            deployment_name=kwargs.get("deployment_name", LLM_CONFIG.get("deployment_name")),
-            model_name=kwargs.get("model_name", LLM_CONFIG.get("model_name")),
-            temperature=kwargs.get("temperature", 0.7),
-            max_retries=kwargs.get("max_retries", 5)
-        )
-
-    def get_embedding_model(self, **kwargs):
-        return AzureOpenAIEmbeddings(
-            openai_api_key=kwargs.get("openai_api_key", LLM_EMBEDDING_CONFIG.get("api_key")),
-            openai_api_version=kwargs.get("openai_api_version", LLM_EMBEDDING_CONFIG.get("api_version")),
-            azure_endpoint=kwargs.get("azure_endpoint", LLM_EMBEDDING_CONFIG.get("azure_endpoint")),
-            deployment=kwargs.get("deployment", LLM_EMBEDDING_CONFIG.get("deployment")),
-            model=kwargs.get("model", LLM_EMBEDDING_CONFIG.get("model")),
-            max_retries=kwargs.get("max_retries", 5)
-        )
-
-class OpenAILLMProvider(LLMProviderBase):
-    def get_chat_model(self, **kwargs):
-        return ChatOpenAI(
-            model=kwargs.get("model_name", LLM_CONFIG.get("openai_model_name")),
-            openai_api_key=kwargs.get("openai_api_key", LLM_CONFIG.get("openai_api_key")),
-            base_url=kwargs.get("openai_base_url", LLM_CONFIG.get("openai_base_url")),
-            temperature=kwargs.get("temperature", 0.7),
-            max_retries=kwargs.get("max_retries", 5)
-        )
-
-    def get_embedding_model(self, **kwargs):
-        return OpenAIEmbeddings(
-            openai_api_key=kwargs.get("openai_api_key", LLM_EMBEDDING_CONFIG.get("openai_api_key")),
-            model=kwargs.get("model", LLM_EMBEDDING_CONFIG.get("openai_model", "text-embedding-ada-002")),
-            max_retries=kwargs.get("max_retries", 5)
-        )
-
-class OllamaLLMProvider(LLMProviderBase):
-    def get_chat_model(self, **kwargs):
-        return ChatOllama(
-            base_url=kwargs.get("base_url", LLM_CONFIG.get("ollama_base_url", "http://localhost:11434")),
-            model=kwargs.get("model", LLM_CONFIG.get("ollama_model_name", "llama3")),
-            temperature=kwargs.get("temperature", 0.7)
-        )
-
-    def get_embedding_model(self, **kwargs):
-        return OllamaEmbeddings(
-            base_url=kwargs.get("base_url", LLM_EMBEDDING_CONFIG.get("ollama_base_url", "http://localhost:11434")),
-            model=kwargs.get("model", LLM_EMBEDDING_CONFIG.get("ollama_model", "llama3")),
-        )
 
 class LLMBase:
     """
@@ -418,30 +262,108 @@ class LLMBase:
                 "sessions": list(self.message_histories.keys())
             }
 
-    def get_message_history(self, session_id=None):
+    def get_message_history(self, session_id=None, enable_llm_summary=True):
         """
         获取指定 session_id 的消息历史，没有则自动创建。
+
+        Args:
+            session_id: 会话ID
+            enable_llm_summary: 是否为新创建的历史启用LLM总结功能（默认True）
+
+        Returns:
+            LimitedChatMessageHistory 实例
         """
         if session_id not in self.message_histories:
             if session_id in ["chat"]:
-                self.message_histories[session_id] = LimitedChatMessageHistory()
+                # Web Chat: 使用较高阈值（5轮对话）
+                self.message_histories[session_id] = LimitedChatMessageHistory(
+                    max_messages=20,  # 兜底值：总结失败时的硬上限
+                    use_llm_summary=enable_llm_summary,
+                    llm_client=self if enable_llm_summary else None,
+                    summary_threshold=10  # 5轮对话后触发总结
+                )
             else:
-                self.message_histories[session_id] = LimitedChatMessageHistory(max_messages=5)
+                # PDF Chat 和其他: 使用较低阈值（3轮对话）
+                self.message_histories[session_id] = LimitedChatMessageHistory(
+                    max_messages=20,  # 兜底值：总结失败时的硬上限（远大于6条）
+                    use_llm_summary=enable_llm_summary,
+                    llm_client=self if enable_llm_summary else None,
+                    summary_threshold=10  # 3轮对话后触发总结
+                )
         return self.message_histories[session_id]
 
-    def add_message_to_history(self, session_id=None, message=None):
+    def add_message_to_history(self, session_id=None, message=None, enable_llm_summary=True):
         """
         向指定 session_id 的历史添加消息。
+
+        Args:
+            session_id: 会话ID
+            message: 要添加的消息
+            enable_llm_summary: 如果需要创建新历史，是否启用LLM总结功能（默认True）
         """
         if message is None:
             message = HumanMessage("")  # 或 SystemMessage("")，根据你的业务场景
         if session_id not in self.message_histories:
             logger.warning(f"Can't find {session_id}, in current history. Create a new history.")
             if session_id in ["chat"]:
-                self.message_histories[session_id] = LimitedChatMessageHistory()
+                # Web Chat: 使用较高阈值（5轮对话）
+                self.message_histories[session_id] = LimitedChatMessageHistory(
+                    max_messages=100,  # 兜底值：总结失败时的硬上限
+                    use_llm_summary=enable_llm_summary,
+                    llm_client=self if enable_llm_summary else None,
+                    summary_threshold=5  # 5轮对话后触发总结
+                )
             else:
-                self.message_histories[session_id] = LimitedChatMessageHistory(max_messages=5)
+                # PDF Chat 和其他: 使用较低阈值（3轮对话）
+                self.message_histories[session_id] = LimitedChatMessageHistory(
+                    max_messages=20,  # 兜底值：总结失败时的硬上限（远大于6条）
+                    use_llm_summary=enable_llm_summary,
+                    llm_client=self if enable_llm_summary else None,
+                    summary_threshold=3  # 3轮对话后触发总结
+                )
         self.message_histories[session_id].add_message(message)
+
+    def enable_llm_summary_for_session(self, session_id: str, summary_threshold: int = 10):
+        """
+        为指定会话启用LLM智能总结功能
+
+        Args:
+            session_id: 会话ID
+            summary_threshold: 触发总结的消息数量阈值
+
+        Returns:
+            bool: 是否成功启用
+        """
+        if session_id in self.message_histories:
+            history = self.message_histories[session_id]
+            history.use_llm_summary = True
+            history.llm_client = self
+            history.summary_threshold = summary_threshold
+            logger.info(f"✅ 会话 {session_id} 已启用 LLM 总结功能 (阈值={summary_threshold})")
+            return True
+        else:
+            logger.warning(f"❌ 会话 {session_id} 不存在，无法启用 LLM 总结")
+            return False
+
+    def disable_llm_summary_for_session(self, session_id: str):
+        """
+        为指定会话禁用LLM智能总结功能
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            bool: 是否成功禁用
+        """
+        if session_id in self.message_histories:
+            history = self.message_histories[session_id]
+            history.use_llm_summary = False
+            history.llm_client = None
+            logger.info(f"✅ 会话 {session_id} 已禁用 LLM 总结功能")
+            return True
+        else:
+            logger.warning(f"❌ 会话 {session_id} 不存在，无法禁用 LLM 总结")
+            return False
 
     def delete_last_message_in_history(self, session_id=None):
         """
@@ -616,8 +538,8 @@ class LLMBase:
         if session_id not in self.message_histories:
             logger.warning(f"会话 {session_id} 不存在，创建新会话")
             self.message_histories[session_id] = LimitedChatMessageHistory(
-                max_messages=ProcessingLimits.MAX_MESSAGES,
-                max_tokens=LLMConstants.MAX_CONTEXT_TOKENS
+                max_messages=ProcessingLimits.DEFAULT_MAX_MESSAGES,
+                max_tokens=ProcessingLimits.DEFAULT_MAX_TOKENS
             )
 
         history = self.message_histories[session_id]
