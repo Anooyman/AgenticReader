@@ -193,7 +193,7 @@ class PDFReader(ReaderBase):
             None
         """
         vector_db_path = os.path.join(f"{self.vector_db_path}/{pdf_file_path}_data_index")
-        self.vector_db_obj = VectorDBClient(vector_db_path, provider=self.provider)
+        self.vector_db_obj = VectorDBClient(vector_db_path, embedding_model=self.embedding_model)
         logger.info(f"开始处理PDF主流程: {pdf_file_path}")
         try:
             with open(f"{self.json_data_path}/{pdf_file_path}.json", 'r', encoding='utf-8') as f:
@@ -224,7 +224,7 @@ class PDFReader(ReaderBase):
             Any: 回答内容。
         """
         #response = self.call_llm_chain(
-        #    ReaderRole.REWRITE,
+        #    ReaderRole.QUERY_REWRITE,
         #    input_prompt,
         #    "chat",
         #)

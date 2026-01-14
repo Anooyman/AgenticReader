@@ -238,7 +238,7 @@ class ReaderBase(LLMBase):
             results = run_parallel_detail_summaries(
                 llm_client=self,
                 chapters=chapters_to_process,
-                answer_role=ReaderRole.ANSWER,
+                answer_role=ReaderRole.CONTEXT_QA,
                 max_concurrent=5
             )
 
@@ -294,18 +294,22 @@ class ReaderBase(LLMBase):
             makedir(self.output_path)
 
             # 定义摘要类型和文件格式
+            # 默认只生成简单摘要的MD格式，提高处理速度
+            # 如需详细摘要或PDF格式，可手动修改此配置
             summary_configs = {
                 "brief_summary": {
                     "generator": self.get_brief_summary,
                     "data": ""
                 },
-                "detail_summary": {
-                    "generator": self.get_detail_summary,
-                    "data": raw_data_dict
-                }
+                # 详细摘要已禁用（生成时间长），如需启用请取消注释
+                # "detail_summary": {
+                #     "generator": self.get_detail_summary,
+                #     "data": raw_data_dict
+                # }
             }
 
-            file_types = ["md", "pdf"]
+            # 默认只生成MD格式，如需PDF格式请添加 "pdf"
+            file_types = ["md"]
 
             # 处理每种摘要类型
             for summary_type, config in summary_configs.items():
@@ -376,8 +380,8 @@ class ReaderBase(LLMBase):
         chapter_results = run_parallel_chapter_processing(
             llm_client=self,
             agenda_data_list=agenda_data_list,
-            summary_role=ReaderRole.SUMMARY,
-            refactor_role=ReaderRole.REFACTOR,
+            summary_role=ReaderRole.CONTENT_SUMMARY,
+            refactor_role=ReaderRole.CONTENT_MERGE,
             max_concurrent=5
         )
 
@@ -410,6 +414,20 @@ class ReaderBase(LLMBase):
             )
  
             self.raw_data_dict[title] = data
+
+        # 添加文档结构信息（type="structure"）到向量数据库
+        logger.info(f"添加文档结构信息到向量数据库...")
+        structure_doc = Document(
+            page_content="Document Structure",  # 简单的占位内容
+            metadata={
+                "type": "structure",
+                "agenda_dict": self.agenda_dict,
+                "doc_name": getattr(self, 'doc_name', 'unknown'),
+                "total_chapters": len(self.agenda_dict)
+            }
+        )
+        vector_db_content_docs.append(structure_doc)
+
         logger.info(f"所有章节摘要已完成，正在构建向量数据库...")
         self._ensure_vector_db_client()
         self.vector_db_obj.build_vector_db(vector_db_content_docs)
@@ -633,7 +651,7 @@ class ReaderBase(LLMBase):
 
         try:
             input_prompt = f"这里是文章的完整内容: {raw_data}"
-            response = self.call_llm_chain(ReaderRole.COMMON, input_prompt, "common")
+            response = self.call_llm_chain(ReaderRole.METADATA_EXTRACT, input_prompt, "metadata")
 
             if not response:
                 logger.warning("LLM返回空响应")
@@ -665,7 +683,7 @@ class ReaderBase(LLMBase):
 
         try:
             input_prompt = f"这里是文章的完整内容: {raw_data}"
-            response = self.call_llm_chain(ReaderRole.AGENDA, input_prompt, "agenda")
+            response = self.call_llm_chain(ReaderRole.CHAPTER_EXTRACT, input_prompt, "chapter_extract")
 
             if not response:
                 logger.warning("LLM返回空响应")
@@ -697,7 +715,7 @@ class ReaderBase(LLMBase):
 
         try:
             input_prompt = f"这里是文章的完整内容: {raw_data}"
-            response = self.call_llm_chain(ReaderRole.SUB_AGENDA, input_prompt, "agenda")
+            response = self.call_llm_chain(ReaderRole.SUB_CHAPTER_EXTRACT, input_prompt, "sub_chapter_extract")
 
             if not response:
                 logger.warning("LLM返回空响应")
@@ -733,7 +751,7 @@ class ReaderBase(LLMBase):
 
         try:
             input_prompt = f"请总结{title}的内容，上下文如下：{content}"
-            response = self.call_llm_chain(ReaderRole.SUMMARY, input_prompt, "summary")
+            response = self.call_llm_chain(ReaderRole.CONTENT_SUMMARY, input_prompt, "content_summary")
 
             if not response:
                 logger.warning(f"章节 '{title}' 总结返回空内容")
@@ -768,7 +786,7 @@ class ReaderBase(LLMBase):
 
         try:
             input_prompt = f"请重新整理Content中的内容。\n\n Content：{content}"
-            response = self.call_llm_chain(ReaderRole.REFACTOR, input_prompt, "refactor")
+            response = self.call_llm_chain(ReaderRole.CONTENT_MERGE, input_prompt, "content_merge")
 
             if not response:
                 logger.warning(f"章节 '{title}' 重构返回空内容")
@@ -810,7 +828,7 @@ class ReaderBase(LLMBase):
             )
 
             logger.info("开始生成回答...")
-            response = self.call_llm_chain(ReaderRole.ANSWER, input_prompt, "answer")
+            response = self.call_llm_chain(ReaderRole.CONTEXT_QA, input_prompt, "context_qa")
 
             if not response:
                 logger.warning("LLM返回空回答")

@@ -22,13 +22,13 @@ import logging
 from typing import Any, Optional, List, Dict
 from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, MessagesPlaceholder
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables.history import RunnableWithMessageHistory
 
-from src.config.settings import LLM_CONFIG, LLM_EMBEDDING_CONFIG
+from src.config.settings import LLM_EMBEDDING_CONFIG
 from src.config.prompts import SYSTEM_PROMPT_CONFIG
-from src.config.constants import ProcessingLimits, LLMConstants
+from src.config.constants import SessionHistoryConfig
 
 # Import from refactored modules
 from src.core.llm.history import LimitedChatMessageHistory
@@ -235,6 +235,133 @@ class LLMBase:
         self.message_histories.clear()
         logger.info("All message histories cleared")
 
+    def clear_session_history(self, session_id: str) -> bool:
+        """
+        清空指定 session_id 的所有历史消息
+
+        Args:
+            session_id (str): 会话ID
+
+        Returns:
+            bool: 是否成功清空（如果会话不存在则返回False）
+        """
+        if session_id in self.message_histories:
+            message_count = self.message_histories[session_id].clear_all_messages()
+            logger.info(f"✅ 会话 {session_id} 的历史已清空，共删除 {message_count} 条消息")
+            return True
+        else:
+            logger.warning(f"❌ 会话 {session_id} 不存在，无法清空")
+            return False
+
+    def print_session_history(self, session_id: str, detailed: bool = False) -> str:
+        """
+        打印指定 session_id 的所有历史消息
+
+        Args:
+            session_id (str): 会话ID
+            detailed (bool): 是否显示详细信息（消息类型、token数等），默认False
+
+        Returns:
+            str: 格式化的消息历史字符串，如果会话不存在则返回错误信息
+        """
+        if session_id in self.message_histories:
+            logger.info(f"📜 打印会话 {session_id} 的历史消息")
+            return self.message_histories[session_id].print_all_messages(detailed=detailed)
+        else:
+            error_msg = f"❌ 会话 {session_id} 不存在，无法打印历史"
+            logger.warning(error_msg)
+            print(error_msg)
+            return error_msg
+
+    def copy_session_history(self, source_session_id: str, target_session_id: str,
+                            replace: bool = False) -> bool:
+        """
+        将源 session_id 的所有消息复制到目标 session_id
+
+        Args:
+            source_session_id (str): 源会话ID
+            target_session_id (str): 目标会话ID
+            replace (bool): 是否替换目标会话的现有消息（默认False，追加模式）
+
+        Returns:
+            bool: 是否成功复制
+        """
+        # 检查源会话是否存在
+        if source_session_id not in self.message_histories:
+            logger.warning(f"❌ 源会话 {source_session_id} 不存在，无法复制")
+            return False
+
+        # 获取或创建目标会话
+        target_history = self.get_message_history(target_session_id)
+
+        # 如果是替换模式，先清空目标会话
+        if replace:
+            target_history.clear_all_messages()
+            logger.info(f"🔄 替换模式：已清空目标会话 {target_session_id} 的原有消息")
+
+        # 执行复制
+        source_history = self.message_histories[source_session_id]
+        copied_count = source_history.copy_messages_to(target_history)
+
+        logger.info(f"✅ 成功将 {copied_count} 条消息从会话 {source_session_id} "
+                   f"复制到会话 {target_session_id} (replace={replace})")
+        return True
+
+    def export_session_history(self, session_id: str, include_metadata: bool = False) -> List[Dict[str, Any]]:
+        """
+        导出指定 session_id 的所有历史消息为结构化数据
+
+        Args:
+            session_id (str): 会话ID
+            include_metadata (bool): 是否包含元数据（token数、类型等），默认False
+
+        Returns:
+            List[Dict[str, Any]]: 消息列表，每条消息为一个字典
+                基础字段：
+                    - index (int): 消息索引（从1开始）
+                    - role (str): 角色名称 ("user", "assistant", "system", "unknown")
+                    - content (str): 消息内容
+                如果 include_metadata=True，还包括：
+                    - type (str): 消息类型
+                    - token_count (int): Token数量
+                    - tool_calls (list): 工具调用信息（如果存在）
+                    - tool_call_id (str): 响应的工具调用ID（如果存在）
+                    - additional_kwargs (dict): 额外参数（如果存在）
+
+        Example:
+            >>> llm_client.export_session_history("session_1")
+            [
+                {"index": 1, "role": "user", "content": "你好"},
+                {"index": 2, "role": "assistant", "content": "你好！有什么可以帮助你的？"}
+            ]
+
+            >>> llm_client.export_session_history("session_1", include_metadata=True)
+            [
+                {
+                    "index": 1,
+                    "role": "user",
+                    "content": "你好",
+                    "type": "HumanMessage",
+                    "token_count": 2
+                },
+                ...
+            ]
+
+        Note:
+            - 如果会话不存在，返回空列表
+            - 返回的数据可以直接序列化为JSON
+            - 保留了所有角色信息和对话顺序
+        """
+        if session_id not in self.message_histories:
+            logger.warning(f"❌ 会话 {session_id} 不存在，无法导出历史")
+            return []
+
+        logger.info(f"📤 导出会话 {session_id} 的历史消息 (include_metadata={include_metadata})")
+        exported_data = self.message_histories[session_id].export_messages(include_metadata=include_metadata)
+
+        logger.info(f"✅ 成功导出 {len(exported_data)} 条消息")
+        return exported_data
+
     def get_session_info(self, session_id: str = None) -> Dict[str, Any]:
         """
         获取会话信息。
@@ -274,22 +401,22 @@ class LLMBase:
             LimitedChatMessageHistory 实例
         """
         if session_id not in self.message_histories:
-            if session_id in ["chat"]:
-                # Web Chat: 使用较高阈值（5轮对话）
-                self.message_histories[session_id] = LimitedChatMessageHistory(
-                    max_messages=20,  # 兜底值：总结失败时的硬上限
-                    use_llm_summary=enable_llm_summary,
-                    llm_client=self if enable_llm_summary else None,
-                    summary_threshold=10  # 5轮对话后触发总结
-                )
-            else:
-                # PDF Chat 和其他: 使用较低阈值（3轮对话）
-                self.message_histories[session_id] = LimitedChatMessageHistory(
-                    max_messages=20,  # 兜底值：总结失败时的硬上限（远大于6条）
-                    use_llm_summary=enable_llm_summary,
-                    llm_client=self if enable_llm_summary else None,
-                    summary_threshold=10  # 3轮对话后触发总结
-                )
+            # 从统一配置中获取参数
+            config = SessionHistoryConfig.get_config(session_id)
+
+            self.message_histories[session_id] = LimitedChatMessageHistory(
+                max_messages=config["max_messages"],
+                max_tokens=config["max_tokens"],
+                use_llm_summary=enable_llm_summary and config["use_llm_summary"],
+                llm_client=self if enable_llm_summary and config["use_llm_summary"] else None,
+                summary_threshold=config["summary_threshold"]
+            )
+
+            logger.debug(f"创建新的消息历史 - session_id: {session_id}, "
+                        f"max_messages: {config['max_messages']}, "
+                        f"max_tokens: {config['max_tokens']}, "
+                        f"summary_threshold: {config['summary_threshold']}")
+
         return self.message_histories[session_id]
 
     def add_message_to_history(self, session_id=None, message=None, enable_llm_summary=True):
@@ -303,37 +430,43 @@ class LLMBase:
         """
         if message is None:
             message = HumanMessage("")  # 或 SystemMessage("")，根据你的业务场景
+
         if session_id not in self.message_histories:
             logger.warning(f"Can't find {session_id}, in current history. Create a new history.")
-            if session_id in ["chat"]:
-                # Web Chat: 使用较高阈值（5轮对话）
-                self.message_histories[session_id] = LimitedChatMessageHistory(
-                    max_messages=100,  # 兜底值：总结失败时的硬上限
-                    use_llm_summary=enable_llm_summary,
-                    llm_client=self if enable_llm_summary else None,
-                    summary_threshold=5  # 5轮对话后触发总结
-                )
-            else:
-                # PDF Chat 和其他: 使用较低阈值（3轮对话）
-                self.message_histories[session_id] = LimitedChatMessageHistory(
-                    max_messages=20,  # 兜底值：总结失败时的硬上限（远大于6条）
-                    use_llm_summary=enable_llm_summary,
-                    llm_client=self if enable_llm_summary else None,
-                    summary_threshold=3  # 3轮对话后触发总结
-                )
+
+            # 从统一配置中获取参数
+            config = SessionHistoryConfig.get_config(session_id)
+
+            self.message_histories[session_id] = LimitedChatMessageHistory(
+                max_messages=config["max_messages"],
+                max_tokens=config["max_tokens"],
+                use_llm_summary=enable_llm_summary and config["use_llm_summary"],
+                llm_client=self if enable_llm_summary and config["use_llm_summary"] else None,
+                summary_threshold=config["summary_threshold"]
+            )
+
+            logger.debug(f"创建新的消息历史 - session_id: {session_id}, "
+                        f"max_messages: {config['max_messages']}, "
+                        f"max_tokens: {config['max_tokens']}, "
+                        f"summary_threshold: {config['summary_threshold']}")
+
         self.message_histories[session_id].add_message(message)
 
-    def enable_llm_summary_for_session(self, session_id: str, summary_threshold: int = 10):
+    def enable_llm_summary_for_session(self, session_id: str, summary_threshold: int = None):
         """
         为指定会话启用LLM智能总结功能
 
         Args:
             session_id: 会话ID
-            summary_threshold: 触发总结的消息数量阈值
+            summary_threshold: 触发总结的消息数量阈值（默认None，使用配置中的值）
 
         Returns:
             bool: 是否成功启用
         """
+        # 如果未指定阈值，从配置中获取
+        if summary_threshold is None:
+            config = SessionHistoryConfig.get_config(session_id)
+            summary_threshold = config["summary_threshold"]
         if session_id in self.message_histories:
             history = self.message_histories[session_id]
             history.use_llm_summary = True
@@ -537,10 +670,22 @@ class LLMBase:
 
         if session_id not in self.message_histories:
             logger.warning(f"会话 {session_id} 不存在，创建新会话")
+
+            # 从统一配置中获取参数
+            config = SessionHistoryConfig.get_config(session_id)
+
             self.message_histories[session_id] = LimitedChatMessageHistory(
-                max_messages=ProcessingLimits.DEFAULT_MAX_MESSAGES,
-                max_tokens=ProcessingLimits.DEFAULT_MAX_TOKENS
+                max_messages=config["max_messages"],
+                max_tokens=config["max_tokens"],
+                use_llm_summary=config["use_llm_summary"],
+                llm_client=self if config["use_llm_summary"] else None,
+                summary_threshold=config["summary_threshold"]
             )
+
+            logger.debug(f"创建新的消息历史 - session_id: {session_id}, "
+                        f"max_messages: {config['max_messages']}, "
+                        f"max_tokens: {config['max_tokens']}, "
+                        f"summary_threshold: {config['summary_threshold']}")
 
         history = self.message_histories[session_id]
         logger.info(f"📝 [BEFORE ADD] 会话当前有 {len(history.messages)} 条消息")

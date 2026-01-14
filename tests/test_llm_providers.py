@@ -142,7 +142,7 @@ def test_provider_basic_call():
             print(f"👤 用户: {test_message}")
 
             response = llm_client.call_llm_chain(
-                role=ReaderRole.CHAT,
+                role=ReaderRole.CHAPTER_MATCHER,
                 input_prompt=test_message,
                 session_id=f"test_{provider}"
             )

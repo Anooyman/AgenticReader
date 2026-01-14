@@ -103,7 +103,7 @@ class WebReader(ReaderBase):
         llm_client = LLMBase(provider=self.provider)
         
         # 使用配置中的 Web MCP system prompt
-        web_system_prompt = READER_PROMPTS.get(ReaderRole.WEB_MCP)
+        web_system_prompt = READER_PROMPTS.get(ReaderRole.WEB_CONTENT_FETCH)
         
         mcp_client = MCPClient(llm_client, mcp_config, system_prompt=web_system_prompt)
         await mcp_client.initialize()
@@ -210,7 +210,7 @@ class WebReader(ReaderBase):
                 # 构建摘要链
                 summary_chain = self.build_chain(
                     self.chat_model,
-                    READER_PROMPTS.get(ReaderRole.SUMMARY)
+                    READER_PROMPTS.get(ReaderRole.CONTENT_SUMMARY)
                 )
                 # 构建摘要提示词
                 query = f"请分析总结当前web页面的内容，按照文章本身的写作顺序给出详细的总结：{content_str}。返回中文"
@@ -232,7 +232,7 @@ class WebReader(ReaderBase):
         else:
             # 内容较大，分块存入向量数据库
             vector_db_path = os.path.join(self.vector_db_path, f"{url_name}{ReaderConstants.VECTOR_DB_SUFFIX}")
-            self.vector_db_obj = VectorDBClient(vector_db_path, provider=self.provider)
+            self.vector_db_obj = VectorDBClient(vector_db_path, embedding_model=self.embedding_model)
 
             if self.vector_db_obj.vector_db is not None:
                 # 向量数据库已在初始化时自动加载

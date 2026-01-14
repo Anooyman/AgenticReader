@@ -5,22 +5,21 @@ This module contains all prompts used by document readers (PDF, Web)
 for content extraction, summarization, and question answering.
 """
 
-# Reader role constants (for backward compatibility)
+# Reader role constants
 class ReaderRole:
    IMAGE_EXTRACT = "image_extract"
-   COMMON = "pdf_common"
-   AGENDA = "pdf_agenda"
-   SUB_AGENDA = "pdf_sub_agenda"
-   SUMMARY = "pdf_summary"
-   ANSWER = "pdf_answer"
-   CHAT = "pdf_chat"
-   REFACTOR = "refactor"
-   RETRIEVAL = "retrieval"
-   GETTITILE = "gettitle"
-   REWRITE = "rewrite"
-   RETRIEVAL_EVALUATOR = "retrieval_evaluator"
-   CONTEXT_SUMMARIZER = "context_summarizer"
-   WEB_MCP = "web_mcp"
+   METADATA_EXTRACT = "metadata_extract"  # 提取文档元数据(作者、日期等)
+   CHAPTER_EXTRACT = "chapter_extract"  # 提取章节目录结构
+   SUB_CHAPTER_EXTRACT = "sub_chapter_extract"  # 提取子章节目录
+   CONTENT_SUMMARY = "content_summary"  # 内容总结
+   CONTEXT_QA = "context_qa"  # 基于上下文的问答
+   CHAPTER_MATCHER = "chapter_matcher"  # 匹配相关章节标题
+   CONTENT_MERGE = "content_merge"  # 内容整合
+   RETRIEVAL = "retrieval"  # 智能检索
+   QUERY_REWRITE = "query_rewrite"  # 查询重写
+   RETRIEVAL_EVALUATOR = "retrieval_evaluator"  # 检索评估
+   CONTEXT_SUMMARIZER = "context_summarizer"  # 上下文总结
+   WEB_CONTENT_FETCH = "web_content_fetch"  # 网页内容获取
 
 READER_PROMPTS = {
    ReaderRole.IMAGE_EXTRACT: """Analyze the content of an image, extract relevant information, and organize it according to human reading habits into markdown format based on the data type (e.g., text, table, image, code, formulas, flowcharts).
@@ -124,7 +123,7 @@ E = mc^2
 
 """,
 
-   ReaderRole.COMMON: """提取文章的基本信息(如作者、单位、发布日期等)
+   ReaderRole.METADATA_EXTRACT: """提取文章的基本信息(如作者、单位、发布日期等)
 
 # 任务说明
 
@@ -139,7 +138,7 @@ E = mc^2
 - 若某些基本信息缺失,请在 JSON 中用 `null`标明,例如 `"author": null`。
 """,
 
-   ReaderRole.AGENDA: """解析文章内容,提取其目录结构,并返回一个标准的 JSON 风格列表,其中包含章节标题及对应的起始页码。
+   ReaderRole.CHAPTER_EXTRACT: """解析文章内容,提取其目录结构,并返回一个标准的 JSON 风格列表,其中包含章节标题及对应的起始页码。
 
 # 详细任务说明
 1. **内容扫描**:
@@ -169,7 +168,7 @@ E = mc^2
 - **一致性**:输出结构和格式必须始终符合上述 JSON 示范样式。
 """,
 
-   ReaderRole.SUB_AGENDA: """解析文章内容,提取其目录结构,并返回一个标准的 JSON 风格列表,其中包含章节标题及对应的起始页码。
+   ReaderRole.SUB_CHAPTER_EXTRACT: """解析文章内容,提取其目录结构,并返回一个标准的 JSON 风格列表,其中包含章节标题及对应的起始页码。
 
 # 详细任务说明
 1. **内容扫描**:
@@ -200,7 +199,7 @@ E = mc^2
 - **一致性**:输出结构和格式必须始终符合上述 JSON 示范样式。
 """,
 
-   ReaderRole.SUMMARY: """对输入的文本内容进行总结和信息提取,确保尽可能保留关键的原始信息和结构。
+   ReaderRole.CONTENT_SUMMARY: """对输入的文本内容进行总结和信息提取,确保尽可能保留关键的原始信息和结构。
 
 **关键要求**:
 1. 确保总结清晰且忠实于原文内容,无删减主要信息。
@@ -230,7 +229,7 @@ E = mc^2
 - [EXAMPLE PLACEHOLDER STRUCTURE ,...]
 """,
 
-   ReaderRole.ANSWER: """根据提供的上下文信息(Context data),尽可能精准地回答客户问题。如果信息不足,则明确告知客户无法提供更多细节,而不要编造或假设答案。
+   ReaderRole.CONTEXT_QA: """根据提供的上下文信息(Context data),尽可能精准地回答客户问题。如果信息不足,则明确告知客户无法提供更多细节,而不要编造或假设答案。
 
 # 任务步骤
 
@@ -250,7 +249,7 @@ E = mc^2
 - **避免偏离背景**: 严格以 Context data 为界限,避免使用外部推测。
 """,
 
-   ReaderRole.CHAT: """分析用户输入及历史对话内容,根据文章章节目录确定需要检索的章节,并返回章节的标题。
+   ReaderRole.CHAPTER_MATCHER: """分析用户输入及历史对话内容,根据文章章节目录确定需要检索的章节,并返回章节的标题。
 结合用户输入、历史对话内容和文章章节目录,匹配最相关的章节并输出章节名字。
 
 # 文章章节目录
@@ -277,7 +276,7 @@ E = mc^2
 - 不要和客户直接对话。
 """,
 
-   ReaderRole.REFACTOR: """将 context 中的内容按照已有的分类进行整理,整合成一份信息后返回。
+   ReaderRole.CONTENT_MERGE: """将 context 中的内容按照已有的分类进行整理,整合成一份信息后返回。
 
 # Steps
 
@@ -315,34 +314,8 @@ E = mc^2
 
 """,
 
-   ReaderRole.GETTITILE: """分析用户输入及历史对话内容,根据文章章节目录确定需要检索的章节,并返回章节的标题。
-结合用户输入、历史对话内容和文章章节目录,匹配最相关的章节并输出章节名字。
 
-# 文章章节目录
-{agenda_dict}
-
-# Steps
-
-1. **提取核心需求**
-   从用户输入的语句中提取关键需求或关键点。分析输入是否需要内容检索。
-
-2. **整合上下文**
-   根据用户输入和历史对话,综合当前上下文,明确用户意图。确保准确捕捉可能隐含的需求。
-
-3. **匹配章节标题**
-   在提供的章节目录中匹配最可能相关的章节标题。匹配逻辑可以根据用户需求。只能返回文章章节目录中的章节标题,不允许生成新的标题。
-
-4. **生成 JSON 结果**
-   - 如果存在匹配的章节,返回格式化的 JSON 对象。以 title 作为 key,value 是需要检索的章节名的 list。
-   - 如果未找到匹配的章节,则返回上一轮的结果。
-
-# Notes
-- 匹配的章节标题必须严格使用原始命名,不允许直接推断或生成非标准标题。
-- 如果客户提问的内容与文章章节目录中某个章节相关,则需要进行检索,如果提问和任意一个章节都无关则判断为不需要检索。
-- 不要和客户直接对话。
-""",
-
-   ReaderRole.REWRITE: """检查客户提问是否清晰明确，代词未出现且内容完整。如果客户提问不符合条件，结合历史对话记录对其进行重写，并返回一个清晰、明确的结果。如果没有历史对话记录，则直接返回客户的输入。
+   ReaderRole.QUERY_REWRITE: """检查客户提问是否清晰明确，代词未出现且内容完整。如果客户提问不符合条件，结合历史对话记录对其进行重写，并返回一个清晰、明确的结果。如果没有历史对话记录，则直接返回客户的输入。
 
 # 步骤
 
@@ -454,7 +427,7 @@ E = mc^2
 {query}
 """,
 
-   ReaderRole.WEB_MCP: """你是一个网页内容获取助手。你有两个工具可以使用：
+   ReaderRole.WEB_CONTENT_FETCH: """你是一个网页内容获取助手。你有两个工具可以使用：
 
 1. **search** - 在 DuckDuckGo 上搜索信息
    - 参数: query (搜索关键词), max_results (结果数量，默认10)

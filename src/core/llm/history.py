@@ -16,7 +16,7 @@ from pydantic import Field
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.chat_history import InMemoryChatMessageHistory
 
-from src.config.constants import ProcessingLimits, LLMConstants
+from src.config.constants import LLMConstants
 
 logger = logging.getLogger(__name__)
 
@@ -32,25 +32,28 @@ class LimitedChatMessageHistory(InMemoryChatMessageHistory):
     - LLM总结：支持使用LLM对历史消息进行智能总结，而非简单截断
 
     Attributes:
-        max_messages (int): 最大消息数量限制，默认从ProcessingLimits.DEFAULT_MAX_MESSAGES获取
-        max_tokens (int): 最大Token数量限制，默认从ProcessingLimits.DEFAULT_MAX_TOKENS获取
+        max_messages (int): 最大消息数量限制，默认20（实际使用时由SessionHistoryConfig提供）
+        max_tokens (int): 最大Token数量限制，默认65536（实际使用时由SessionHistoryConfig提供）
         encoding_name (str): Token编码名称，默认从LLMConstants.DEFAULT_ENCODING获取
         use_llm_summary (bool): 是否使用LLM进行历史总结，默认False
         llm_client (Any): LLM客户端实例，用于执行总结任务
-        summary_threshold (int): 触发总结的消息数量阈值
+        summary_threshold (int): 触发总结的消息数量阈值，默认3（实际使用时由SessionHistoryConfig提供）
+
+    Note:
+        以下默认值仅作为备用值，实际使用时应从 SessionHistoryConfig 获取配置。
     """
 
     # 使用Pydantic字段定义自定义属性
-    max_messages: int = Field(default_factory=lambda: ProcessingLimits.DEFAULT_MAX_MESSAGES)
-    max_tokens: int = Field(default_factory=lambda: ProcessingLimits.DEFAULT_MAX_TOKENS)
+    max_messages: int = Field(default=20)      # 默认值，实际由 SessionHistoryConfig 提供
+    max_tokens: int = Field(default=65536)     # 默认值，实际由 SessionHistoryConfig 提供
     encoding_name: str = Field(default_factory=lambda: LLMConstants.DEFAULT_ENCODING)
     use_llm_summary: bool = Field(default=False)
     llm_client: Optional[Any] = Field(default=None)
-    summary_threshold: int = Field(default=10)
+    summary_threshold: int = Field(default=3)  # 默认值，实际由 SessionHistoryConfig 提供
 
     def __init__(self, max_messages: int = None, max_tokens: int = None,
                  encoding_name: str = None, use_llm_summary: bool = False,
-                 llm_client: Any = None, summary_threshold: int = 10, **kwargs):
+                 llm_client: Any = None, summary_threshold: int = 3, **kwargs):
         """
         初始化限制型聊天消息历史
 
@@ -160,8 +163,16 @@ class LimitedChatMessageHistory(InMemoryChatMessageHistory):
         # 计算当前对话轮数（向下取整，一轮 = 2条消息）
         conversation_rounds = len(self.messages) // 2
 
+        # 🔥 添加调试日志，方便追踪总结触发情况
+        logger.info(f"[LLM Summary Check] 当前: {len(self.messages)}条消息 = {conversation_rounds}轮对话, "
+                    f"阈值: {self.summary_threshold}轮, "
+                    f"use_llm_summary: {self.use_llm_summary}, "
+                    f"llm_client: {self.llm_client is not None}, "
+                    f"是否触发总结: {conversation_rounds > self.summary_threshold}")
+
         # 检查是否需要总结（基于对话轮数）
         if conversation_rounds <= self.summary_threshold:
+            logger.debug(f"[LLM Summary] 未达到总结阈值，跳过总结")
             return
 
         # 检查LLM客户端是否可用
@@ -298,3 +309,241 @@ class LimitedChatMessageHistory(InMemoryChatMessageHistory):
             logger.info(f"[LimitedChatMessageHistory] 删除最后一条消息: {removed_message}")
         else:
             logger.warning("[LimitedChatMessageHistory] 无消息可删除。")
+
+    def clear_all_messages(self):
+        """
+        清空当前会话的所有历史消息
+
+        该方法会移除所有消息，将消息列表重置为空。
+        适用于需要完全重置对话历史的场景。
+        """
+        message_count = len(self.messages)
+        self.messages.clear()
+        logger.info(f"[LimitedChatMessageHistory] 已清空所有消息，共删除 {message_count} 条消息")
+        return message_count
+
+    def print_all_messages(self, detailed: bool = False) -> str:
+        """
+        打印当前会话的所有历史消息（内部使用 export_messages）
+
+        Args:
+            detailed (bool): 是否显示详细信息（消息类型、token数等），默认False
+
+        Returns:
+            str: 格式化的消息历史字符串
+        """
+        # 1. 使用 export_messages 获取结构化数据
+        messages = self.export_messages(include_metadata=detailed)
+
+        if not messages:
+            output = "[LimitedChatMessageHistory] 当前会话无历史消息"
+            logger.info(output)
+            print(output)
+            return output
+
+        # 2. 格式化输出
+        output_lines = []
+        output_lines.append(f"\n{'='*60}")
+        output_lines.append(f"会话历史消息 (共 {len(messages)} 条)")
+        output_lines.append(f"{'='*60}\n")
+
+        # 角色中文映射
+        role_map = {
+            "user": "用户",
+            "assistant": "助手",
+            "system": "系统",
+            "unknown": "未知"
+        }
+
+        for msg in messages:
+            role_cn = role_map.get(msg["role"], msg["role"])
+            content = msg["content"]
+
+            # 基础信息
+            output_lines.append(f"[{msg['index']}] {role_cn}:")
+
+            # 详细信息
+            if detailed:
+                output_lines.append(f"    类型: {msg.get('type', 'N/A')}")
+                output_lines.append(f"    Token数: {msg.get('token_count', 0)}")
+
+                # 工具调用信息
+                if "tool_calls" in msg:
+                    output_lines.append(f"    工具调用: {len(msg['tool_calls'])} 个")
+                    for tc_idx, tc in enumerate(msg["tool_calls"], 1):
+                        tc_id = tc.get('id', 'unknown')
+                        tc_name = tc.get('name', 'unknown')
+                        output_lines.append(f"      [{tc_idx}] {tc_name} (id: {tc_id})")
+
+                if "tool_call_id" in msg:
+                    output_lines.append(f"    响应工具调用ID: {msg['tool_call_id']}")
+
+            # 内容（可能需要截断）
+            if len(content) > 200 and not detailed:
+                content_display = content[:200] + "..."
+            else:
+                content_display = content
+
+            output_lines.append(f"    内容: {content_display}")
+            output_lines.append("")
+
+        # 汇总信息
+        if detailed:
+            total_tokens = self._total_tokens()
+            output_lines.append(f"{'='*60}")
+            output_lines.append(f"汇总信息:")
+            output_lines.append(f"  总消息数: {len(messages)}")
+            output_lines.append(f"  总Token数: {total_tokens}")
+            output_lines.append(f"  最大消息数限制: {self.max_messages}")
+            output_lines.append(f"  最大Token数限制: {self.max_tokens}")
+            output_lines.append(f"  使用LLM总结: {self.use_llm_summary}")
+            output_lines.append(f"  总结阈值: {self.summary_threshold} 轮")
+            output_lines.append(f"{'='*60}\n")
+
+        output = "\n".join(output_lines)
+        print(output)
+        logger.info(f"[LimitedChatMessageHistory] 已打印 {len(messages)} 条消息")
+        return output
+
+    def copy_messages_to(self, target_history: 'LimitedChatMessageHistory') -> int:
+        """
+        将当前会话的所有消息复制到目标会话
+
+        Args:
+            target_history (LimitedChatMessageHistory): 目标历史记录实例
+
+        Returns:
+            int: 复制的消息数量
+
+        Note:
+            - 这是追加操作，不会清空目标会话的原有消息
+            - 如果需要完全替换目标会话的历史，请先调用 target_history.clear_all_messages()
+        """
+        if not isinstance(target_history, LimitedChatMessageHistory):
+            logger.error(f"[LimitedChatMessageHistory] 目标必须是 LimitedChatMessageHistory 实例，"
+                        f"当前类型: {type(target_history).__name__}")
+            raise TypeError("target_history must be a LimitedChatMessageHistory instance")
+
+        if not self.messages:
+            logger.warning("[LimitedChatMessageHistory] 源会话无消息可复制")
+            return 0
+
+        copied_count = 0
+        for msg in self.messages:
+            # 复制消息（创建新的消息对象，避免引用问题）
+            if isinstance(msg, HumanMessage):
+                new_msg = HumanMessage(content=msg.content)
+            elif isinstance(msg, AIMessage):
+                # AIMessage 可能包含 tool_calls 等额外信息
+                new_msg = AIMessage(
+                    content=msg.content,
+                    additional_kwargs=getattr(msg, 'additional_kwargs', {})
+                )
+                # 复制 tool_calls 如果存在
+                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    new_msg.tool_calls = msg.tool_calls
+            elif isinstance(msg, SystemMessage):
+                new_msg = SystemMessage(content=msg.content)
+            else:
+                # 对于其他类型的消息，尝试复制
+                logger.warning(f"[LimitedChatMessageHistory] 遇到未知消息类型: {type(msg).__name__}，尝试复制")
+                new_msg = msg
+
+            target_history.add_message(new_msg)
+            copied_count += 1
+
+        logger.info(f"[LimitedChatMessageHistory] 已复制 {copied_count} 条消息到目标会话")
+        return copied_count
+
+    def export_messages(self, include_metadata: bool = False) -> List[dict]:
+        """
+        导出当前会话的所有历史消息为结构化数据
+
+        Args:
+            include_metadata (bool): 是否包含元数据（token数、类型等），默认False
+
+        Returns:
+            List[dict]: 消息列表，每条消息为一个字典，包含以下字段：
+                - index (int): 消息索引（从1开始）
+                - role (str): 角色名称 ("user", "assistant", "system", "unknown")
+                - content (str): 消息内容
+                - type (str): 消息类型（如果 include_metadata=True）
+                - token_count (int): Token数量（如果 include_metadata=True）
+                - tool_calls (list): 工具调用信息（如果存在且 include_metadata=True）
+                - tool_call_id (str): 响应的工具调用ID（如果存在且 include_metadata=True）
+                - additional_kwargs (dict): 额外参数（如果存在且 include_metadata=True）
+
+        Example:
+            >>> history.export_messages()
+            [
+                {"index": 1, "role": "user", "content": "你好"},
+                {"index": 2, "role": "assistant", "content": "你好！有什么可以帮助你的？"}
+            ]
+
+            >>> history.export_messages(include_metadata=True)
+            [
+                {
+                    "index": 1,
+                    "role": "user",
+                    "content": "你好",
+                    "type": "HumanMessage",
+                    "token_count": 2
+                },
+                ...
+            ]
+        """
+        if not self.messages:
+            logger.info("[LimitedChatMessageHistory] 当前会话无消息可导出")
+            return []
+
+        exported_messages = []
+
+        for idx, msg in enumerate(self.messages, 1):
+            # 确定角色
+            if isinstance(msg, HumanMessage):
+                role = "user"
+            elif isinstance(msg, AIMessage):
+                role = "assistant"
+            elif isinstance(msg, SystemMessage):
+                role = "system"
+            else:
+                role = "unknown"
+
+            # 获取消息内容
+            content = getattr(msg, 'content', '')
+
+            # 基础消息数据
+            message_data = {
+                "index": idx,
+                "role": role,
+                "content": content
+            }
+
+            # 添加元数据（如果需要）
+            if include_metadata:
+                message_data["type"] = type(msg).__name__
+                message_data["token_count"] = self._count_tokens(msg)
+
+                # 工具调用信息
+                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    message_data["tool_calls"] = []
+                    for tc in msg.tool_calls:
+                        tool_call_info = {
+                            "id": tc.get('id') if isinstance(tc, dict) else getattr(tc, 'id', None),
+                            "name": tc.get('name') if isinstance(tc, dict) else getattr(tc, 'name', None),
+                            "args": tc.get('args') if isinstance(tc, dict) else getattr(tc, 'args', None)
+                        }
+                        message_data["tool_calls"].append(tool_call_info)
+
+                # 响应工具调用ID
+                if hasattr(msg, 'tool_call_id') and msg.tool_call_id:
+                    message_data["tool_call_id"] = msg.tool_call_id
+
+                # 额外参数
+                if hasattr(msg, 'additional_kwargs') and msg.additional_kwargs:
+                    message_data["additional_kwargs"] = msg.additional_kwargs
+
+            exported_messages.append(message_data)
+
+        logger.info(f"[LimitedChatMessageHistory] 已导出 {len(exported_messages)} 条消息")
+        return exported_messages

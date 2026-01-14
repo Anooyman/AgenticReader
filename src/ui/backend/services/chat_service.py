@@ -3,7 +3,6 @@
 import sys
 from pathlib import Path
 from typing import Optional, Any
-from langchain_community.chat_message_histories import ChatMessageHistory
 
 # 添加项目根路径到sys.path
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -130,16 +129,15 @@ class ChatService:
                 # 🔥 修复：使用正确的后缀 _data_index（与 ReaderConstants.VECTOR_DB_SUFFIX 一致）
                 vector_db_path = settings.data_dir / "vector_db" / f"{doc_name}_data_index"
 
-                # 🔥 初始化聊天历史（无论大小文件都需要）
-                if not hasattr(self.web_reader, 'message_history') or self.web_reader.message_history is None:
-                    self.web_reader.message_history = {}
-                if "chat" not in self.web_reader.message_history:
-                    self.web_reader.message_history["chat"] = ChatMessageHistory()
+                # 注意：聊天历史由 LLMBase.message_histories 管理，无需在此手动初始化
 
                 if vector_db_path.exists():
                     # 大文件模式：使用向量数据库
                     from src.core.vector_db.vector_db_client import VectorDBClient
-                    self.web_reader.vector_db_obj = VectorDBClient(str(vector_db_path), provider=provider)
+                    self.web_reader.vector_db_obj = VectorDBClient(
+                        str(vector_db_path),
+                        embedding_model=self.web_reader.embedding_model
+                    )
 
                     # 加载向量数据库数据
                     self.web_reader.get_data_from_vector_db()

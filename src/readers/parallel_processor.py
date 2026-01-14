@@ -35,8 +35,8 @@ class ChapterProcessor:
     async def process_chapters_summary_and_refactor(
         self,
         agenda_data_list: List[Dict[str, Any]],
-        summary_role: Any = ReaderRole.SUMMARY,
-        refactor_role: Any = ReaderRole.REFACTOR
+        summary_role: Any = ReaderRole.CONTENT_SUMMARY,
+        refactor_role: Any = ReaderRole.CONTENT_MERGE
     ) -> List[Tuple[str, str, str, Any, Any]]:
         """
         并行处理章节的总结和重构
@@ -83,7 +83,7 @@ class ChapterProcessor:
     async def process_detail_summaries(
         self,
         chapters: List[Dict[str, Any]],
-        answer_role: Any = ReaderRole.ANSWER
+        answer_role: Any = ReaderRole.CONTEXT_QA
     ) -> List[Tuple[str, str]]:
         """
         并行生成详细摘要
@@ -129,8 +129,8 @@ class ChapterProcessor:
 def run_parallel_chapter_processing(
     llm_client: Any,
     agenda_data_list: List[Dict[str, Any]],
-    summary_role: Any = ReaderRole.SUMMARY,
-    refactor_role: Any = ReaderRole.REFACTOR,
+    summary_role: Any = ReaderRole.CONTENT_SUMMARY,
+    refactor_role: Any = ReaderRole.CONTENT_MERGE,
     max_concurrent: int = 5
 ) -> List[Tuple[str, str, str, Any, Any]]:
     """
@@ -172,7 +172,7 @@ def run_parallel_chapter_processing(
 def run_parallel_detail_summaries(
     llm_client: Any,
     chapters: List[Dict[str, Any]],
-    answer_role: Any = ReaderRole.ANSWER,
+    answer_role: Any = ReaderRole.CONTEXT_QA,
     max_concurrent: int = 5
 ) -> List[Tuple[str, str]]:
     """

@@ -387,9 +387,9 @@ class RetrivalAgent(LLMBase):
 
         try:
             response = self.call_llm_chain(
-                ReaderRole.GETTITILE,
+                ReaderRole.CHAPTER_MATCHER,
                 query,
-                "chat",
+                "chapter_matcher",
                 system_format_dict={
                     "agenda_dict": self.agenda_dict
                 }
@@ -627,7 +627,7 @@ class RetrivalAgent(LLMBase):
             summarized = self.call_llm_chain(
                 ReaderRole.CONTEXT_SUMMARIZER,
                 "",
-                "context_summarization",
+                "context_summarizer",
                 system_format_dict={
                     "context": total_context,
                     "query": query
@@ -668,7 +668,7 @@ class RetrivalAgent(LLMBase):
             response = self.call_llm_chain(
                 ReaderRole.RETRIEVAL_EVALUATOR,
                 "",
-                "evaluation",
+                "retrieval_evaluator",
                 system_format_dict={
                     "query": query,
                     "retrieved_summary": retrieved_context

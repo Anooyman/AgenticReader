@@ -532,8 +532,8 @@ async def rebuild_document_data(
                 processor = ChapterProcessor(pdf_reader, max_concurrent=5)
                 results = await processor.process_chapters_summary_and_refactor(
                     agenda_data_list,
-                    ReaderRole.SUMMARY,
-                    ReaderRole.REFACTOR
+                    ReaderRole.CONTENT_SUMMARY,
+                    ReaderRole.CONTENT_MERGE
                 )
                 
                 # 处理结果
@@ -570,10 +570,13 @@ async def rebuild_document_data(
                 # 保存总摘要到PDF阅读器
                 pdf_reader.total_summary = total_summary
                 
-                # 初始化向量数据库客户端（修正参数名）
+                # 初始化向量数据库客户端
                 from src.core.vector_db.vector_db_client import VectorDBClient
                 vector_db_path = str(settings.data_dir / "vector_db" / f"{doc_name}_data_index")
-                vector_db_client = VectorDBClient(db_path=vector_db_path, provider=current_provider)
+                vector_db_client = VectorDBClient(
+                    db_path=vector_db_path,
+                    embedding_model=pdf_reader.embedding_model
+                )
                 
                 # 重建向量数据库
                 logger.info(f"  - 开始构建向量数据库，共 {len(vector_db_content_docs)} 个文档")
@@ -622,8 +625,8 @@ async def rebuild_document_data(
                     processor = ChapterProcessor(pdf_reader, max_concurrent=5)
                     results = await processor.process_chapters_summary_and_refactor(
                         agenda_data_list,
-                        ReaderRole.SUMMARY,
-                        ReaderRole.REFACTOR
+                        ReaderRole.CONTENT_SUMMARY,
+                        ReaderRole.CONTENT_MERGE
                     )
                     
                     total_summary = {title: summary for title, summary, _, _, _ in results}

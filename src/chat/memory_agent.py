@@ -187,7 +187,10 @@ class VectorAgent(LLMBase):
             raise ValueError("memory_config中必须包含db_path")
         
         logger.debug(f"向量数据库路径: {db_path}")
-        self.vector_client_obj = VectorDBClient(db_path) 
+        self.vector_client_obj = VectorDBClient(
+            db_path=db_path,
+            embedding_model=self.embedding_model
+        ) 
         
         # 加载历史记忆信息
         self.config = memory_config
