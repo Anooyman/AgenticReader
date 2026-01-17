@@ -122,7 +122,6 @@
                 <!-- 标签页导航 -->
                 <div class="tab-navigation">
                     <button class="tab-btn active" data-tab="pdf">📄 PDF 文档</button>
-                    <button class="tab-btn" data-tab="web">🌐 网页内容</button>
                 </div>
 
                 <!-- PDF 标签页 -->
@@ -184,61 +183,19 @@
                     <div id="pdf-status" class="status-message" style="display: none;"></div>
                 </div>
 
-                <!-- Web 标签页 -->
-                <div id="web-tab" class="tab-content">
-                    <div class="tab-header">
-                        <h2>🌐 Web Reader</h2>
-                    </div>
-
-                    <!-- URL 输入区域 -->
-                    <div class="url-section">
-                        <div class="url-input-group">
-                            <input type="url" id="web-url-input" placeholder="输入网页 URL (http:// 或 https://)" class="form-input">
-                            <label>
-                                <input type="checkbox" id="web-save-outputs" checked>
-                                生成并保存摘要到本地 (MD/PDF)
-                            </label>
-                        </div>
-                    </div>
-
-                    <!-- 操作按钮 -->
-                    <div class="action-buttons">
-                        <button id="process-web-btn" class="btn btn-primary">🚀 开始处理 URL</button>
-                        <button id="reset-web-chat-btn" class="btn btn-secondary">🔄 重置对话</button>
-                    </div>
-
-                    <!-- 处理状态 -->
-                    <div id="web-status" class="status-message" style="display: none;"></div>
-                </div>
-
                 <!-- 总结展示区域 -->
                 <div id="summary-section" class="summary-section" style="display: none;">
                     <hr class="section-divider">
-                    <h3>📋 自动生成的总结</h3>
-                    <div class="summary-tabs">
-                        <button class="summary-tab-btn active" data-summary="brief">📝 简要总结</button>
-                        <button class="summary-tab-btn" data-summary="detail">📖 详细总结</button>
-                    </div>
+                    <h3>📋 文档摘要</h3>
                     <div class="summary-content">
                         <div id="brief-summary" class="summary-tab-content active">
                             <div class="expandable-content">
                                 <div class="content-header" data-target="brief-content">
-                                    <span>📝 简要总结内容 (点击展开/收起)</span>
+                                    <span>📝 文档摘要内容 (点击展开/收起)</span>
                                     <span class="expand-icon">▼</span>
                                 </div>
                                 <div id="brief-content" class="content-body collapsed">
                                     <div class="tex2jax_process" id="brief-summary-text">加载中...</div>
-                                </div>
-                            </div>
-                        </div>
-                        <div id="detail-summary" class="summary-tab-content">
-                            <div class="expandable-content">
-                                <div class="content-header" data-target="detail-content">
-                                    <span>📖 详细总结内容 (点击展开/收起)</span>
-                                    <span class="expand-icon">▼</span>
-                                </div>
-                                <div id="detail-content" class="content-body collapsed">
-                                    <div class="tex2jax_process" id="detail-summary-text">加载中...</div>
                                 </div>
                             </div>
                         </div>

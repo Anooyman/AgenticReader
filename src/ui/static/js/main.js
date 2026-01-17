@@ -289,31 +289,8 @@ class LLMReaderApp {
     }
 
     initSummaryTabs() {
-        const summaryTabBtns = document.querySelectorAll('.summary-tab-btn');
-        const summaryTabContents = document.querySelectorAll('.summary-tab-content');
-
-        summaryTabBtns.forEach(btn => {
-            btn.addEventListener('click', () => {
-                const summaryType = btn.getAttribute('data-summary');
-
-                // 更新按钮状态
-                summaryTabBtns.forEach(b => b.classList.remove('active'));
-                btn.classList.add('active');
-
-                // 更新内容显示
-                summaryTabContents.forEach(content => {
-                    content.classList.remove('active');
-                    if (content.id === `${summaryType}-summary`) {
-                        content.classList.add('active');
-                    }
-                });
-
-                // 加载总结内容
-                if (this.config.currentDocName) {
-                    this.loadSummary(summaryType);
-                }
-            });
-        });
+        // Summary标签页切换已简化 - 现在只显示brief summary
+        // 保留此方法以防未来需要扩展
     }
 
     initExpandableContent() {
@@ -341,11 +318,7 @@ class LLMReaderApp {
     }
 
     initEventListeners() {
-        // Web URL处理
-        const processWebBtn = document.getElementById('process-web-btn');
-        processWebBtn.addEventListener('click', () => {
-            this.processWebUrl();
-        });
+        // Web URL处理已删除 - Web Reader 功能暂未实现
 
         // 主页面会话管理按钮
         const newSessionMainBtn = document.getElementById('new-session-main-btn');
@@ -680,112 +653,16 @@ class LLMReaderApp {
         }
     }
 
-    async processWebUrl() {
-        const urlInput = document.getElementById('web-url-input');
-        const saveOutputs = document.getElementById('web-save-outputs').checked;
-        const processWebBtn = document.getElementById('process-web-btn');
-        const url = urlInput.value.trim();
+    // processWebUrl 方法已删除 - Web Reader 功能暂未实现
 
-        if (!url || !(url.startsWith('http://') || url.startsWith('https://'))) {
-            this.showStatus('warning', '请输入有效的URL (以http://或https://开头)', 'web');
-            return;
-        }
-
-        // 开始处理状态
-        this.showProcessingStatus('正在处理网页内容，请耐心等待...', 'web');
-
-        // 禁用处理按钮
-        if (processWebBtn) {
-            processWebBtn.disabled = true;
-            processWebBtn.textContent = '处理中...';
-        }
-
-        try {
-            const response = await fetch(this.getApiUrl('/api/v1/web/process'), {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    url: url,
-                    save_outputs: saveOutputs
-                })
-            });
-
-            const result = await response.json();
-
-            if (response.ok && result.status === 'success') {
-                this.config.currentDocName = result.doc_name;
-                this.config.hasWebReader = true;
-                this.config.hasPdfReader = false; // 明确标记为 Web 模式
-                this.config.documentType = 'web'; // 添加文档类型标记
-
-                // 🔥 关键修复：确保在Web处理完成后创建基于文档的固定聊天会话ID
-                if (!this.currentChatId) {
-                    this.currentChatId = this.generateDocumentSessionId(result.doc_name);
-                    console.log('🔑 Web处理完成时生成基于文档的固定聊天会话ID:', this.currentChatId);
-                }
-
-                // 初始化 Web 阅读器的聊天服务
-                try {
-                    const initResponse = await fetch(this.getApiUrl(`/api/v1/web/initialize/${result.doc_name}`), {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ url: url })
-                    });
-
-                    const initResult = await initResponse.json();
-                    if (initResult.status === 'success') {
-                        console.log('✅ Web聊天服务初始化成功');
-                    } else {
-                        console.warn('⚠️ Web聊天服务初始化失败:', initResult.message);
-                    }
-                } catch (initError) {
-                    console.error('❌ 初始化Web聊天服务时出错:', initError);
-                }
-
-                // 保存文档状态到本地存储
-                this.saveDocumentStateToLocal();
-
-                // 隐藏处理状态，显示成功消息
-                this.hideProcessingStatus('web');
-                this.showStatus('success', result.message, 'web');
-
-                this.updateDocumentStatus();
-                this.updateSessionStatus(); // 🔥 新增：更新会话状态显示
-                this.updateChatEntryStatus(); // 更新聊天入口状态
-                this.showSummarySection();
-                this.loadSummary('brief'); // 加载默认总结（会根据文档类型调用不同API）
-            } else {
-                this.hideProcessingStatus('web');
-                this.showStatus('error', result.detail || '处理网页内容失败', 'web');
-            }
-        } catch (error) {
-            console.error('处理网页内容失败:', error);
-            this.hideProcessingStatus('web');
-            this.showStatus('error', '处理网页内容时发生错误', 'web');
-        } finally {
-            // 恢复处理按钮
-            if (processWebBtn) {
-                processWebBtn.disabled = false;
-                processWebBtn.textContent = '🚀 开始处理 URL';
-            }
-        }
-    }
-
-    async loadSummary(summaryType) {
+    async loadSummary(summaryType = 'brief') {
         if (!this.config.currentDocName) return;
 
         try {
-            // 根据文档类型选择不同的 API 端点
-            const documentType = this.config.documentType || (this.config.hasPdfReader ? 'pdf' : 'web');
-            const apiEndpoint = documentType === 'web'
-                ? `/api/v1/web/summary/${this.config.currentDocName}?summary_type=${summaryType}`
-                : `/api/v1/pdf/summary/${this.config.currentDocName}?summary_type=${summaryType}`;
+            // 只支持 PDF 摘要（brief summary）
+            const apiEndpoint = `/api/v1/pdf/summary/${this.config.currentDocName}?summary_type=${summaryType}`;
 
-            console.log(`📖 加载${documentType}摘要: ${apiEndpoint}`);
+            console.log(`📖 加载PDF摘要: ${apiEndpoint}`);
 
             const response = await fetch(this.getApiUrl(apiEndpoint));
             const result = await response.json();
@@ -802,9 +679,9 @@ class LLMReaderApp {
                 summaryElement.innerHTML = `<p style="color: #6c757d; font-style: italic;">${result.message}</p>`;
             }
         } catch (error) {
-            console.error('加载总结失败:', error);
+            console.error('加载摘要失败:', error);
             const summaryElement = document.getElementById(`${summaryType}-summary-text`);
-            summaryElement.innerHTML = '<p style="color: #dc3545;">加载总结时发生错误</p>';
+            summaryElement.innerHTML = '<p style="color: #dc3545;">加载摘要时发生错误</p>';
         }
     }
 
@@ -876,7 +753,6 @@ class LLMReaderApp {
     showStatus(type, message, target = 'general') {
         const statusElements = {
             pdf: document.getElementById('pdf-status'),
-            web: document.getElementById('web-status'),
             chat: document.getElementById('chat-messages'),
             config: document.getElementById('pdf-status') // 使用PDF状态区域显示配置信息
         };
@@ -922,8 +798,7 @@ class LLMReaderApp {
 
     showProcessingStatus(message, target) {
         const statusElements = {
-            pdf: document.getElementById('pdf-status'),
-            web: document.getElementById('web-status')
+            pdf: document.getElementById('pdf-status')
         };
 
         const statusElement = statusElements[target];
@@ -945,8 +820,7 @@ class LLMReaderApp {
 
     hideProcessingStatus(target) {
         const statusElements = {
-            pdf: document.getElementById('pdf-status'),
-            web: document.getElementById('web-status')
+            pdf: document.getElementById('pdf-status')
         };
 
         const statusElement = statusElements[target];
