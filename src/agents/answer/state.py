@@ -16,11 +16,11 @@ class AnswerState(TypedDict, total=False):
     # ============ 输入 ============
     user_query: str  # 用户查询
     current_doc: Optional[str]  # 当前文档名（None=多文档模式）
-    doc_tags: Optional[List[str]]  # 文档标签过滤
     conversation_history: Optional[List[Dict]]  # 对话历史
 
     # ============ 中间状态 ============
     needs_retrieval: bool  # 是否需要检索
+    analysis_reason: Optional[str]  # 意图分析的理由
     context: Optional[str]  # 检索到的上下文
 
     # ============ 输出 ============

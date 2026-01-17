@@ -114,14 +114,14 @@ class DataService:
                     doc_name = doc_dir.name
 
                     # 获取详细的数据信息
-                    json_path = self.json_data_dir / f"{doc_name}.json"
+                    json_folder = self.json_data_dir / doc_name  # JSON文件夹
                     vector_db_path = self.vector_db_dir / f"{doc_name}_data_index"
                     images_path = self.pdf_image_dir / doc_name
 
                     # 获取文档信息
                     doc_info = {
                         "name": doc_name,
-                        "has_json": json_path.exists(),
+                        "has_json": json_folder.exists(),
                         "has_vector_db": vector_db_path.exists(),
                         "has_images": images_path.exists(),
                         "has_summary": False,
@@ -132,8 +132,8 @@ class DataService:
                         # 新增：详细的数据大小信息
                         "data_details": {
                             "json": {
-                                "size": json_path.stat().st_size if json_path.exists() else 0,
-                                "size_formatted": self._format_size(json_path.stat().st_size) if json_path.exists() else "0 B"
+                                "size": self._get_dir_size(json_folder) if json_folder.exists() else 0,
+                                "size_formatted": self._format_size(self._get_dir_size(json_folder)) if json_folder.exists() else "0 B"
                             },
                             "vector_db": {
                                 "size": self._get_dir_size(vector_db_path) if vector_db_path.exists() else 0,
@@ -339,7 +339,7 @@ class DataService:
                     # 删除各个位置的数据
                     paths_to_delete = [
                         self.output_dir / doc_name,
-                        self.json_data_dir / f"{doc_name}.json",
+                        self.json_data_dir / doc_name,  # JSON文件夹
                         self.vector_db_dir / f"{doc_name}_data_index",
                         self.pdf_image_dir / doc_name
                     ]

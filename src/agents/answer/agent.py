@@ -9,7 +9,6 @@ Answer Agent - 用户对话接口Agent
 """
 
 from langgraph.graph import StateGraph, END
-from typing import Dict, Optional, List
 import logging
 import json
 import re
@@ -25,13 +24,17 @@ class AnswerAgent(AgentBase):
     对话Agent
 
     工作流程：
-    1. analyze_intent - 分析用户意图
-    2. retrieve (可选) - 调用Retrieval Agent检索
-    3. generate_answer - 生成最终回答
+    1. analyze_intent - 分析用户意图（判断是否需要检索）
+    2. retrieve (可选) - 调用Retrieval Agent检索文档上下文
+    3. generate_answer - 结合检索上下文（如有）和历史对话生成最终回答
 
-    工具方法（直接在类中实现）：
-    - call_retrieval_impl - 调用检索Agent
-    - direct_answer_impl - 直接回答
+    工具方法：
+    - call_retrieval_impl - 调用检索Agent获取文档上下文
+
+    注意：
+    - 历史对话由LLM Client自动管理，无需手动处理
+    - 检索结果作为文档上下文，而非最终答案
+    - 所有回答都结合历史对话上下文生成
     """
 
     def __init__(self, doc_name: str = None):
@@ -66,23 +69,21 @@ class AnswerAgent(AgentBase):
                 self.retrieval_agent = RetrievalAgent(doc_name=self.current_doc)
                 logger.info("✅ Retrieval Agent已加载")
 
-            # 调用Retrieval Agent的graph
+            # 调用Retrieval Agent的graph（参考 test_retrieval_agent.py）
             result = await self.retrieval_agent.graph.ainvoke({
                 "query": query,
                 "doc_name": self.current_doc,
-                "tags": None,
-                "max_iterations": 5,
-                # 初始化其他必需字段
+                "max_iterations": 10,
+                "current_iteration": 0,
+                "is_complete": False,
                 "thoughts": [],
                 "actions": [],
                 "observations": [],
-                "current_iteration": 0,
-                "retrieved_content": {},
-                "is_complete": False
+                "retrieved_content": []
             })
 
             # 提取检索到的上下文
-            context = result.get("final_context", "")
+            context = result.get("final_summary", "")
 
             logger.info(f"✅ [Tool:call_retrieval] 检索完成，上下文长度: {len(context)}")
             return context
@@ -90,39 +91,6 @@ class AnswerAgent(AgentBase):
         except Exception as e:
             logger.error(f"❌ [Tool:call_retrieval] 检索失败: {e}")
             return ""
-
-    async def direct_answer_impl(self, query: str) -> str:
-        """
-        直接回答用户问题（工具方法）
-
-        Args:
-            query: 用户问题
-
-        Returns:
-            回答文本
-        """
-        logger.info(f"💬 [Tool:direct_answer] 直接回答: {query[:50]}...")
-
-        try:
-            prompt = f"""
-请回答用户问题。
-
-用户问题：{query}
-
-要求：
-1. 礼貌友好
-2. 简洁明了
-"""
-
-            # 使用Agent的LLM实例
-            answer = await self.llm.async_get_response(prompt)
-
-            logger.info(f"✅ [Tool:direct_answer] 回答生成完成")
-            return answer
-
-        except Exception as e:
-            logger.error(f"❌ [Tool:direct_answer] 回答生成失败: {e}")
-            return f"抱歉，生成回答时出现错误：{str(e)}"
 
     # ==================== Workflow节点方法 ====================
 
@@ -153,48 +121,40 @@ class AnswerAgent(AgentBase):
 
         return workflow.compile()
 
-    async def analyze_intent(self, state: AnswerState) -> Dict:
+    async def analyze_intent(self, state: AnswerState) -> AnswerState:
         """
         步骤1：分析用户意图
 
-        判断是否需要检索文档内容
+        基于对话历史和上下文，判断是否需要检索文档内容来回答当前问题
+        注意：对话历史已由 LLM Client 自动管理，无需手动处理
         """
         logger.info(f"🤔 [Analyze] 分析意图: {state['user_query'][:50]}...")
 
         try:
-            # 使用Agent级别的LLM实例
-            llm = self.llm
-
+            # 简化的 prompt（对话历史由 LLM Client 管理）
             prompt = f"""
-分析用户查询，判断是否需要检索文档内容。
+当前用户问题：{state['user_query']}
 
-用户查询：{state['user_query']}
-
-如果查询是以下类型，需要检索：
-- 询问文档具体内容
-- 需要引用文档细节
-- 需要查找特定信息
-
-如果查询是以下类型，不需要检索：
-- 打招呼、闲聊
-- 一般性问题（不涉及文档）
-- 请求帮助、说明
+请判断是否需要从文档中检索新信息来回答这个问题。
 
 返回JSON格式：
 {{
     "needs_retrieval": true/false,
-    "reason": "判断原因"
+    "reason": "简要说明判断理由（20字以内）"
 }}
 
 只返回JSON，不要其他内容。
 """
 
-            response = await llm.async_get_response(prompt)
+            # 使用专门的意图分析 Role
+            from src.config.prompts.reader_prompts import ReaderRole
+            response = await self.llm.async_call_llm_chain(
+                role=ReaderRole.INTENT_ANALYZER,
+                input_prompt=prompt,
+                session_id="analyze_intent"
+            )
 
             # 解析JSON
-            import json
-            import re
-
             json_match = re.search(r'\{.*\}', response, re.DOTALL)
             if json_match:
                 result = json.loads(json_match.group())
@@ -202,25 +162,29 @@ class AnswerAgent(AgentBase):
                 reason = result.get("reason", "")
             else:
                 # 默认需要检索
+                logger.warning("⚠️ [Analyze] JSON解析失败，使用默认策略")
                 needs_retrieval = True
-                reason = "默认策略"
+                reason = "JSON解析失败，默认检索"
 
             logger.info(
                 f"✅ [Analyze] 意图分析完成: "
                 f"{'需要检索' if needs_retrieval else '直接回答'} - {reason}"
             )
 
-            return {
-                "needs_retrieval": needs_retrieval
-            }
+            # 更新 state 并返回
+            state["needs_retrieval"] = needs_retrieval
+            state["analysis_reason"] = reason
+            return state
 
         except Exception as e:
             logger.error(f"❌ [Analyze] 意图分析失败: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
 
-            # 失败时默认需要检索
-            return {
-                "needs_retrieval": True
-            }
+            # 失败时默认需要检索（保守策略）
+            state["needs_retrieval"] = True
+            state["analysis_reason"] = "分析失败，采用保守策略"
+            return state
 
     def route_by_intent(self, state: AnswerState) -> str:
         """
@@ -234,7 +198,7 @@ class AnswerAgent(AgentBase):
         else:
             return "direct"
 
-    async def call_retrieval(self, state: AnswerState) -> Dict:
+    async def call_retrieval(self, state: AnswerState) -> AnswerState:
         """
         步骤2：调用Retrieval Agent检索（使用工具方法）
 
@@ -249,58 +213,66 @@ class AnswerAgent(AgentBase):
             # 调用工具方法
             context = await self.call_retrieval_impl(state["user_query"])
 
-            return {
-                "context": context
-            }
+            # 更新 state 并返回
+            state["context"] = context
+            return state
 
         except Exception as e:
             logger.error(f"❌ [Retrieve] 检索失败: {e}")
 
-            return {
-                "context": ""
-            }
+            # 更新 state 并返回
+            state["context"] = ""
+            return state
 
-    async def generate_answer(self, state: AnswerState) -> Dict:
+    async def generate_answer(self, state: AnswerState) -> AnswerState:
         """
-        步骤3：生成最终回答（使用工具方法）
+        步骤3：生成最终回答
+
+        结合检索到的文档上下文（如有）和历史对话（由LLM Client自动管理）生成回答
         """
         logger.info(f"💬 [Generate] 生成回答")
 
         try:
             context = state.get("context", "")
+            user_query = state['user_query']
 
             if context:
-                # 有检索上下文 - 基于文档回答
+                # 有检索上下文 - 提供文档参考内容
                 prompt = f"""
-请基于以下文档内容回答用户问题。
+用户问题：{user_query}
 
-用户问题：{state['user_query']}
-
-相关内容：
+文档参考内容：
 {context}
-
-要求：
-1. 基于文档内容回答
-2. 如果文档中没有相关信息，请明确说明
-3. 保持回答简洁准确
 """
-                # 使用Agent的LLM实例
-                answer = await self.llm.async_get_response(prompt)
+                logger.info(f"📚 [Generate] 使用文档上下文 + 历史对话回答")
             else:
-                # 无检索上下文 - 直接回答
-                answer = await self.direct_answer_impl(state['user_query'])
+                # 无检索上下文 - 仅提供用户问题
+                prompt = f"""
+用户问题：{user_query}
+"""
+                logger.info(f"💬 [Generate] 仅使用历史对话回答")
+
+            # 使用专门的对话式问答 role（历史对话由 LLM Client 自动管理）
+            from src.config.prompts.reader_prompts import ReaderRole
+            answer = await self.llm.async_call_llm_chain(
+                role=ReaderRole.CONVERSATIONAL_QA,
+                input_prompt=prompt,
+                session_id="generate_answer"
+            )
 
             logger.info(f"✅ [Generate] 回答生成完成，长度: {len(answer)}")
 
-            return {
-                "final_answer": answer,
-                "is_complete": True
-            }
+            # 更新 state 并返回
+            state["final_answer"] = answer
+            state["is_complete"] = True
+            return state
 
         except Exception as e:
             logger.error(f"❌ [Generate] 回答生成失败: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
 
-            return {
-                "final_answer": f"抱歉，生成回答时出现错误：{str(e)}",
-                "is_complete": True
-            }
+            # 更新 state 并返回
+            state["final_answer"] = f"抱歉，生成回答时出现错误：{str(e)}"
+            state["is_complete"] = True
+            return state

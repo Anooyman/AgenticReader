@@ -100,5 +100,8 @@ poetry.lock
 # VSCode
 .vscode/
 
+# claude code
+.claude/
+
 # Ignore all data files
 data/ 

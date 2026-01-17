@@ -10,7 +10,6 @@ Agent系统
 
 使用：
     from src.agents import AnswerAgent, RetrievalAgent, IndexingAgent
-    from src.workflows import WorkflowRouter
 """
 
 # 导入Agent基类和具体Agent

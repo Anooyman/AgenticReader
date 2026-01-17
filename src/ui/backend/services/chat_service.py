@@ -1,4 +1,4 @@
-"""聊天服务 - 集成PDFReader和WebReader的聊天功能"""
+"""聊天服务 - 使用 AnswerAgent 的聊天功能"""
 
 import sys
 from pathlib import Path
@@ -16,191 +16,106 @@ logger = get_logger(__name__)
 
 
 class ChatService:
-    """聊天服务类"""
+    """聊天服务类 - 基于 AnswerAgent"""
 
     def __init__(self):
-        self.pdf_reader = None
-        self.web_reader = None
+        self.answer_agent = None
         self.current_doc_name = None
-        self.reader_type = None  # 'pdf' or 'web'
+        self.doc_type = None  # 'pdf' or 'web'
 
-    def initialize_pdf_reader(self, doc_name: str, provider: str = "openai", pdf_preset: str = "high") -> bool:
-        """初始化PDF阅读器"""
-        try:
-            # 导入PDFReader
-            from src.readers.pdf import PDFReader
-
-            # 检查是否已处理过该文档
-            json_path = settings.data_dir / "json_data" / f"{doc_name}.json"
-            if not json_path.exists():
-                logger.error(f"文档 {doc_name} 的JSON数据不存在，无法初始化聊天")
-                return False
-
-            # 初始化PDFReader
-            self.pdf_reader = PDFReader(provider=provider, pdf_preset=pdf_preset)
-
-            # 处理/加载文档数据 (save_data_flag=False 避免重新生成文件，只加载现有数据)
-            try:
-                self.pdf_reader.process_pdf(doc_name, save_data_flag=False)
-
-                # 验证必要的数据是否已加载
-                if hasattr(self.pdf_reader, 'agenda_dict') and self.pdf_reader.agenda_dict:
-                    # 重要：确保当前文档状态已更新
-                    old_doc = self.current_doc_name
-                    self.current_doc_name = doc_name
-                    self.reader_type = 'pdf'
-
-                    logger.info(f"✅ PDF聊天服务初始化成功: {doc_name}")
-                    logger.info(f"📊 已加载agenda_dict，章节数: {len(self.pdf_reader.agenda_dict)}")
-                    if old_doc and old_doc != doc_name:
-                        logger.info(f"🔄 ChatService文档已切换: {old_doc} -> {doc_name}")
-                    return True
-                else:
-                    logger.error(f"❌ PDF数据加载不完整，agenda_dict缺失: {doc_name}")
-                    return False
-
-            except Exception as e:
-                logger.error(f"❌ PDF数据处理失败: {doc_name}, 错误: {str(e)}")
-                return False
-
-        except ImportError as e:
-            logger.error(f"❌ 无法导入PDFReader: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"❌ 初始化PDF聊天服务失败: {e}")
-            return False
-
-    async def initialize_web_reader(self, doc_name: str, url: str = None, provider: str = "openai") -> bool:
+    def initialize_chat(self, doc_name: str, doc_type: str = "pdf") -> bool:
         """
-        初始化Web阅读器
+        初始化聊天服务（统一接口，支持PDF和Web）
 
         Args:
-            doc_name: 文档名称（从URL提取）
-            url: 原始URL（如果需要重新处理）
-            provider: LLM提供商，默认为openai
+            doc_name: 文档名称
+            doc_type: 文档类型 ('pdf' 或 'web')
 
         Returns:
             bool: 初始化是否成功
         """
         try:
-            # 导入WebReader
-            from src.readers.web import WebReader
-            import json
-            import os
-            from pathlib import Path
-
-            # 🔥 向后兼容：检查多种可能的文件名格式
-            json_data_dir = settings.data_dir / "json_data"
-            json_path = json_data_dir / f"{doc_name}.json"
-            
-            # 如果标准文件名不存在，尝试查找包含特殊字符的旧文件名
-            if not json_path.exists():
-                logger.warning(f"标准文件名不存在: {json_path.name}")
-                logger.info(f"🔍 尝试在 {json_data_dir} 中查找匹配的文件...")
-                
-                # 查找所有可能匹配的 JSON 文件（文件名开头匹配）
-                if json_data_dir.exists():
-                    # 规范化 doc_name 用于比较（移除空格）
-                    doc_name_normalized = doc_name.replace(' ', '').lower()
-                    
-                    for candidate in json_data_dir.glob("*.json"):
-                        # 规范化候选文件名用于比较
-                        candidate_normalized = candidate.stem.replace(' ', '').lower()
-                        
-                        # 如果候选文件名以 doc_name 开头（忽略特殊字符）
-                        if candidate_normalized.startswith(doc_name_normalized):
-                            json_path = candidate
-                            logger.info(f"✅ 找到匹配文件: {json_path.name}")
-                            break
-            
-            if not json_path.exists():
-                logger.error(f"文档 {doc_name} 的JSON数据不存在，无法初始化聊天")
+            # 检查文档是否已索引（检查向量数据库是否存在）
+            vector_db_path = settings.data_dir / "vector_db" / f"{doc_name}_data_index"
+            if not vector_db_path.exists():
+                logger.error(f"文档 {doc_name} 的向量数据库不存在，无法初始化聊天")
+                logger.error(f"请先索引该文档")
                 return False
 
-            # 初始化WebReader
-            self.web_reader = WebReader(provider=provider)
+            # 导入 AnswerAgent
+            from src.agents.answer import AnswerAgent
 
-            # 加载JSON数据
-            try:
-                with open(json_path, 'r', encoding='utf-8') as f:
-                    web_content = json.load(f)
+            # 初始化 AnswerAgent
+            self.answer_agent = AnswerAgent(doc_name=doc_name)
 
-                # 检查是否有向量数据库（大文件）
-                # 🔥 修复：使用正确的后缀 _data_index（与 ReaderConstants.VECTOR_DB_SUFFIX 一致）
-                vector_db_path = settings.data_dir / "vector_db" / f"{doc_name}_data_index"
+            # 更新当前文档状态
+            old_doc = self.current_doc_name
+            self.current_doc_name = doc_name
+            self.doc_type = doc_type
 
-                # 注意：聊天历史由 LLMBase.message_histories 管理，无需在此手动初始化
+            logger.info(f"✅ 聊天服务初始化成功: {doc_name} (类型: {doc_type})")
+            if old_doc and old_doc != doc_name:
+                logger.info(f"🔄 ChatService文档已切换: {old_doc} -> {doc_name}")
 
-                if vector_db_path.exists():
-                    # 大文件模式：使用向量数据库
-                    from src.core.vector_db.vector_db_client import VectorDBClient
-                    self.web_reader.vector_db_obj = VectorDBClient(
-                        str(vector_db_path),
-                        embedding_model=self.web_reader.embedding_model
-                    )
-
-                    # 加载向量数据库数据
-                    self.web_reader.get_data_from_vector_db()
-
-                    logger.info(f"✅ Web内容已从向量数据库加载: {doc_name}")
-                else:
-                    # 小文件模式：直接使用内容
-                    content_str = ', '.join(web_content) if isinstance(web_content, list) else str(web_content)
-                    self.web_reader.web_content = content_str
-
-                    logger.info(f"✅ Web内容已直接加载: {doc_name}, 长度: {len(content_str)} 字符")
-                
-                logger.info(f"✅ 聊天历史已初始化")
-
-                # 更新当前文档状态
-                old_doc = self.current_doc_name
-                self.current_doc_name = doc_name
-                self.reader_type = 'web'
-
-                if old_doc and old_doc != doc_name:
-                    logger.info(f"🔄 ChatService文档已切换: {old_doc} -> {doc_name}")
-
-                logger.info(f"✅ Web聊天服务初始化成功: {doc_name}")
-                return True
-
-            except Exception as e:
-                logger.error(f"❌ Web数据加载失败: {doc_name}, 错误: {str(e)}")
-                return False
+            return True
 
         except ImportError as e:
-            logger.error(f"❌ 无法导入WebReader: {e}")
+            logger.error(f"❌ 无法导入 AnswerAgent: {e}")
             return False
         except Exception as e:
-            logger.error(f"❌ 初始化Web聊天服务失败: {e}")
+            logger.error(f"❌ 初始化聊天服务失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
 
-    def chat(self, message: str) -> Optional[str]:
-        """执行聊天对话"""
-        if not self.current_doc_name:
+    def initialize_pdf_reader(self, doc_name: str, provider: str = "openai", pdf_preset: str = "high") -> bool:
+        """初始化PDF阅读器（向后兼容接口）"""
+        logger.info(f"📄 初始化PDF聊天: {doc_name}")
+        return self.initialize_chat(doc_name, doc_type="pdf")
+
+    async def initialize_web_reader(self, doc_name: str, url: str = None, provider: str = "openai") -> bool:
+        """初始化Web阅读器（向后兼容接口）"""
+        logger.info(f"🌐 初始化Web聊天: {doc_name}")
+        return self.initialize_chat(doc_name, doc_type="web")
+
+    async def chat(self, message: str) -> Optional[str]:
+        """
+        执行聊天对话
+
+        Args:
+            message: 用户消息
+
+        Returns:
+            str: AI回复
+        """
+        if not self.current_doc_name or not self.answer_agent:
             return "❌ 聊天服务未初始化，请先处理文档"
 
         try:
-            if self.reader_type == 'pdf' and self.pdf_reader:
-                # 验证PDF阅读器状态
-                if not hasattr(self.pdf_reader, 'agenda_dict') or not self.pdf_reader.agenda_dict:
-                    logger.error(f"❌ PDF阅读器状态异常，agenda_dict缺失: {self.current_doc_name}")
-                    return "❌ PDF阅读器状态异常，请重新初始化文档"
+            logger.info(f"💬 处理聊天消息 - 文档: {self.current_doc_name}, 消息: {message[:50]}...")
 
-                logger.info(f"💬 处理PDF聊天消息 - 文档: {self.current_doc_name}, 消息: {message[:50]}...")
-                response = self.pdf_reader.chat(message)
-                logger.info(f"📝 PDF聊天回复生成成功，消息长度: {len(str(response))}")
-                return str(response)
-            elif self.reader_type == 'web' and self.web_reader:
-                logger.info(f"💬 处理Web聊天消息 - 文档: {self.current_doc_name}, 消息: {message[:50]}...")
-                response = self.web_reader.chat(message)
-                logger.info(f"📝 Web聊天回复生成成功，消息长度: {len(str(response))}")
-                return str(response)
-            else:
-                logger.error(f"❌ 聊天服务状态异常 - reader_type: {self.reader_type}, pdf_reader: {self.pdf_reader is not None}, web_reader: {self.web_reader is not None}")
-                return "❌ 聊天服务状态异常，请重新加载文档"
+            # 调用 AnswerAgent
+            result = await self.answer_agent.graph.ainvoke({
+                "user_query": message,
+                "current_doc": self.current_doc_name,
+                "needs_retrieval": False,
+                "is_complete": False
+            })
+
+            # 提取回答
+            final_answer = result.get("final_answer", "")
+
+            if not final_answer:
+                logger.warning("⚠️ AnswerAgent 返回空回答")
+                return "抱歉，我暂时无法回答这个问题。"
+
+            logger.info(f"📝 聊天回复生成成功，长度: {len(final_answer)} 字符")
+            return final_answer
 
         except Exception as e:
             logger.error(f"❌ 聊天处理失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return f"❌ 聊天处理时发生错误: {str(e)}"
 
     def get_status(self) -> dict:
@@ -208,17 +123,15 @@ class ChatService:
         return {
             "initialized": self.current_doc_name is not None,
             "doc_name": self.current_doc_name,
-            "reader_type": self.reader_type,
-            "has_pdf_reader": self.pdf_reader is not None,
-            "has_web_reader": self.web_reader is not None
+            "doc_type": self.doc_type,
+            "has_agent": self.answer_agent is not None
         }
 
     def reset(self):
         """重置聊天服务"""
-        self.pdf_reader = None
-        self.web_reader = None
+        self.answer_agent = None
         self.current_doc_name = None
-        self.reader_type = None
+        self.doc_type = None
         logger.info("🔄 聊天服务已重置")
 
 

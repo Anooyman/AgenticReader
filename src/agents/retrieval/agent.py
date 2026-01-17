@@ -37,7 +37,6 @@ class RetrievalAgent(AgentBase):
     支持：
     - 单文档检索：指定doc_name
     - 多文档检索：doc_name=None
-    - 标签过滤：指定tags
     """
 
     def __init__(self, doc_name: str = None):
@@ -45,7 +44,6 @@ class RetrievalAgent(AgentBase):
 
         # 当前文档上下文
         self.current_doc = doc_name
-        self.current_tags = None
 
         # 初始化 VectorDBClient（复用实例，避免重复加载）
         self.vector_db_client = None
@@ -70,7 +68,8 @@ class RetrievalAgent(AgentBase):
         from pathlib import Path
         from src.config.settings import DATA_ROOT
 
-        db_path = Path(DATA_ROOT) / "vector_db" / doc_name
+        # 注意：必须与 IndexingAgent 的路径格式保持一致
+        db_path = Path(DATA_ROOT) / "vector_db" / f"{doc_name}_data_index"
         return str(db_path)
 
     def _create_vector_db_client(self, doc_name: str):
@@ -184,15 +183,19 @@ class RetrievalAgent(AgentBase):
         Returns:
             检索到的相关文档内容列表
         """
+        logger.info(f"🔍 [Tool:search_by_context] ---------- 语义检索 ----------")
+        logger.info(f"🔍 [Tool:search_by_context] 查询内容: {query}")
+
         if not query or not query.strip():
-            logger.warning("❌ [Tool:search_by_context] 查询字符串为空")
+            logger.warning("🔍 [Tool:search_by_context] ❌ 查询字符串为空")
             return []
 
         if not self.vector_db_client:
-            logger.error("❌ [Tool:search_by_context] 向量数据库未初始化")
+            logger.error("🔍 [Tool:search_by_context] ❌ 向量数据库未初始化")
             return []
 
         try:
+            logger.info(f"🔍 [Tool:search_by_context] 执行向量检索 (k=3, type=context)")
             # 使用 type='context' 过滤器进行语义搜索，启用去重
             doc_res = self.vector_db_client.search_with_metadata_filter(
                 query=query,
@@ -201,6 +204,7 @@ class RetrievalAgent(AgentBase):
                 field_value="context",
                 enable_dedup=True
             )
+            logger.info(f"🔍 [Tool:search_by_context] 向量检索返回: {len(doc_res) if doc_res else 0} 个结果")
 
             context_data = []
             chapter_info_list = []  # 存储章节信息用于汇总
@@ -336,10 +340,11 @@ class RetrievalAgent(AgentBase):
         Returns:
             检索到的匹配标题的文档内容列表
         """
-        logger.info(f"📑 [Tool:search_by_title] 标题检索: {title_list}")
+        logger.info(f"📑 [Tool:search_by_title] ---------- 标题检索 ----------")
+        logger.info(f"📑 [Tool:search_by_title] 输入标题: {title_list}")
 
         if not self.vector_db_client:
-            logger.error("❌ [Tool:search_by_title] VectorDBClient 未初始化")
+            logger.error("📑 [Tool:search_by_title] ❌ VectorDBClient 未初始化")
             return []
 
         try:
@@ -510,10 +515,10 @@ class RetrievalAgent(AgentBase):
             文档目录结构列表
         """
         _ = query  # 参数保留用于接口兼容，实际不使用
-        logger.info(f"📚 [Tool:get_document_structure] 从向量数据库获取文档结构")
+        logger.info(f"📚 [Tool:get_document_structure] ---------- 获取文档结构 ----------")
 
         if not self.vector_db_client:
-            logger.error("❌ [Tool:get_document_structure] VectorDBClient 未初始化")
+            logger.error("📚 [Tool:get_document_structure] ❌ VectorDBClient 未初始化")
             return ["文档结构信息不可用（向量数据库未初始化）"]
 
         try:
@@ -561,30 +566,42 @@ class RetrievalAgent(AgentBase):
 
         # 添加节点
         workflow.add_node("initialize", self.initialize)
+        workflow.add_node("rewrite", self.rewrite)
         workflow.add_node("think", self.think)
         workflow.add_node("act", self.act)
-        workflow.add_node("observe", self.observe)
-        workflow.add_node("evaluate", self.evaluate)
         workflow.add_node("summary", self.summary)
+        workflow.add_node("evaluate", self.evaluate)
+        workflow.add_node("format", self.format)
 
         # 添加边
-        workflow.add_edge("initialize", "think")
+        workflow.add_edge("initialize", "rewrite")  # 先 rewrite
+        workflow.add_edge("rewrite", "think")       # 再 think
         workflow.add_edge("think", "act")
-        workflow.add_edge("act", "observe")
-        workflow.add_edge("observe", "evaluate")
+
+        # 条件边：根据工具配置决定是否需要 summary
+        workflow.add_conditional_edges(
+            "act",
+            self.should_summarize,
+            {
+                "summary": "summary",    # 需要总结
+                "evaluate": "evaluate"   # 跳过总结，直接评估
+            }
+        )
+
+        workflow.add_edge("summary", "evaluate")
 
         # 条件边：根据评估结果决定继续或结束
         workflow.add_conditional_edges(
             "evaluate",
             self.should_continue,
             {
-                "continue": "think",  # 继续循环
-                "finish": "summary"  # 先到 summary 节点总结
+                "continue": "rewrite",  # 继续循环（回到 rewrite）
+                "finish": "format"      # 到 format 节点进行精准总结
             }
         )
 
-        # summary 节点完成后到 END
-        workflow.add_edge("summary", END)
+        # format 节点完成后到 END
+        workflow.add_edge("format", END)
 
         # 设置入口
         workflow.set_entry_point("initialize")
@@ -627,6 +644,8 @@ class RetrievalAgent(AgentBase):
         3. 创建或更新 VectorDBClient
         4. 初始化必要的state字段
         """
+        logger.info(f"🔧 [Initialize] ========== RetrievalAgent 初始化 ==========")
+
         try:
             # 验证state
             self._validate_state(state)
@@ -634,11 +653,12 @@ class RetrievalAgent(AgentBase):
             # 从state中读取并设置文档上下文
             doc_name_from_state = state.get('doc_name')
             self.current_doc = doc_name_from_state or self.current_doc
-            self.current_tags = state.get('tags')
 
-            logger.info(f"🔧 [Initialize] 文档上下文: {self.current_doc}, 标签: {self.current_tags}")
-            logger.info(f"🔧 [Initialize] 查询: {state['query'][:50]}...")
-            logger.info(f"🔧 [Initialize] 最大迭代次数: {state['max_iterations']}")
+            logger.info(f"🔧 [Initialize] 配置信息:")
+            logger.info(f"🔧 [Initialize]   - 文档名称: {self.current_doc or '多文档模式'}")
+            logger.info(f"🔧 [Initialize]   - 查询内容: {state['query']}")
+            logger.info(f"🔧 [Initialize]   - 最大迭代: {state['max_iterations']}")
+            logger.info(f"🔧 [Initialize]   - 当前迭代: {state.get('current_iteration', 0)}")
 
             # 创建或更新 VectorDBClient（如果文档名称变化）
             if self.current_doc:
@@ -657,7 +677,10 @@ class RetrievalAgent(AgentBase):
 
             # 初始化必要的state字段
             if 'retrieved_content' not in state:
-                state['retrieved_content'] = {}
+                state['retrieved_content'] = []  # 改为 list
+
+            if 'formatted_data' not in state:
+                state['formatted_data'] = []
 
             if 'thoughts' not in state:
                 state['thoughts'] = []
@@ -681,6 +704,90 @@ class RetrievalAgent(AgentBase):
             logger.error(f"❌ [Initialize] 初始化失败: {e}", exc_info=True)
             raise
 
+    async def rewrite(self, state: RetrievalState) -> Dict:
+        """
+        查询重写节点：基于历史检索内容优化查询
+
+        策略：
+        - 第一轮或无历史内容 → 跳过重写，使用原始查询
+        - 有历史内容 → 基于 intermediate_summary 优化查询
+
+        返回：
+        - rewritten_query: 优化后的查询（保存到 state）
+        """
+        current_iteration = state.get("current_iteration", 0)
+        intermediate_summary = state.get("intermediate_summary", "")
+        original_query = state["query"]
+
+        logger.info(f"🔄 [Rewrite] 查询重写 - 迭代 {current_iteration + 1}")
+
+        try:
+            # 第一轮或无历史内容 → 跳过重写
+            if current_iteration == 0 or not intermediate_summary:
+                logger.info(f"⏭️ [Rewrite] 首轮或无历史内容，使用原始查询")
+                state["rewritten_query"] = original_query
+                return state
+
+            # 有历史内容 → 执行重写
+            logger.info(f"📝 [Rewrite] 基于历史内容优化查询")
+
+            # 获取上一轮 evaluate 的评估结果
+            last_reason = state.get("reason", "")
+
+            # 获取已检索的章节页码信息
+            formatted_data = state.get("formatted_data", [])
+            retrieved_info = ""
+            if formatted_data:
+                chapters = []
+                for item in formatted_data:
+                    title = item.get("title", "")
+                    pages = item.get("pages", [])
+                    if pages:
+                        pages_str = ", ".join(map(str, pages))
+                        chapters.append(f"- {title} (页码: {pages_str})")
+                if chapters:
+                    retrieved_info = "\n".join(chapters)
+
+            # 构建 rewrite prompt（简洁版，详细策略在 system prompt）
+            prompt = f"""
+原始查询: {original_query}
+
+上一轮评估反馈:
+{last_reason if last_reason else "暂无评估"}
+
+已检索章节:
+{retrieved_info if retrieved_info else "暂无"}
+
+检索内容总结:
+{intermediate_summary[:800]}...
+
+请优化查询，只返回优化后的查询字符串。
+"""
+
+            # 使用 async_call_llm_chain
+            session_id = f"rewrite_{state.get('doc_name', 'default')}"
+            rewritten = await self.llm.async_call_llm_chain(
+                role=ReaderRole.QUERY_REWRITE,
+                input_prompt=prompt,
+                session_id=session_id
+            )
+
+            # 清理返回结果（去除多余的引号、换行等）
+            rewritten = rewritten.strip().strip('"').strip("'").strip()
+
+            logger.info(f"✅ [Rewrite] 查询优化完成")
+            logger.info(f"   原始: {original_query}")
+            logger.info(f"   优化: {rewritten}")
+
+            state["rewritten_query"] = rewritten
+            return state
+
+        except Exception as e:
+            logger.error(f"❌ [Rewrite] 查询重写失败: {e}", exc_info=True)
+            # 失败时使用原始查询
+            state["rewritten_query"] = original_query
+            return state
+
     async def think(self, state: RetrievalState) -> Dict:
         """
         步骤1：思考下一步使用哪个工具
@@ -689,42 +796,73 @@ class RetrievalAgent(AgentBase):
         """
         current_iteration = state.get("current_iteration", 0)
 
-        logger.info(
-            f"🤔 [Think] 迭代 {current_iteration + 1}/{state['max_iterations']}"
-        )
+        logger.info(f"🤔 [Think] ========== 步骤1: 思考工具选择 ==========")
+        logger.info(f"🤔 [Think] 迭代进度: {current_iteration + 1}/{state['max_iterations']}")
+        logger.info(f"🤔 [Think] 已累积内容: {len(state.get('retrieved_content', []))} 条")
+
+        # 显示查询信息
+        current_query = state.get("rewritten_query", state["query"])
+        if current_query != state["query"]:
+            logger.info(f"🤔 [Think] 原始查询: {state['query']}")
+            logger.info(f"🤔 [Think] 优化查询: {current_query}")
+        else:
+            logger.info(f"🤔 [Think] 当前查询: {current_query}")
 
         try:
             # 获取工具描述（从配置文件）
             from src.config.tools.retrieval_tools import format_all_tools_for_llm
             tools_description = format_all_tools_for_llm()
 
-            # 构建prompt（简化版本）
+            # 获取中间总结（如果有）
+            intermediate_summary = state.get("intermediate_summary", "")
+
+            # 获取上一轮工具调用结果
+            last_action = state.get("actions", [])[-1] if state.get("actions", []) else None
+            last_result_info = ""
+            if last_action:
+                tool_name = last_action.get("tool", "未知")
+                result_count = len(state.get("last_result", []))
+                last_result_info = f"\n上一轮调用: {tool_name}，返回 {result_count} 条结果"
+                if intermediate_summary:
+                    last_result_info += f"\n当前总结:\n{intermediate_summary}"  # 限制长度
+
+            # 使用 rewritten_query 或原始 query
+            current_query = state.get("rewritten_query", state["query"])
+
+            # 如果 query 被重写，显示对比
+            query_info = f"当前查询: {current_query}"
+            if current_query != state["query"]:
+                query_info = f"原始查询: {state['query']}\n优化查询: {current_query}"
+
+            # 构建 prompt（只包含上下文信息，角色和工具信息在 system prompt）
             prompt = f"""
-你是一个智能检索助手。当前任务是为用户查询检索相关内容。
+# 当前检索状态
 
-用户查询：{state['query']}
-当前已检索到 {len(state.get('retrieved_content', {{}}))} 个内容片段。
+{query_info}
+当前迭代: {current_iteration + 1}/{state['max_iterations']}
+已累积内容: {len(state.get('retrieved_content', []))} 条
+{last_result_info}
 
-已执行的动作：
+# 历史动作记录
+
 {state.get('actions', [])}
 
-可用工具：
-{tools_description}
+# 任务要求
 
-请选择下一步使用哪个工具，并提供查询字符串。
+请分析当前检索状态，决定下一步使用哪个工具以及如何调用。
 
 返回JSON格式：
 {{
-    "thought": "你的思考过程",
+    "thought": "分析当前状态，说明为什么选择这个工具",
     "action": "工具名称",
-    "action_input": "查询字符串"
+    "action_input": "传递给工具的参数（查询字符串或标题列表）"
 }}
 
 只返回JSON，不要其他内容。
 """
 
             # 使用 async_call_llm_chain
-            session_id = f"retrieval_{state.get('doc_name', 'default')}"
+            session_id = f"think_{state.get('doc_name', 'default')}"
             response = await self.llm.async_call_llm_chain(
                 role=ReaderRole.RETRIEVAL,
                 input_prompt=prompt,
@@ -750,30 +888,33 @@ class RetrievalAgent(AgentBase):
             if decision and isinstance(decision, dict):
                 thought = decision.get("thought", "")
                 action = decision.get("action", "search_by_context")
-                action_input = decision.get("action_input", state["query"])
+                action_input = decision.get("action_input", current_query)
             else:
                 # 默认使用语义检索
                 thought = "默认策略：JSON解析失败"
                 action = "search_by_context"
-                action_input = state["query"]
+                action_input = current_query  # 使用 current_query 而不是重新获取
 
             logger.info(f"💡 [Think] 选择工具: {action}")
+            logger.info(f"💡 [Think] 原始输入: {state['query']}")
             logger.debug(f"思考过程: {thought}")
 
-            # 更新状态
+            # 更新状态（参数解析交给 act 节点处理）
             state["thoughts"] = state.get("thoughts", []) + [thought]
             state["current_tool"] = action
-            state["current_params"] = {"query": action_input}
+            state["action_input"] = action_input  # 存储原始输入，由 act 解析
             state["current_iteration"] = current_iteration + 1
 
             return state
 
         except Exception as e:
             logger.error(f"❌ [Think] 思考失败: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
 
             # 失败时使用默认策略
             state["current_tool"] = "search_by_context"
-            state["current_params"] = {"query": state["query"]}
+            state["action_input"] = ""  # 空字符串，act 会使用 current_query
             state["thoughts"] = state.get("thoughts", []) + ["思考失败，使用默认策略"]
             state["current_iteration"] = current_iteration + 1
 
@@ -783,17 +924,83 @@ class RetrievalAgent(AgentBase):
         """
         步骤2：执行工具调用
 
-        支持多种参数传递方式：
-        - 单参数工具：params = {"query": "..."}
-        - 多参数工具：params = {"query": "...", "k": 5, "doc_type": "title"}
+        从 state 读取：
+        - current_tool: 工具名称
+        - action_input: 原始输入（字符串）
+        - rewritten_query/query: 优化后的查询
+
+        根据工具配置构建正确的参数并执行。
         """
         tool_name = state["current_tool"]
-        params = state.get("current_params", {})
+        action_input = state.get("action_input", "")
+        current_query = state.get("rewritten_query", state["query"])
 
-        logger.info(f"🔧 [Act] 执行工具: {tool_name}")
-        logger.debug(f"参数: {params}")
+        logger.info(f"🔧 [Act] ========== 步骤2: 执行工具调用 ==========")
+        logger.info(f"🔧 [Act] 工具名称: {tool_name}")
+        logger.info(f"🔧 [Act] 原始输入: {state['query']}")
+        logger.info(f"🔧 [Act] 当前查询: {current_query}")
 
         try:
+            # 根据工具配置构建参数
+            from src.config.tools.retrieval_tools import get_tool_by_name
+            tool_config = get_tool_by_name(tool_name)
+
+            if tool_config:
+                # 获取工具需要的参数
+                required_params = tool_config.get("parameters", {})
+                params = {}
+
+                # 根据参数类型构建参数字典
+                if "query" in required_params:
+                    # 工具需要 query 参数，直接使用 current_query（优化后的查询）
+                    params["query"] = current_query
+                    logger.debug(f"使用 current_query 作为 query 参数")
+
+                elif "title_list" in required_params:
+                    # search_by_title 需要 title_list 参数
+                    # action_input 应该是 JSON 格式的标题列表
+                    try:
+                        # 尝试解析为 JSON 列表
+                        if isinstance(action_input, str):
+                            import json
+                            title_list = json.loads(action_input)
+                        elif isinstance(action_input, list):
+                            title_list = action_input
+                        else:
+                            # 如果不是列表格式，包装成单元素列表
+                            title_list = [str(action_input)]
+
+                        params["title_list"] = title_list
+                        logger.debug(f"解析标题列表: {title_list}")
+                    except (json.JSONDecodeError, ValueError) as e:
+                        logger.warning(f"⚠️ [Act] 标题列表解析失败: {e}, 尝试其他格式")
+                        # 失败时尝试按行分割或逗号分割
+                        if isinstance(action_input, str):
+                            if '\n' in action_input:
+                                title_list = [t.strip() for t in action_input.split('\n') if t.strip()]
+                            elif ',' in action_input:
+                                title_list = [t.strip() for t in action_input.split(',') if t.strip()]
+                            else:
+                                title_list = [action_input] if action_input else []
+                        else:
+                            title_list = [str(action_input)] if action_input else []
+                        params["title_list"] = title_list
+                        logger.debug(f"使用分割方式解析: {title_list}")
+
+                else:
+                    # 未知参数类型，使用 action_input 或 current_query
+                    logger.warning(f"⚠️ [Act] 工具 {tool_name} 的参数类型未知，使用默认处理")
+                    first_param_name = list(required_params.keys())[0] if required_params else "query"
+                    params[first_param_name] = action_input if action_input else current_query
+
+            else:
+                # 工具配置未找到，使用默认参数
+                logger.warning(f"⚠️ [Act] 工具配置未找到: {tool_name}, 使用默认参数")
+                params = {"query": current_query}
+
+            logger.info(f"🔧 [Act] 构建的参数: {params}")
+
+            # 执行工具调用
             # 构建可用工具字典
             available_tools = self._build_retrieval_tools()
 
@@ -806,9 +1013,17 @@ class RetrievalAgent(AgentBase):
                 sig = inspect.signature(tool_func)
                 func_params = list(sig.parameters.keys())
 
-                # 如果函数只接受一个参数（除了self），直接传query
-                if len(func_params) == 1 and 'query' in params:
-                    result = await tool_func(params['query'])
+                # 如果函数只接受一个参数（除了self）
+                if len(func_params) == 1:
+                    param_name = func_params[0]
+                    # 使用函数签名中的参数名
+                    if param_name in params:
+                        result = await tool_func(params[param_name])
+                    else:
+                        # 如果没有匹配的参数名，尝试使用第一个可用参数
+                        logger.warning(f"⚠️ [Act] 参数名不匹配，期望 {param_name}，实际有 {list(params.keys())}")
+                        first_value = next(iter(params.values())) if params else None
+                        result = await tool_func(first_value)
                 # 否则尝试解包所有参数
                 else:
                     # 过滤出函数实际需要的参数
@@ -820,152 +1035,135 @@ class RetrievalAgent(AgentBase):
                 query = params.get("query", state.get("query", ""))
                 result = await self.search_by_context(query)
 
-            logger.info(f"✅ [Act] 工具执行完成，返回 {len(result) if isinstance(result, list) else 'dict'} 个结果")
+            result_count = len(result) if isinstance(result, list) else 'dict'
+            logger.info(f"🔧 [Act] ✅ 工具执行完成")
+            logger.info(f"🔧 [Act]   - 返回结果: {result_count} 个")
 
-            # 记录动作
+            # 获取工具配置，判断是否需要 summary
+            from src.config.tools.retrieval_tools import get_tool_by_name
+            tool_config = get_tool_by_name(tool_name)
+            requires_summary = tool_config.get("requires_summary", True) if tool_config else True
+
+            logger.info(f"🔍 [Act] 工具 {tool_name} requires_summary={requires_summary}")
+
+            # 记录动作和参数
+            state["current_params"] = params  # 记录构建的参数
             state["actions"] = state.get("actions", []) + [{
                 "tool": tool_name,
                 "params": params
             }]
             state["last_result"] = result
+            state["requires_summary"] = requires_summary
+
+            # 如果不需要 summary，直接将结果添加到 intermediate_summary
+            if not requires_summary and result:
+                current_summary = state.get("intermediate_summary", "")
+                summary_block = (
+                    "\n\n"
+                    "=== 工具信息 ===\n"
+                    f"{tool_name}\n"
+                    "=== Tool Result ===\n"
+                    f"{str(result)}\n"
+                )
+
+                state["intermediate_summary"] = current_summary + summary_block
+                logger.info(f"✅ [Act] 已将工具信息和结果添加到总结中")
 
             return state
 
         except Exception as e:
             logger.error(f"❌ [Act] 工具执行失败: {e}", exc_info=True)
 
+            # 获取工具配置（即使失败也要设置）
+            from src.config.tools.retrieval_tools import get_tool_by_name
+            tool_config = get_tool_by_name(tool_name)
+            requires_summary = tool_config.get("requires_summary", True) if tool_config else True
+
+            # 如果 params 未定义（可能在参数构建时就失败了），使用空字典
+            error_params = params if 'params' in locals() else {"query": current_query}
+
             # 返回空结果，但保留动作记录
+            state["current_params"] = error_params
             state["actions"] = state.get("actions", []) + [{
                 "tool": tool_name,
-                "params": params,
+                "params": error_params,
                 "error": str(e)
             }]
             state["last_result"] = []
+            state["requires_summary"] = requires_summary
 
-            return state
-
-    async def observe(self, state: RetrievalState) -> Dict:
-        """
-        步骤3：观察结果，更新检索内容
-        """
-        logger.info(f"👀 [Observe] 观察结果")
-
-        try:
-            last_result = state.get("last_result", [])
-            retrieved_content = state.get("retrieved_content", {})
-            tool_name = state.get("current_tool", "")
-
-            # 处理工具返回的结果
-            if isinstance(last_result, list):
-                doc_name = state.get('doc_name', 'doc')
-
-                # 根据工具类型区分处理
-                if tool_name == "get_document_structure":
-                    # 文档结构信息作为特殊条目（List[str]）
-                    retrieved_content["_structure"] = "\n".join(last_result)
-                    logger.info(f"✅ [Observe] 已保存文档结构信息")
-                else:
-                    # 检索结果内容，处理新的结构化格式 List[Dict] 或旧的 List[str]
-                    for idx, item in enumerate(last_result):
-                        if isinstance(item, dict):
-                            # 新格式：包含 content、title、pages 的字典
-                            content = item.get("content", "")
-                            title = item.get("title", "未知章节")
-                            pages = item.get("pages", [])
-
-                            if content and content.strip():
-                                # 使用工具名和索引构建唯一key
-                                key = f"{doc_name}_{tool_name}_{idx}"
-                                retrieved_content[key] = {
-                                    "content": content,
-                                    "title": title,
-                                    "pages": pages
-                                }
-                        elif isinstance(item, str):
-                            # 兼容旧格式：纯字符串
-                            if item and item.strip():
-                                key = f"{doc_name}_{tool_name}_{idx}"
-                                retrieved_content[key] = {
-                                    "content": item,
-                                    "title": "未知章节",
-                                    "pages": []
-                                }
-
-                    logger.info(f"✅ [Observe] 新增 {len(last_result)} 个检索结果")
-
-            elif isinstance(last_result, dict):
-                # 兼容Dict格式（未来可能的扩展）
-                if "results" in last_result:
-                    for item in last_result.get("results", []):
-                        source = item.get("metadata", {}).get("page", "unknown")
-                        content = item.get("content", "")
-                        if content:
-                            key = f"{state.get('doc_name', 'doc')}_{source}"
-                            retrieved_content[key] = content
-                elif "chapters" in last_result:
-                    chapters_info = last_result.get("chapters", [])
-                    retrieved_content["_structure"] = chapters_info
-
-            # 记录观察（简化的结果摘要）
-            result_summary = f"Tool: {tool_name}, Results: {len(last_result) if isinstance(last_result, list) else 'dict'}"
-            state["observations"] = state.get("observations", []) + [result_summary]
-            state["retrieved_content"] = retrieved_content
-
-            logger.info(f"✅ [Observe] 已检索内容总数: {len([k for k in retrieved_content.keys() if not k.startswith('_')])}")
-
-            return state
-
-        except Exception as e:
-            logger.error(f"❌ [Observe] 观察失败: {e}", exc_info=True)
-
-            # 失败时保持原有状态
             return state
 
     async def evaluate(self, state: RetrievalState) -> Dict:
         """
-        步骤4：评估是否已获取足够信息
+        步骤4：评估中间总结是否足以回答用户查询
+
+        如果上一步跳过了 summary（工具不需要总结），则自动判断为需要继续检索
         """
-        logger.info(f"⚖️ [Evaluate] 评估检索结果")
+        logger.info(f"⚖️ [Evaluate] ========== 步骤3: 评估检索结果 ==========")
 
         try:
             # 使用Agent级别的LLM实例
             llm = self.llm
 
-            # 整理已检索内容
-            retrieved_content = state.get("retrieved_content", {})
-            content_items = []
-            for key, value in retrieved_content.items():
-                if key.startswith("_"):
-                    continue
+            # 获取中间总结
+            intermediate_summary = state.get("intermediate_summary", "")
+            retrieved_content = state.get("retrieved_content", [])
 
-                if isinstance(value, dict):
-                    # 新格式：包含 content、title、pages
-                    content = value.get("content", "")
-                    title = value.get("title", "未知章节")
-                    preview = content[:100] + "..." if len(content) > 100 else content
-                    content_items.append(f"- {title}: {preview}")
-                else:
-                    # 旧格式：字符串
-                    preview = value[:100] + "..." if len(value) > 100 else value
-                    content_items.append(f"- {key}: {preview}")
+            logger.info(f"⚖️ [Evaluate] 已检索内容: {len(retrieved_content)} 条")
+            logger.info(f"⚖️ [Evaluate] 中间总结长度: {len(intermediate_summary)} 字符")
 
-            content_summary = "\n".join(content_items)
+            # 如果中间总结为空（可能是跳过了 summary 节点）
+            if not intermediate_summary:
+                logger.info("⚠️ [Evaluate] 中间总结为空（工具不需要总结），自动继续检索")
+                state["is_complete"] = False
+                state["reason"] = "上一步工具不需要总结，继续检索"
+                return state
+
+            # 获取当前迭代信息
+            current_iteration = state.get("current_iteration", 0)
+            max_iterations = state.get("max_iterations", 5)
+            formatted_data = state.get("formatted_data", [])
+
+            # 构建页码信息供 LLM 参考
+            pages_info = ""
+            if formatted_data and isinstance(formatted_data, list):
+                pages_list = []
+                for item in formatted_data:
+                    title = item.get("title", "未知章节")
+                    pages = item.get("pages", [])
+                    if pages:
+                        pages_str = ", ".join(map(str, pages))
+                        pages_list.append(f"- {title}: 页码 {pages_str}")
+                if pages_list:
+                    pages_info = "\n".join(pages_list)
 
             prompt = f"""
-评估检索结果是否足以回答用户查询。
+用户查询: {state['query']}
 
-用户查询：{state['query']}
-已检索内容摘要：
-{content_summary}
+当前进度: 第 {current_iteration}/{max_iterations} 轮检索
+已检索内容数: {len(retrieved_content) if isinstance(retrieved_content, list) else 0} 条
 
-已检索条数：{len([k for k in retrieved_content.keys() if not k.startswith('_')])}
+# 检索总结
 
-判断是否已获取足够信息来回答查询。
+{intermediate_summary}
+
+# 涉及页码
+
+{pages_info if pages_info else "暂无页码信息"}
+
+# 任务
+
+请评估当前检索结果是否足以回答用户查询。
+
+**注意**：
+- 如果已达到第 {max_iterations} 轮且有相关内容，建议完成评估
+- reason 必须具体：is_complete=true 时说明涉及的关键页码，is_complete=false 时给出检索建议
 
 返回JSON格式：
 {{
     "is_complete": true/false,
-    "reason": "评估原因",
+    "reason": "详细评估原因（参考系统提示的格式要求）",
     "confidence": 0.0-1.0
 }}
 
@@ -973,7 +1171,7 @@ class RetrievalAgent(AgentBase):
 """
 
             # 使用 async_call_llm_chain
-            session_id = f"retrieval_{state.get('doc_name', 'default')}"
+            session_id = f"evaluate_{state.get('doc_name', 'default')}"
             response = await llm.async_call_llm_chain(
                 role=ReaderRole.RETRIEVAL_EVALUATOR,
                 input_prompt=prompt,
@@ -1003,9 +1201,13 @@ class RetrievalAgent(AgentBase):
                 is_complete = len(retrieved_content) > 0
                 reason = "默认评估：JSON解析失败"
 
-            logger.info(f"✅ [Evaluate] 评估结果: {'完成' if is_complete else '继续'} - {reason}")
+            logger.info(f"⚖️ [Evaluate] ========================================")
+            logger.info(f"⚖️ [Evaluate] 评估结果: {'✅ 检索完成' if is_complete else '🔄 继续检索'}")
+            logger.info(f"⚖️ [Evaluate] 评估原因: {reason}")
+            logger.info(f"⚖️ [Evaluate] ========================================")
 
             state["is_complete"] = is_complete
+            state["reason"] = reason  # 保存评估原因，供 format 节点使用
             return state
 
         except Exception as e:
@@ -1014,107 +1216,163 @@ class RetrievalAgent(AgentBase):
             # 失败时根据迭代次数判断
             current_iteration = state.get("current_iteration", 0)
             is_complete = current_iteration >= state["max_iterations"]
+            reason = f"达到最大迭代次数 {state['max_iterations']}"
 
             state["is_complete"] = is_complete
+            state["reason"] = reason
             return state
 
     async def summary(self, state: RetrievalState) -> Dict:
         """
-        步骤5：总结检索结果
+        步骤3：累积检索数据并对当前所有结果进行中间总结（循环内）
 
-        使用 LLM 将检索到的内容格式化，包括：
-        - 内容来源（title、pages）
-        - 内容摘要
+        每次检索后：
+        1. 累积 last_result 到 retrieved_content
+        2. 对所有累积数据进行总结
+        返回：
+        - intermediate_summary: 中间总结（供 evaluate 评估）
+        - formatted_data: 格式化的原始数据（供最终 format 使用）
         """
-        logger.info(f"📝 [Summary] 开始总结检索结果")
+        logger.info(f"📝 [Summary] ========== 步骤2.5: 累积并总结数据 ==========")
 
         try:
-            retrieved_content = state.get("retrieved_content", {})
+            # 步骤1：累积本次检索结果到 retrieved_content
+            last_result = state.get("last_result", [])
+            retrieved_content = state.get("retrieved_content", [])
 
-            # 过滤出实际检索的内容（排除特殊条目）
-            content_items = []
-            for key, value in retrieved_content.items():
-                if key.startswith("_"):
-                    continue  # 跳过特殊条目（如 _structure）
+            logger.info(f"📝 [Summary] 本次结果: {len(last_result)} 条")
+            logger.info(f"📝 [Summary] 已累积: {len(retrieved_content)} 条")
 
-                if isinstance(value, dict):
-                    # 新格式：包含 content、title、pages
-                    content_items.append({
-                        "content": value.get("content", ""),
-                        "title": value.get("title", "未知章节"),
-                        "pages": value.get("pages", [])
-                    })
-                elif isinstance(value, str):
-                    # 旧格式兼容：纯字符串
-                    content_items.append({
-                        "content": value,
-                        "title": "未知章节",
-                        "pages": []
-                    })
+            # 确保是 list 类型
+            if not isinstance(retrieved_content, list):
+                retrieved_content = []
 
-            if not content_items:
+            # 累积新结果
+            if isinstance(last_result, list) and last_result:
+                for item in last_result:
+                    if isinstance(item, dict):
+                        # 新格式：包含 content、title、pages
+                        retrieved_content.append(item)
+                    elif isinstance(item, str) and item.strip():
+                        # 兼容旧格式：纯字符串
+                        retrieved_content.append({
+                            "content": item,
+                            "title": "未知章节",
+                            "pages": []
+                        })
+
+                logger.info(f"✅ [Summary] 累积 {len(last_result)} 条新结果，总计 {len(retrieved_content)} 条")
+
+            # 更新 state
+            state["retrieved_content"] = retrieved_content
+
+            # 步骤2：检查是否有数据
+            if not retrieved_content:
                 logger.warning("⚠️ [Summary] 没有检索到任何内容")
-                state["final_summary"] = "未检索到相关内容。"
+                state["intermediate_summary"] = "未检索到相关内容。"
+                state["formatted_data"] = []
                 return state
 
-            # 构建 LLM 提示
+            # 步骤3：构建格式化的原始数据
+            formatted_data = []
             items_text = ""
-            for idx, item in enumerate(content_items, 1):
-                pages_str = ", ".join(map(str, item["pages"])) if item["pages"] else "未知"
+
+            for idx, item in enumerate(retrieved_content, 1):
+                if isinstance(item, dict):
+                    content = item.get("content", "")
+                    title = item.get("title", "未知章节")
+                    pages = item.get("pages", [])
+                elif isinstance(item, str):
+                    content = item
+                    title = "未知章节"
+                    pages = []
+                else:
+                    continue
+
+                # 格式化单条数据
+                pages_str = ", ".join(map(str, pages)) if pages else "未知"
+                formatted_item = {
+                    "index": idx,
+                    "title": title,
+                    "pages": pages,
+                    "content": content
+                }
+                formatted_data.append(formatted_item)
+
+                # 构建 LLM 提示文本（限制长度避免过长）
+                content_preview = content
                 items_text += f"\n\n【条目 {idx}】\n"
-                items_text += f"来源章节: {item['title']}\n"
+                items_text += f"来源章节: {title}\n"
                 items_text += f"页码: {pages_str}\n"
-                items_text += f"内容:\n{item['content'][:500]}{'...' if len(item['content']) > 500 else ''}\n"
+                items_text += f"内容:\n{content_preview}\n"
 
+            # 步骤4：使用 LLM 生成中间总结
             prompt = f"""
-请对以下检索结果进行格式化总结。
+当前累积检索结果（共 {len(formatted_data)} 条）：
 
-用户查询：{state.get('query', '')}
-
-检索到 {len(content_items)} 条内容：
 {items_text}
 
-请按照以下格式总结：
+# 任务
 
-## 📚 检索结果总结
+对以上检索内容进行客观总结，提取关键信息并压缩冗余内容。
 
-### 📑 来源信息
-- 涉及章节：[列出所有相关章节标题]
-- 涉及页码：[列出所有页码范围]
+总结应包含：
+1. 涵盖的章节和页码范围
+2. 每个章节的核心内容（事实、数据、结论、概念等）
+3. 重要的数值、图表、公式描述
+4. 清晰的结构组织（按章节或主题）
 
-### 📝 内容摘要
-[对检索到的内容进行归纳总结，突出与用户查询相关的关键信息]
-
-### 📄 详细内容
-[按章节组织，展示每个章节的具体内容]
-
-请用清晰、专业的语言进行总结。
+请保持客观中立，忠实原文，使用 Markdown 格式呈现。
 """
 
             # 使用 async_call_llm_chain
-            session_id = f"retrieval_{state.get('doc_name', 'default')}"
+            session_id = f"summary_{state.get('doc_name', 'default')}"
             summary_result = await self.llm.async_call_llm_chain(
                 role=ReaderRole.CONTEXT_SUMMARIZER,
                 input_prompt=prompt,
                 session_id=session_id
             )
 
-            logger.info(f"✅ [Summary] 总结完成，长度: {len(summary_result)} 字符")
+            logger.info(f"✅ [Summary] 中间总结完成，长度: {len(summary_result)} 字符")
+            logger.info(f"✅ [Summary] 格式化数据条数: {len(formatted_data)}")
 
-            state["final_summary"] = summary_result
+            # 保存中间总结和格式化原始数据
+            state["intermediate_summary"] = summary_result
+            state["formatted_data"] = formatted_data
+
             return state
 
         except Exception as e:
-            logger.error(f"❌ [Summary] 总结失败: {e}", exc_info=True)
+            logger.error(f"❌ [Summary] 中间总结失败: {e}", exc_info=True)
 
             # 失败时返回简单的提示信息
-            retrieved_content = state.get("retrieved_content", {})
-            content_count = len([k for k in retrieved_content.keys() if not k.startswith("_")])
+            retrieved_content = state.get("retrieved_content", [])
+            content_count = len(retrieved_content) if isinstance(retrieved_content, list) else 0
 
-            fallback_summary = f"总结生成失败，但已检索到 {content_count} 条相关内容。"
+            fallback_summary = f"中间总结生成失败，但已检索到 {content_count} 条相关内容。"
 
-            state["final_summary"] = fallback_summary
+            state["intermediate_summary"] = fallback_summary
+            state["formatted_data"] = []
             return state
+
+    def should_summarize(self, state: RetrievalState) -> str:
+        """
+        判断是否需要执行 summary
+
+        根据上一个工具的 requires_summary 配置决定
+
+        Returns:
+            "summary" - 需要总结
+            "evaluate" - 直接评估（跳过总结）
+        """
+        requires_summary = state.get("requires_summary", True)
+
+        if requires_summary:
+            logger.info(f"📝 [Route] 工具需要总结，进入 summary 节点")
+            return "summary"
+        else:
+            logger.info(f"⏭️ [Route] 工具不需要总结，直接进入 evaluate 节点")
+            return "evaluate"
 
     def should_continue(self, state: RetrievalState) -> str:
         """
@@ -1136,4 +1394,198 @@ class RetrievalAgent(AgentBase):
             return "finish"
 
         return "continue"
+
+    async def format(self, state: RetrievalState) -> Dict:
+        """
+        步骤5：最终精准总结（根据页码提取原文并生成精准答案）
+
+        根据：
+        1. evaluate 的 reason（缺少什么信息或为什么足够）
+        2. intermediate_summary（中间总结）
+        3. 用户的 query
+
+        使用 LLM：
+        1. 判断精准回答问题需要哪些页码
+        2. 从 formatted_data 中提取这些页码的原文
+        3. 生成最终总结，尽可能保留原文信息、数据、图片内容
+
+        返回：
+        - final_summary: 最终精准总结
+        - selected_pages: 选择的页码列表
+        """
+        logger.info(f"🎯 [Format] ========== 步骤4: 生成最终总结 ==========")
+
+        try:
+            logger.info(f"🎯 [Format] 开始生成精准答案...")
+            # 获取必要数据
+            query = state.get("query", "")
+            intermediate_summary = state.get("intermediate_summary", "")
+            formatted_data = state.get("formatted_data", [])
+            reason = state.get("reason", "")  # evaluate 的评估原因
+            if not formatted_data:
+                logger.warning("⚠️ [Format] 没有格式化数据，使用中间总结作为最终总结")
+                state["final_summary"] = intermediate_summary
+                state["selected_pages"] = []
+                return state
+
+            # 步骤1：使用 LLM 判断需要哪些页码
+            # 构建页码信息列表
+            pages_info = []
+            for item in formatted_data:
+                pages = item.get("pages", [])
+                title = item.get("title", "未知章节")
+                if pages:
+                    pages_str = ", ".join(map(str, pages))
+                    pages_info.append(f"- {title}: 页码 {pages_str}")
+
+            pages_info_text = "\n".join(pages_info)
+
+            page_selection_prompt = f"""
+# 页码选择任务
+
+用户查询：{query}
+
+评估结论：{reason}
+
+检索总结：
+{intermediate_summary}
+
+# 可用页码清单
+
+{pages_info_text}
+
+# 选择要求
+
+从以上页码中选择最能精准回答用户问题的关键页码。
+
+选择原则：
+- 优先选择直接回答问题的页码
+- 包含重要数据、图表、结论的页码
+- 如果多个章节都包含核心信息，可选择多个
+- 避免选择次要或重复的页码
+
+返回JSON格式：
+{{
+    "selected_pages": [1, 2, 3, ...],
+    "selection_reason": "选择理由"
+}}
+
+只返回JSON，不要其他内容。
+"""
+
+            # 使用 LLM 选择页码
+            session_id = f"format_{state.get('doc_name', 'default')}"
+            page_selection_response = await self.llm.async_call_llm_chain(
+                role=ReaderRole.PAGE_SELECTOR,
+                input_prompt=page_selection_prompt,
+                session_id=session_id
+            )
+
+            # 解析页码选择结果
+            selected_pages = []
+            try:
+                selection_result = json.loads(page_selection_response.strip())
+                selected_pages = selection_result.get("selected_pages", [])
+                logger.info(f"✅ [Format] LLM 选择页码: {selected_pages}")
+            except json.JSONDecodeError:
+                logger.warning("⚠️ [Format] 页码选择JSON解析失败，使用所有页码")
+                # 收集所有页码
+                all_pages = set()
+                for item in formatted_data:
+                    pages = item.get("pages", [])
+                    all_pages.update(pages)
+                selected_pages = sorted(list(all_pages))
+
+            # 步骤2：根据选择的页码提取原文
+            selected_pages_set = {str(p) for p in selected_pages}
+            selected_content = []
+            for item in formatted_data:
+                item_pages = item.get("pages", [])
+                # 检查是否有交集（统一为字符串比较）
+                if any(str(page) in selected_pages_set for page in item_pages):
+                    selected_content.append({
+                        "title": item.get("title", ""),
+                        "pages": item_pages,
+                        "content": item.get("content", "")
+                    })
+
+            if not selected_content:
+                # 如果没有匹配，使用所有内容
+                logger.warning("⚠️ [Format] 没有匹配的页码，使用所有内容")
+                selected_content = formatted_data
+
+            # 步骤3：构建最终总结提示
+            selected_items_text = ""
+            for idx, item in enumerate(selected_content, 1):
+                pages_str = ", ".join(map(str, item.get("pages", []))) if item.get("pages") else "未知"
+                selected_items_text += f"\n\n【原文 {idx}】\n"
+                selected_items_text += f"来源章节: {item.get('title', '未知')}\n"
+                selected_items_text += f"页码: {pages_str}\n"
+                selected_items_text += f"内容:\n{item.get('content', '')}\n"
+
+            final_summary_prompt = f"""
+# 精准回答生成任务
+
+用户查询：{query}
+
+已选定的原文内容（{len(selected_content)} 条）：
+{selected_items_text}
+
+# 生成要求
+
+基于以上原文，生成精准的最终回答：
+
+1. **直接回答**：首先直接回答用户的问题
+2. **引用原文**：保留原文中的关键信息、数据、图表描述、公式等
+3. **标注来源**：明确标注信息来自哪些章节和页码
+4. **保留细节**：重要的数据、步骤、结论不要省略或改写
+5. **保留和问题相关的信息**：确保答案中包含与用户问题直接相关的所有信息，避免遗漏关键内容。其他不相关的信息可以省略。
+
+# 推荐格式
+
+## 核心回答
+
+[简明扼要地回答用户问题]
+
+## 详细说明
+
+### 章节名称（页码范围）
+
+[该部分的详细内容，保留原文关键信息]
+
+### 章节名称（页码范围）
+
+[该部分的详细内容，保留原文关键信息]
+
+请使用专业、准确的语言，确保答案的完整性和可靠性。
+"""
+
+            # 使用 LLM 生成最终总结
+            final_summary = await self.llm.async_call_llm_chain(
+                role=ReaderRole.CONTEXT_SUMMARIZER,
+                input_prompt=final_summary_prompt,
+                session_id=session_id,
+                #session_id="final_summary_" + state.get('doc_name', 'default')
+            )
+
+            logger.info(f"✅ [Format] 最终总结完成，长度: {len(final_summary)} 字符")
+            logger.info(f"✅ [Format] 选择页码: {selected_pages}")
+
+            # 保存结果
+            state["final_summary"] = final_summary
+            state["selected_pages"] = selected_pages
+
+            return state
+
+        except Exception as e:
+            logger.error(f"❌ [Format] 最终总结失败: {e}", exc_info=True)
+
+            # 失败时使用中间总结作为最终总结
+            intermediate_summary = state.get("intermediate_summary", "")
+            fallback_summary = f"## 检索结果\n\n{intermediate_summary}\n\n---\n\n注：最终格式化失败，以上为中间总结结果。"
+
+            state["final_summary"] = fallback_summary
+            state["selected_pages"] = []
+
+            return state
 

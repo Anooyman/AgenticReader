@@ -137,11 +137,12 @@ class LLMBase:
         session_id: str,
         output_parser=StrOutputParser(),
         system_format_dict: dict = None,
-        tools: Optional[List[Dict]] = None
+        tools: Optional[List[Dict]] = None,
+        enable_llm_summary: bool = True
     ) -> Any:
         """
         主要的异步 LLM 调用方法，支持工具调用。
-        
+
         Args:
             role (str): PDFReaderRole 枚举值
             input_prompt (str): 输入提示
@@ -149,10 +150,15 @@ class LLMBase:
             output_parser: 输出解析器
             system_format_dict: 系统提示词格式化参数
             tools: 工具定义列表
-            
+            enable_llm_summary: 是否启用LLM历史总结（默认True，False则使用长度截断）
+
         Returns:
             Any: LLM 响应对象
         """
+        # 预先创建消息历史（如果不存在），以便控制 LLM 总结功能
+        if session_id not in self.message_histories:
+            self.get_message_history(session_id, enable_llm_summary=enable_llm_summary)
+
         # Format system prompt
         system_prompt = self._format_system_prompt(role, system_format_dict)
 
@@ -592,7 +598,8 @@ class LLMBase:
         session_id: str,
         output_parser=StrOutputParser(),
         system_format_dict: dict = None,
-        tools: Optional[List[Dict]] = None
+        tools: Optional[List[Dict]] = None,
+        enable_llm_summary: bool = True
     ) -> Any:
         """
         同步版本的 LLM 调用方法，适用于非异步环境。
@@ -604,10 +611,15 @@ class LLMBase:
             output_parser: 输出解析器
             system_format_dict: 系统提示词格式化参数
             tools: 工具定义列表
+            enable_llm_summary: 是否启用LLM历史总结（默认True，False则使用长度截断）
 
         Returns:
             Any: LLM 响应对象
         """
+        # 预先创建消息历史（如果不存在），以便控制 LLM 总结功能
+        if session_id not in self.message_histories:
+            self.get_message_history(session_id, enable_llm_summary=enable_llm_summary)
+
         # 调试：检查调用前的消息历史
         if session_id in self.message_histories:
             history = self.message_histories[session_id]

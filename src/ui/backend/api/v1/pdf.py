@@ -20,46 +20,63 @@ from ...services.session_service import SessionService
 from ...services.chat_service import chat_service
 from .config import get_current_provider, get_current_pdf_preset
 
-# 导入PDF处理器
+# 导入 IndexingAgent
 try:
-    from src.readers.pdf import PDFReader
+    from src.agents.indexing import IndexingAgent
 except ImportError as e:
     logger = get_logger(__name__)
-    logger.error(f"无法导入PDFReader: {e}")
-    PDFReader = None
+    logger.error(f"无法导入 IndexingAgent: {e}")
+    IndexingAgent = None
 
 router = APIRouter(prefix="/pdf", tags=["PDF"])
 logger = get_logger(__name__)
 
 
 async def process_pdf_async(filename: str, provider: str = "openai", pdf_preset: str = "high"):
-    """异步处理PDF文件"""
+    """异步处理PDF文件 - 使用 IndexingAgent"""
     try:
-        if PDFReader is None:
-            logger.error("PDFReader未正确导入")
+        if IndexingAgent is None:
+            logger.error("IndexingAgent 未正确导入")
             return False
-
-        # 初始化PDF阅读器
-        pdf_reader = PDFReader(provider=provider, pdf_preset=pdf_preset)
 
         # 获取文档名（不包含.pdf后缀）
         doc_name = filename.replace('.pdf', '') if filename.endswith('.pdf') else filename
 
-        logger.info(f"🔄 开始处理PDF文件: {doc_name}")
+        # 检查PDF文件是否存在
+        pdf_path = settings.data_dir / "pdf" / f"{doc_name}.pdf"
+        if not pdf_path.exists():
+            logger.error(f"PDF文件不存在: {pdf_path}")
+            return False
 
-        # 调用PDF处理方法（这会进行完整的处理流程）
-        pdf_reader.process_pdf(doc_name, save_data_flag=True)
+        logger.info(f"🔄 开始索引PDF文件: {doc_name}")
 
-        logger.info(f"✅ PDF处理完成: {doc_name}")
+        # 初始化 IndexingAgent
+        indexing_agent = IndexingAgent()
+
+        # 调用 IndexingAgent 进行索引
+        result = await indexing_agent.graph.ainvoke({
+            "doc_path": str(pdf_path),
+            "doc_name": doc_name,
+            "doc_type": "pdf",
+            "is_complete": False
+        })
+
+        # 检查索引是否成功
+        is_complete = result.get("is_complete", False)
+        if not is_complete:
+            logger.error(f"❌ PDF索引未完成: {doc_name}")
+            return False
+
+        logger.info(f"✅ PDF索引完成: {doc_name}")
 
         # 初始化聊天服务
         logger.info(f"🔄 初始化聊天服务: {doc_name}")
-        chat_initialized = chat_service.initialize_pdf_reader(doc_name, provider=provider, pdf_preset=pdf_preset)
+        chat_initialized = chat_service.initialize_pdf_reader(doc_name)
 
         if chat_initialized:
             logger.info(f"✅ 聊天服务初始化成功: {doc_name}")
-            
-            # 🔥 关键修复：更新全局文档状态，确保前端能获取到正确状态
+
+            # 更新全局文档状态
             from .config import update_document_state
             update_document_state(doc_name, has_pdf_reader=True, has_web_reader=False)
             logger.info(f"📄 文档状态已更新: {doc_name}")
@@ -70,6 +87,8 @@ async def process_pdf_async(filename: str, provider: str = "openai", pdf_preset:
 
     except Exception as e:
         logger.error(f"❌ PDF处理失败: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         return False
 
 

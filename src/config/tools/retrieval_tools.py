@@ -23,6 +23,7 @@ RETRIEVAL_TOOLS_CONFIG: List[Dict[str, Any]] = [
         },
         "enabled": True,
         "priority": 1,
+        "requires_summary": True,  # 返回内容需要总结
     },
     {
         "name": "extract_titles_from_structure",
@@ -33,6 +34,7 @@ RETRIEVAL_TOOLS_CONFIG: List[Dict[str, Any]] = [
         },
         "enabled": True,
         "priority": 2,
+        "requires_summary": False,  # 仅返回标题列表，不需要总结
     },
     {
         "name": "search_by_title",
@@ -43,6 +45,7 @@ RETRIEVAL_TOOLS_CONFIG: List[Dict[str, Any]] = [
         },
         "enabled": True,
         "priority": 3,
+        "requires_summary": True,  # 返回内容需要总结
     },
     {
         "name": "get_document_structure",
@@ -53,6 +56,7 @@ RETRIEVAL_TOOLS_CONFIG: List[Dict[str, Any]] = [
         },
         "enabled": True,
         "priority": 4,
+        "requires_summary": False,  # 返回结构信息，不需要总结
     },
 ]
 

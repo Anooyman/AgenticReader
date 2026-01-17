@@ -54,30 +54,41 @@ class ChapterProcessor:
             List[Tuple[title, summary, refactor_content, pages, data]]
         """
         async def process_single_chapter(agenda_data: Dict[str, Any]) -> Tuple[str, str, str, Any, Any]:
+            import time
             title = agenda_data.get("title")
             data = agenda_data.get("data")
             pages = agenda_data.get("pages")
-            
+
+            logger.info(f"🚀 [并发章节] 开始处理章节: {title} - {time.strftime('%H:%M:%S.%f')[:-3]}")
+
             content_values = list(data.values()) if isinstance(data, dict) else data
-            
+
             # 并行执行总结和重构
             summary_prompt = f"请总结{title}的内容，上下文如下：{content_values}"
             refactor_prompt = f"请重新整理Content中的内容。\n\n Content：{content_values}"
-            
+
+            logger.info(f"📡 [并发章节] 发送2个并行请求 (summary + refactor) - {title} - {time.strftime('%H:%M:%S.%f')[:-3]}")
+
+            # 禁用 LLM 历史总结，改用长度截断（章节处理不需要保留历史上下文）
             summary, refactor_content = await asyncio.gather(
-                self.llm_client.async_call_llm_chain(summary_role, summary_prompt, "summary"),
-                self.llm_client.async_call_llm_chain(refactor_role, refactor_prompt, "refactor")
+                self.llm_client.async_call_llm_chain(summary_role, summary_prompt, "summary", enable_llm_summary=False),
+                self.llm_client.async_call_llm_chain(refactor_role, refactor_prompt, "refactor", enable_llm_summary=False)
             )
-            
-            logger.info(f"章节 '{title}' 处理完成")
+
+            logger.info(f"✅ [并发章节] 章节处理完成: {title} - {time.strftime('%H:%M:%S.%f')[:-3]}")
             return title, summary or "", refactor_content or "", pages, data
-        
+
+        import time
+        logger.info(f"🚀 ========== 开始并行处理 {len(agenda_data_list)} 个章节 ==========")
+        logger.info(f"⚙️  并发配置: 最大并发数 = {self.max_concurrent}")
+        logger.info(f"⏰ 启动时间: {time.strftime('%H:%M:%S.%f')[:-3]}")
+
         results = await parallel_process_with_filter(
             agenda_data_list,
             process_single_chapter,
             self.max_concurrent
         )
-        
+
         return results
     
     async def process_detail_summaries(
@@ -253,9 +264,16 @@ class PageExtractor:
         
         async def extract_single_page(idx: int, path: str) -> Dict[str, Any]:
             """提取单页内容"""
+            import time
             async with semaphore:
                 encoded_image = None
                 try:
+                    # 提取页码用于日志
+                    match = re.search(r'page_(\d+)\.png', path)
+                    page_num = match.group(1) if match else str(idx + 1)
+
+                    logger.info(f"🚀 [并发] 开始处理页面 {page_num} (索引 {idx}) - {time.strftime('%H:%M:%S.%f')[:-3]}")
+
                     # 读取并编码图片文件
                     with open(path, 'rb') as img_file:
                         img_data = img_file.read()
@@ -276,19 +294,17 @@ class PageExtractor:
                         ],
                     )]
 
+                    logger.info(f"📡 [并发] 发送API请求 - 页面 {page_num} - {time.strftime('%H:%M:%S.%f')[:-3]}")
+
                     # 异步调用LLM处理
-                    loop = asyncio.get_event_loop()
-                    response = await loop.run_in_executor(
-                        None, self.llm_client.chat_model.invoke, message
-                    )
+                    # 使用 ainvoke 异步方法（LangChain原生支持）
+                    response = await self.llm_client.chat_model.ainvoke(message)
+
+                    logger.info(f"✅ [并发] 收到响应 - 页面 {page_num} - {time.strftime('%H:%M:%S.%f')[:-3]}")
 
                     if not response or not response.content:
-                        logger.warning(f"页面 {idx + 1} LLM返回空内容")
+                        logger.warning(f"页面 {page_num} LLM返回空内容")
                         return None
-
-                    # 提取页码
-                    match = re.search(r'page_(\d+)\.png', path)
-                    page_num = match.group(1) if match else str(idx + 1)
 
                     return {
                         "data": response.content,
@@ -313,9 +329,12 @@ class PageExtractor:
 
         # 创建所有任务
         tasks = [extract_single_page(idx, path) for idx, path in enumerate(image_paths)]
-        
-        logger.info(f"🚀 开始并行提取 {len(tasks)} 页内容 (最大并发: {self.max_concurrent})")
-        
+
+        import time
+        logger.info(f"🚀 ========== 开始并行提取 {len(tasks)} 页内容 ==========")
+        logger.info(f"⚙️  并发配置: 最大并发数 = {self.max_concurrent}")
+        logger.info(f"⏰ 启动时间: {time.strftime('%H:%M:%S.%f')[:-3]}")
+
         # 并行执行所有任务
         all_results = await asyncio.gather(*tasks, return_exceptions=True)
         
