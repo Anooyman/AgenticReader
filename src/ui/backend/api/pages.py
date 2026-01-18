@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Request
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 
 from ..config import settings
 
@@ -38,6 +38,12 @@ async def data_page(request: Request):
 async def chapters_page(request: Request):
     """章节管理页面"""
     return templates.TemplateResponse("chapters.html", {"request": request})
+
+
+@router.get("/structure-editor")
+async def structure_editor_page():
+    """结构编辑旧链接，重定向到章节管理"""
+    return RedirectResponse(url="/chapters", status_code=308)
 
 
 @router.get("/favicon.ico")

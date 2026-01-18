@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from .config import settings, setup_logging
-from .api.v1 import sessions, config as config_api, pdf, chat, data, chapters
+from .api.v1 import sessions, config as config_api, pdf, chat, data, chapters, structure
 from .api import websocket
 
 # 设置日志
@@ -47,6 +47,7 @@ app.include_router(pdf.router, prefix="/api/v1", tags=["pdf"])
 app.include_router(chat.router, prefix="/api/v1", tags=["chat"])
 app.include_router(data.router, prefix="/api/v1", tags=["data"])
 app.include_router(chapters.router, prefix="/api/v1/chapters", tags=["chapters"])
+app.include_router(structure.router, prefix="/api/v1/structure", tags=["structure"])
 app.include_router(websocket.router, tags=["websocket"])
 
 # 页面路由

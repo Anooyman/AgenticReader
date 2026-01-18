@@ -18,7 +18,7 @@ import logging
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.core.llm.client import LLMBase
-from src.config.prompts import ReaderRole
+from src.config.prompts.common_prompts import CommonRole
 
 # 配置日志
 logging.basicConfig(
@@ -59,7 +59,7 @@ def test_basic_llm_call():
         print(f"👤 用户: {user_input}")
 
         response = llm_client.call_llm_chain(
-            role=ReaderRole.CHAPTER_MATCHER,
+            role=CommonRole.CHAPTER_MATCHER,
             input_prompt=user_input,
             session_id=session_id
         )
@@ -103,7 +103,7 @@ def test_multi_turn_conversation():
             print(f"👤 用户: {user_input}")
 
             response = llm_client.call_llm_chain(
-                role=ReaderRole.CHAPTER_MATCHER,
+                role=CommonRole.CHAPTER_MATCHER,
                 input_prompt=user_input,
                 session_id=session_id
             )
@@ -140,7 +140,7 @@ def test_session_management():
             print(f"向 {session_id} 发送: {message}")
 
             llm_client.call_llm_chain(
-                role=ReaderRole.CHAPTER_MATCHER,
+                role=CommonRole.CHAPTER_MATCHER,
                 input_prompt=message,
                 session_id=session_id
             )

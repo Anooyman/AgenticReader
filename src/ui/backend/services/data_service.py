@@ -101,59 +101,62 @@ class DataService:
             raise
 
     async def list_documents(self) -> List[Dict[str, Any]]:
-        """列出所有已处理的文档"""
+        """列出所有已处理的文档
+
+        之前仅依赖 output 目录，导致仅有 json/structure 数据的文档无法出现在下拉列表。
+        现在合并 output 与 json_data 目录的文档集合，并补齐基础信息，保证章节页可见。
+        """
         try:
-            documents = []
+            documents: List[Dict[str, Any]] = []
 
-            # 从output目录获取已处理的文档
+            # 收集所有可能的文档名称（output 与 json_data 目录）
+            doc_names = set()
             if self.output_dir.exists():
-                for doc_dir in self.output_dir.iterdir():
-                    if not doc_dir.is_dir():
-                        continue
+                doc_names.update([d.name for d in self.output_dir.iterdir() if d.is_dir()])
+            if self.json_data_dir.exists():
+                doc_names.update([d.name for d in self.json_data_dir.iterdir() if d.is_dir()])
 
-                    doc_name = doc_dir.name
+            for doc_name in sorted(doc_names):
+                output_dir = self.output_dir / doc_name
+                json_folder = self.json_data_dir / doc_name
+                vector_db_path = self.vector_db_dir / f"{doc_name}_data_index"
+                images_path = self.pdf_image_dir / doc_name
 
-                    # 获取详细的数据信息
-                    json_folder = self.json_data_dir / doc_name  # JSON文件夹
-                    vector_db_path = self.vector_db_dir / f"{doc_name}_data_index"
-                    images_path = self.pdf_image_dir / doc_name
-
-                    # 获取文档信息
-                    doc_info = {
-                        "name": doc_name,
-                        "has_json": json_folder.exists(),
-                        "has_vector_db": vector_db_path.exists(),
-                        "has_images": images_path.exists(),
-                        "has_summary": False,
-                        "output_files": [],
-                        "created_time": None,
-                        "modified_time": None,
-                        "size": 0,
-                        # 新增：详细的数据大小信息
-                        "data_details": {
-                            "json": {
-                                "size": self._get_dir_size(json_folder) if json_folder.exists() else 0,
-                                "size_formatted": self._format_size(self._get_dir_size(json_folder)) if json_folder.exists() else "0 B"
-                            },
-                            "vector_db": {
-                                "size": self._get_dir_size(vector_db_path) if vector_db_path.exists() else 0,
-                                "size_formatted": self._format_size(self._get_dir_size(vector_db_path)) if vector_db_path.exists() else "0 B"
-                            },
-                            "images": {
-                                "size": self._get_dir_size(images_path) if images_path.exists() else 0,
-                                "size_formatted": self._format_size(self._get_dir_size(images_path)) if images_path.exists() else "0 B",
-                                "count": len(list(images_path.glob("*"))) if images_path.exists() else 0
-                            },
-                            "summary": {
-                                "size": 0,
-                                "size_formatted": "0 B",
-                                "files": []
-                            }
+                doc_info = {
+                    "name": doc_name,
+                    "has_json": json_folder.exists(),
+                    "has_vector_db": vector_db_path.exists(),
+                    "has_images": images_path.exists(),
+                    "has_summary": False,
+                    "output_files": [],
+                    "created_time": None,
+                    "modified_time": None,
+                    "size": 0,
+                    "data_details": {
+                        "json": {
+                            "size": self._get_dir_size(json_folder) if json_folder.exists() else 0,
+                            "size_formatted": self._format_size(self._get_dir_size(json_folder)) if json_folder.exists() else "0 B"
+                        },
+                        "vector_db": {
+                            "size": self._get_dir_size(vector_db_path) if vector_db_path.exists() else 0,
+                            "size_formatted": self._format_size(self._get_dir_size(vector_db_path)) if vector_db_path.exists() else "0 B"
+                        },
+                        "images": {
+                            "size": self._get_dir_size(images_path) if images_path.exists() else 0,
+                            "size_formatted": self._format_size(self._get_dir_size(images_path)) if images_path.exists() else "0 B",
+                            "count": len(list(images_path.glob("*"))) if images_path.exists() else 0
+                        },
+                        "summary": {
+                            "size": 0,
+                            "size_formatted": "0 B",
+                            "files": []
                         }
                     }
+                }
 
-                    # 统计output文件
-                    for file in doc_dir.glob("*"):
+                # 统计 output 文件（如果存在）
+                if output_dir.exists():
+                    for file in output_dir.glob("*"):
                         if file.is_file():
                             doc_info["output_files"].append(file.name)
                             file_size = file.stat().st_size
@@ -174,17 +177,33 @@ class DataService:
 
                     # 获取时间信息
                     try:
-                        stat = doc_dir.stat()
+                        stat = output_dir.stat()
                         doc_info["created_time"] = datetime.fromtimestamp(stat.st_ctime).isoformat()
                         doc_info["modified_time"] = datetime.fromtimestamp(stat.st_mtime).isoformat()
-                    except:
+                    except Exception:
                         pass
 
-                    doc_info["size_formatted"] = self._format_size(doc_info["size"])
-                    documents.append(doc_info)
+                    # 如果 output 存在则用累计大小；否则至少给出 json/vector/images 的总和
+                    doc_info["size"] = doc_info["size"] or (
+                        doc_info["data_details"]["json"]["size"] +
+                        doc_info["data_details"]["vector_db"]["size"] +
+                        doc_info["data_details"]["images"]["size"]
+                    )
 
-            # 按修改时间排序
-            documents.sort(key=lambda x: x.get("modified_time", ""), reverse=True)
+                else:
+                    # 没有 output 也要计算基础大小
+                    doc_info["size"] = (
+                        doc_info["data_details"]["json"]["size"] +
+                        doc_info["data_details"]["vector_db"]["size"] +
+                        doc_info["data_details"]["images"]["size"]
+                    )
+                    doc_info["size_formatted"] = self._format_size(doc_info["size"])
+
+                doc_info["size_formatted"] = self._format_size(doc_info["size"])
+                documents.append(doc_info)
+
+            # 按修改时间排序（没有时间的排后）
+            documents.sort(key=lambda x: x.get("modified_time") or "", reverse=True)
             return documents
 
         except Exception as e:

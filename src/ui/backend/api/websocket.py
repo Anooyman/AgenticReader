@@ -94,10 +94,13 @@ async def websocket_chat(websocket: WebSocket):
                     continue
 
                 # 记录当前ChatService状态用于调试
-                logger.info(f"📊 WebSocket处理消息 - 当前ChatService状态: doc_name={chat_status['doc_name']}, reader_type={chat_status['reader_type']}")
+                logger.info(
+                    "📊 WebSocket处理消息 - 当前ChatService状态: doc_name=%s, reader_type=%s",
+                    chat_status.get("doc_name"), chat_status.get("reader_type")
+                )
 
                 # 调用聊天服务处理消息
-                answer = chat_service.chat(message)
+                answer = await chat_service.chat(message)
 
                 if answer.startswith("❌"):
                     # 发送错误消息

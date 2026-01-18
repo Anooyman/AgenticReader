@@ -124,6 +124,8 @@ class ChatService:
             "initialized": self.current_doc_name is not None,
             "doc_name": self.current_doc_name,
             "doc_type": self.doc_type,
+            # 保持向后兼容，外部部分代码使用 reader_type
+            "reader_type": self.doc_type,
             "has_agent": self.answer_agent is not None
         }
 

@@ -9,7 +9,6 @@ from pathlib import Path
 from ...config import settings, get_logger
 from .config import get_current_provider, get_current_pdf_preset
 from src.core.processing.parallel_processor import ChapterProcessor
-from src.config.prompts.reader_prompts import ReaderRole
 
 logger = get_logger(__name__)
 
@@ -57,7 +56,7 @@ async def get_document_chapters(doc_name: str) -> Dict[str, Any]:
         agenda_cache_path = settings.data_dir / "agenda" / f"{doc_name}_agenda.json"
         chapters = []
         chapter_dict = {}
-        
+
         if agenda_cache_path.exists():
             # 从缓存读取
             try:
@@ -77,8 +76,42 @@ async def get_document_chapters(doc_name: str) -> Dict[str, Any]:
                 logger.info(f"📚 从缓存加载了 {len(chapters)} 个章节")
             except Exception as cache_error:
                 logger.warning(f"从缓存提取章节信息失败: {cache_error}")
-        
-        # 如果缓存不存在，尝试从向量数据库读取
+
+        # 若无缓存，尝试读取本地结构文件（data/json_data/<doc>/structure.json）
+        if not chapters:
+            structure_path = settings.data_dir / "json_data" / doc_name / "structure.json"
+            if structure_path.exists():
+                try:
+                    with open(structure_path, 'r', encoding='utf-8') as f:
+                        structure_data = json.load(f)
+                    agenda_dict = structure_data.get("agenda_dict", {}) if isinstance(structure_data, dict) else {}
+
+                    for title, pages in agenda_dict.items():
+                        if not pages:
+                            continue
+                        # 去重并排序，确保为整数页码
+                        unique_pages = sorted({int(p) for p in pages if isinstance(p, (int, float, str))})
+                        if not unique_pages:
+                            continue
+                        chapter_dict[title] = {"pages": unique_pages}
+                        chapters.append({
+                            "title": title,
+                            "pages": unique_pages,
+                            "start_page": min(unique_pages),
+                            "end_page": max(unique_pages),
+                            "page_count": len(unique_pages)
+                        })
+
+                    # 写入缓存，方便后续编辑
+                    if chapters:
+                        agenda_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(agenda_cache_path, 'w', encoding='utf-8') as f:
+                            json.dump(chapter_dict, f, ensure_ascii=False, indent=2)
+                        logger.info(f"📁 读取本地结构文件并缓存 {len(chapters)} 个章节")
+                except Exception as structure_error:
+                    logger.warning(f"读取结构文件失败: {structure_error}")
+
+        # 如果仍无章节信息，尝试从向量数据库读取
         if not chapters:
             vector_db_path = settings.data_dir / "vector_db" / f"{doc_name}_data_index"
             

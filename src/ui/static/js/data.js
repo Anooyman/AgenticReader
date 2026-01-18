@@ -447,7 +447,15 @@ class LLMReaderDataApp {
             return;
         }
 
-        const documentHTML = documents.map(doc => `
+        const documentHTML = documents.map(doc => {
+            const hasRegistryId = !!doc.id;
+            const deleteBtnHtml = hasRegistryId
+                ? `<button class="btn btn-sm btn-danger" onclick="window.llmReaderDataApp.deleteRegistryDocument('${this.escapeHtml(doc.id)}')"
+                        style="padding: 5px 15px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">🗑️ 完全删除</button>`
+                : `<button class="btn btn-sm btn-danger" onclick="window.llmReaderDataApp.deleteDocument(['${this.escapeHtml(doc.name)}'])"
+                        style="padding: 5px 15px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">🗑️ 完全删除</button>`;
+
+            return `
             <div class="document-item" style="border: 1px solid #e0e0e0; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
                 <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
                     <div class="doc-info" style="flex: 1;">
@@ -459,12 +467,9 @@ class LLMReaderDataApp {
                         </div>
                     </div>
                     <div class="doc-main-actions" style="display: flex; gap: 10px; align-items: center;">
-                        <input type="checkbox" class="doc-checkbox" data-doc-name="${this.escapeHtml(doc.name)}"
+                        <input type="checkbox" class="doc-checkbox" data-doc-id="${this.escapeHtml(doc.id || '')}" data-doc-name="${this.escapeHtml(doc.name)}"
                                style="width: 18px; height: 18px; cursor: pointer;">
-                        <button class="btn btn-sm btn-danger" onclick="window.llmReaderDataApp.deleteDocument(['${this.escapeHtml(doc.name)}'])"
-                                style="padding: 5px 15px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                            🗑️ 完全删除
-                        </button>
+                        ${deleteBtnHtml}
                     </div>
                 </div>
 
@@ -476,7 +481,8 @@ class LLMReaderDataApp {
                     ${this.renderDataDetail(doc, '摘要文件', 'summary', doc.data_details?.summary)}
                 </div>
             </div>
-        `).join('');
+            `;
+        }).join('');
 
         const header = `
             <div style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
@@ -503,16 +509,30 @@ class LLMReaderDataApp {
 
         // 添加批量删除功能
         document.getElementById('delete-selected-btn')?.addEventListener('click', () => {
-            const selected = Array.from(document.querySelectorAll('.doc-checkbox:checked'))
-                .map(cb => cb.getAttribute('data-doc-name'));
+            const checked = Array.from(document.querySelectorAll('.doc-checkbox:checked'));
+            const selectedIds = checked.map(cb => cb.getAttribute('data-doc-id')).filter(Boolean);
+            const selectedNames = checked
+                .filter(cb => !cb.getAttribute('data-doc-id'))
+                .map(cb => cb.getAttribute('data-doc-name'))
+                .filter(Boolean);
 
-            if (selected.length === 0) {
+            if (selectedIds.length === 0 && selectedNames.length === 0) {
                 this.showStatus('warning', '请先选择要删除的文档');
                 return;
             }
 
-            this.confirmAction('批量删除文档', `确定要删除选中的 ${selected.length} 个文档吗？`, () => {
-                this.deleteDocument(selected);
+            const totalCount = selectedIds.length + selectedNames.length;
+            this.confirmAction('批量删除文档', `确定要删除选中的 ${totalCount} 个文档吗？`, async () => {
+                // 先删除有注册表ID的文档
+                for (const id of selectedIds) {
+                    await this.deleteRegistryDocument(id);
+                }
+                // 再删除没有注册表ID的文档（按名称）
+                if (selectedNames.length) {
+                    await this.deleteDocument(selectedNames);
+                }
+                this.loadDocumentList();
+                this.loadStorageOverview();
             });
         });
     }
@@ -541,6 +561,27 @@ class LLMReaderDataApp {
             }
         } catch (error) {
             console.error('删除文档失败:', error);
+            this.showStatus('error', '删除文档失败');
+        }
+    }
+
+    async deleteRegistryDocument(docId, deleteSource = false) {
+        try {
+            this.showStatus('info', '正在删除文档...');
+            const response = await fetch(this.getApiUrl(`/api/v1/data/registry/documents/${encodeURIComponent(docId)}?delete_source=${deleteSource}`), {
+                method: 'DELETE'
+            });
+            const result = await response.json();
+            if (result.success) {
+                const data = result.data || {};
+                this.showStatus('success', `删除完成：成功 ${data.deleted_files?.length || 0} 项，失败 ${data.failed_files?.length || 0} 项`);
+                this.loadDocumentList();
+                this.loadStorageOverview();
+            } else {
+                this.showStatus('error', result.data?.errors?.join(', ') || '删除文档失败');
+            }
+        } catch (error) {
+            console.error('删除注册表文档失败:', error);
             this.showStatus('error', '删除文档失败');
         }
     }

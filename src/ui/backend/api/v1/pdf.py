@@ -349,14 +349,19 @@ async def reinitialize_pdf(
         # 检查JSON数据是否存在
         json_path = settings.data_dir / "json_data" / f"{doc_name}.json"
         if not json_path.exists():
-            logger.warning(f"⚠️ JSON数据文件不存在，需要重新处理PDF: {doc_name}")
-            return {
-                "status": "needs_processing",
-                "message": f"PDF {doc_name} 需要重新处理",
-                "doc_name": doc_name,
-                "has_pdf": True,
-                "has_json": False
-            }
+            # 兼容新版目录结构 data/json_data/<doc_name>/data.json
+            alt_json_path = settings.data_dir / "json_data" / doc_name / "data.json"
+            if alt_json_path.exists():
+                json_path = alt_json_path
+            else:
+                logger.warning(f"⚠️ JSON数据文件不存在，需要重新处理PDF: {doc_name}")
+                return {
+                    "status": "needs_processing",
+                    "message": f"PDF {doc_name} 需要重新处理",
+                    "doc_name": doc_name,
+                    "has_pdf": True,
+                    "has_json": False
+                }
 
         # 初始化聊天服务
         logger.info(f"🔄 正在初始化聊天服务: {doc_name}")

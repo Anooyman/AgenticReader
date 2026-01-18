@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from src.core.llm.client import LLMBase
 from src.core.llm.providers import AzureLLMProvider, OpenAILLMProvider, OllamaLLMProvider
-from src.config.prompts import ReaderRole
+from src.config.prompts.common_prompts import CommonRole
 
 # 配置日志
 logging.basicConfig(
@@ -142,7 +142,7 @@ def test_provider_basic_call():
             print(f"👤 用户: {test_message}")
 
             response = llm_client.call_llm_chain(
-                role=ReaderRole.CHAPTER_MATCHER,
+                role=CommonRole.CHAPTER_MATCHER,
                 input_prompt=test_message,
                 session_id=f"test_{provider}"
             )

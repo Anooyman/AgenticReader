@@ -1,16 +1,19 @@
 """数据管理 API"""
 
+from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from typing import List, Dict, Any
 from datetime import datetime
 
 from ...config import get_logger
 from ...services.data_service import DataService
+from src.agents.indexing.doc_registry import DocumentRegistry
 
 logger = get_logger(__name__)
 
 router = APIRouter()
 data_service = DataService()
+doc_registry = DocumentRegistry()
 
 
 @router.get("/data/overview")
@@ -29,13 +32,116 @@ async def get_data_overview() -> Dict[str, Any]:
 
 @router.get("/data/documents")
 async def list_documents() -> Dict[str, Any]:
-    """列出所有已处理的文档"""
+    """列出所有已处理的文档
+
+    优先使用 DocumentRegistry，以与 Indexing Agent 的文档管理保持一致；
+    若注册表为空，则回退到文件系统扫描。
+    """
     try:
-        documents = await data_service.list_documents()
-        return {
-            "success": True,
-            "data": documents
-        }
+        registry_docs = doc_registry.list_all()
+        documents: List[Dict[str, Any]] = []
+
+        def normalize_path(path_str: str) -> Path | None:
+            """将注册表中的路径规范化为可用的本地路径"""
+            if not path_str:
+                return None
+            cleaned = path_str.replace("\\", "/")
+            return Path(cleaned)
+
+        def first_match(paths: List[str], predicate) -> str:
+            for p in paths:
+                if predicate(p):
+                    return p
+            return ""
+
+        if registry_docs:
+            for doc in registry_docs:
+                name = doc.get("doc_name")
+                doc_id = doc.get("doc_id")
+                generated = doc.get("generated_files", {})
+                stage_files = []
+                for stage in (doc.get("processing_stages") or {}).values():
+                    stage_files.extend(stage.get("output_files") or [])
+
+                # JSON 文件大小
+                json_path = generated.get("json_data") or first_match(
+                    stage_files, lambda f: "json_data" in f and f.endswith("data.json")
+                )
+                json_size = 0
+                if json_path:
+                    p = normalize_path(json_path)
+                    if p.exists() and p.is_file():
+                        json_size = p.stat().st_size
+
+                # 向量库大小
+                vector_path = generated.get("vector_db") or first_match(
+                    stage_files, lambda f: "vector_db" in f
+                )
+                vector_size = data_service._get_dir_size(normalize_path(vector_path)) if vector_path else 0
+
+                # 图片目录大小与数量
+                images_list = generated.get("images") or []
+                if not images_list:
+                    alt_images = first_match(stage_files, lambda f: "pdf_image" in f)
+                    images_list = [alt_images] if alt_images else []
+                images_count = 0
+                images_size = 0
+                if images_list:
+                    try:
+                        img_dir = normalize_path(images_list[0])
+                        if img_dir and img_dir.is_file():
+                            img_dir = img_dir.parent
+                        if img_dir and img_dir.exists():
+                            images_count = len(list(img_dir.glob("*")))
+                            images_size = data_service._get_dir_size(img_dir)
+                    except Exception:
+                        pass
+
+                # 摘要文件大小
+                summaries = generated.get("summaries") or []
+                if not summaries:
+                    summaries = [f for f in stage_files if f.endswith(".md") or "summary" in f]
+                summary_size = 0
+                for f in summaries:
+                    p = normalize_path(f)
+                    if p and p.exists() and p.is_file():
+                        summary_size += p.stat().st_size
+
+                documents.append({
+                    "id": doc_id,
+                    "name": name,
+                    "modified_time": doc.get("indexed_at"),
+                    "size": json_size + vector_size + images_size + summary_size,
+                    "size_formatted": data_service._format_size(json_size + vector_size + images_size + summary_size),
+                    "data_details": {
+                        "json": {
+                            "size": json_size,
+                            "size_formatted": data_service._format_size(json_size)
+                        },
+                        "vector_db": {
+                            "size": vector_size,
+                            "size_formatted": data_service._format_size(vector_size)
+                        },
+                        "images": {
+                            "size": images_size,
+                            "size_formatted": data_service._format_size(images_size),
+                            "count": images_count
+                        },
+                        "summary": {
+                            "size": summary_size,
+                            "size_formatted": data_service._format_size(summary_size),
+                            "files": summaries
+                        }
+                    }
+                })
+
+            # 按修改时间排序
+            documents.sort(key=lambda x: x.get("modified_time", ""), reverse=True)
+            return {"success": True, "data": documents}
+
+        # 回退：文件系统扫描
+        fs_docs = await data_service.list_documents()
+        return {"success": True, "data": fs_docs}
     except Exception as e:
         logger.error(f"列出文档失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -96,6 +202,22 @@ async def delete_documents(document_names: List[str]) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"删除文档失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/data/registry/documents/{doc_id}")
+async def delete_registry_document(doc_id: str, delete_source: bool = False) -> Dict[str, Any]:
+    """根据注册表删除文档及其关联文件
+
+    Args:
+        doc_id: 文档ID（来自 DocumentRegistry）
+        delete_source: 是否同时删除源文件
+    """
+    try:
+        result = doc_registry.delete_all_files(doc_id, delete_source=delete_source)
+        return {"success": result.get("success", False), "data": result}
+    except Exception as e:
+        logger.error(f"删除注册表文档失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
