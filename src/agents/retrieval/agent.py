@@ -79,16 +79,8 @@ class RetrievalAgent(AgentBase):
         workflow.add_edge("rewrite", "think")
         workflow.add_edge("think", "act")
 
-        # 条件边：根据工具配置决定是否需要 summary
-        workflow.add_conditional_edges(
-            "act",
-            self.nodes.should_summarize,
-            {
-                "summary": "summary",
-                "evaluate": "evaluate"
-            }
-        )
-
+        # 始终执行 summary 节点（负责数据累积，并根据需要生成总结）
+        workflow.add_edge("act", "summary")
         workflow.add_edge("summary", "evaluate")
 
         # 条件边：根据评估结果决定继续或结束

@@ -18,7 +18,7 @@ import logging
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.core.llm.client import LLMBase
-from src.config.prompts.common_prompts import CommonRole
+from src.agents.common.prompts import CommonRole
 
 # 配置日志
 logging.basicConfig(

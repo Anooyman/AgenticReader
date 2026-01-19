@@ -1,8 +1,10 @@
 """
-Answer Tools Configuration
+AnswerAgent Tools Configuration
 
-定义 AnswerAgent 可用的所有工具
-每个工具直接绑定到 AnswerAgent 的方法
+定义 AnswerAgent 可用的所有工具配置。
+每个工具直接绑定到 AnswerAgent 的工具方法（tools.py）。
+
+Note: AnswerAgent 主要通过意图分析决定工作流，工具配置相对简单。
 """
 
 from typing import Dict, Any, List
@@ -67,6 +69,7 @@ def format_all_tools_for_llm() -> str:
 
 TOOL_METADATA = {
     "version": "1.0.0",
+    "last_updated": "2025-01-19",
     "agent": "AnswerAgent",
     "total_tools": len(ANSWER_TOOLS_CONFIG),
     "enabled_tools": len(get_enabled_tools()),

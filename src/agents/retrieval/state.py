@@ -18,6 +18,7 @@ class RetrievalState(TypedDict, total=False):
     rewritten_query: Optional[str]  # 基于历史优化后的查询
     doc_name: Optional[str]  # 指定文档名（None=多文档检索）
     max_iterations: int  # 最大迭代次数
+    conversation_turn: int  # 对话轮次（用于判断是否需要 rewrite）
 
     # ============ ReAct Loop 状态 ============
     thoughts: List[str]  # 思考过程

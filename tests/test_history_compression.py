@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from src.core.llm.client import LLMBase
 from src.core.llm.history import LimitedChatMessageHistory
-from src.config.prompts.common_prompts import CommonRole
+from src.agents.common.prompts import CommonRole
 from langchain_core.messages import HumanMessage, AIMessage
 
 # 配置日志 - 设置为DEBUG以查看详细压缩过程

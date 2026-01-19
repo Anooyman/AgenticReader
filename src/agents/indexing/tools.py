@@ -47,7 +47,7 @@ class IndexingTools:
         logger.info(f"📝 [Tool:generate_summary] 生成摘要: {doc_name}")
 
         try:
-            from src.config.prompts.common_prompts import CommonRole
+            from src.agents.common.prompts import CommonRole
 
             query = (
                 "请按照文章本身的章节信息和叙事结构，整理这篇文章的主要内容，"
@@ -184,7 +184,7 @@ class IndexingTools:
             Exception: 处理过程中的其他错误
         """
         from src.utils.helpers import pdf_to_images, read_images_in_directory
-        from src.config.prompts.indexing_prompts import IndexingRole, INDEXING_PROMPTS
+        from .prompts import IndexingRole, INDEXING_PROMPTS
 
         logger.info(f"📄 [Tool:extract_pdf] ========== 开始提取PDF内容 ==========")
         logger.info(f"📄 [Tool:extract_pdf] 输入文件名: {pdf_file_path}")
@@ -358,7 +358,7 @@ class IndexingTools:
             (agenda_dict, has_toc): 目录字典和是否找到目录的标志
         """
         from src.utils.helpers import extract_data_from_LLM_res
-        from src.config.prompts.indexing_prompts import IndexingRole
+        from .prompts import IndexingRole
 
         logger.info(f"📖 [Tool:extract_toc] 尝试从前 {max_pages} 页提取目录")
 
@@ -429,7 +429,7 @@ class IndexingTools:
             agenda_dict: 目录字典 {title: [pages]}
         """
         from src.utils.helpers import extract_data_from_LLM_res, group_data_by_sections_with_titles
-        from src.config.prompts.indexing_prompts import IndexingRole
+        from .prompts import IndexingRole
 
         logger.info(f"🔍 [Tool:analyze_structure] 开始分析全文结构: {len(pdf_data_list)} 页")
 

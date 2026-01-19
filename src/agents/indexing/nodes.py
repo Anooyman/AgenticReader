@@ -584,8 +584,8 @@ class IndexingNodes:
 
         try:
             from src.core.processing.parallel_processor import ChapterProcessor
-            from src.config.prompts.indexing_prompts import IndexingRole
-            from src.config.prompts.common_prompts import CommonRole
+            from .prompts import IndexingRole
+            from src.agents.common.prompts import CommonRole
 
             agenda_data_list = state.get("agenda_data_list", [])
             logger.info(f"📝 [ProcessChapters] 章节数量: {len(agenda_data_list)}")

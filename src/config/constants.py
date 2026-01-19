@@ -19,6 +19,9 @@ class ProcessingLimits:
     DEFAULT_SEARCH_K = 10  # 默认检索结果数量
     DEFAULT_RECURSION_LIMIT = 50  # 图执行递归限制
 
+    # Retrieval Agent 迭代次数配置
+    MAX_RETRIEVAL_ITERATIONS = 10  # Retrieval Agent 最大迭代次数（ReAct循环）
+
     # 注意：会话历史相关配置（max_messages, max_tokens）已移至 SessionHistoryConfig
 
 
@@ -105,7 +108,7 @@ class SessionHistoryConfig:
     WEB_CHAT = {
         "max_messages": 10,           # 兜底值：总结失败时的硬上限
         "max_tokens": 65536,           # 最大Token数（Claude 3.5 Sonnet上下文窗口）
-        "summary_threshold": 3,        # 5轮对话后触发总结（10条消息）
+        "summary_threshold": 10,        # 10轮对话后触发总结（20条消息）
         "use_llm_summary": True,       # 启用LLM智能总结
     }
 
@@ -114,16 +117,16 @@ class SessionHistoryConfig:
     PDF_CHAT = {
         "max_messages": 10,            # 兜底值：总结失败时的硬上限
         "max_tokens": 65536,           # 最大Token数（Claude 3.5 Sonnet上下文窗口）
-        "summary_threshold": 3,        # 3轮对话后触发总结（6条消息）
+        "summary_threshold": 10,        # 10轮对话后触发总结（20条消息）
         "use_llm_summary": True,       # 启用LLM智能总结
     }
 
     # 默认 Session 配置
     # 用于其他未明确分类的会话
     DEFAULT = {
-        "max_messages": 10,            # 兜底值：总结失败时的硬上限
+        "max_messages": 30,            # 兜底值：总结失败时的硬上限
         "max_tokens": 65536,           # 最大Token数（Claude 3.5 Sonnet上下文窗口）
-        "summary_threshold": 3,        # 3轮对话后触发总结（6条消息）
+        "summary_threshold": 10,        # 10轮对话后触发总结（20条消息）
         "use_llm_summary": True,       # 启用LLM智能总结
     }
 

@@ -102,12 +102,12 @@ class RetrievalUtils:
         """
         从配置文件构建检索工具字典
 
-        工具配置来源：src/config/tools/retrieval_tools.py
+        工具配置来源：src/agents/retrieval/tools_config.py
 
         Returns:
             工具字典，key为工具名称，value包含工具详细信息
         """
-        from src.config.tools.retrieval_tools import get_enabled_tools
+        from .tools_config import get_enabled_tools
 
         tools = {}
         enabled_tools = get_enabled_tools()

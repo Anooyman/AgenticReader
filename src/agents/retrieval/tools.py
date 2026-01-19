@@ -81,11 +81,12 @@ class RetrievalTools:
                             # 检查是否已存在相同内容（去重）
                             existing_contents = [item["content"] for item in context_data]
                             if refactor_data not in existing_contents:
-                                # 返回结构化数据：包含内容和元数据
+                                # 返回结构化数据：包含内容、元数据和原始数据
                                 context_data.append({
-                                    "content": refactor_data,
+                                    "content": refactor_data,  # refactor 后的内容，用于 evaluate
                                     "title": chapter_title,
-                                    "pages": sorted(page_number, key=lambda x: int(x) if str(x).isdigit() else 0) if page_number else []
+                                    "pages": sorted(page_number, key=lambda x: int(x) if str(x).isdigit() else 0) if page_number else [],
+                                    "raw_data": raw_data  # 原始数据，用于 format 生成最终答案
                                 })
 
                                 # 记录章节信息用于日志汇总
@@ -125,31 +126,35 @@ class RetrievalTools:
             logger.error(f"❌ [Tool:search_by_context] 通过上下文检索数据时出错: {e}", exc_info=True)
             return []
 
-    async def extract_titles_from_structure(self, query: str) -> List[str]:
+    async def extract_titles_from_structure(self, query: str) -> Dict:
         """
-        从文档结构中提取相关标题列表
+        从文档结构中提取相关标题列表（带选择原因）
 
         根据用户查询，从 type="structure" 文档中获取 agenda_dict，
-        然后使用 LLM 智能提取与查询相关的章节标题。
+        然后使用 LLM 智能提取与查询相关的章节标题，并说明选择原因。
 
         Args:
             query: 用户查询字符串
 
         Returns:
-            提取到的标题列表
+            包含标题列表和选择原因的字典：
+            {
+                "titles": ["章节1", "章节2", ...],
+                "reason": "选择这些章节的原因"
+            }
         """
         from src.utils.helpers import extract_data_from_LLM_res
-        from src.config.prompts.common_prompts import CommonRole
+        from src.agents.common.prompts import CommonRole
 
         logger.info(f"📋 [Tool:extract_titles_from_structure] 从结构中提取标题: {query[:50]}...")
 
         if not query or not query.strip():
             logger.warning("❌ [Tool:extract_titles_from_structure] 查询字符串为空")
-            return []
+            return {"titles": [], "reason": "查询为空"}
 
         if not self.agent.vector_db_client:
             logger.error("❌ [Tool:extract_titles_from_structure] VectorDBClient 未初始化")
-            return []
+            return {"titles": [], "reason": "向量数据库未初始化"}
 
         try:
             # 步骤1: 从向量数据库获取 agenda_dict
@@ -157,9 +162,9 @@ class RetrievalTools:
 
             if not agenda_dict:
                 logger.warning("⚠️ [Tool:extract_titles_from_structure] 未找到文档结构信息")
-                return []
+                return {"titles": [], "reason": "未找到文档结构信息"}
 
-            # 步骤2: 使用 LLM 提取标题列表
+            # 步骤2: 使用 LLM 提取标题列表和原因
             response = self.agent.llm.call_llm_chain(
                 CommonRole.CHAPTER_MATCHER,
                 query,
@@ -171,18 +176,25 @@ class RetrievalTools:
 
             response_data = extract_data_from_LLM_res(response)
             title_list = response_data.get("title", [])
+            reason = response_data.get("reason", "未提供选择原因")
 
             # 验证结果
             if not isinstance(title_list, list):
                 logger.warning("⚠️ [Tool:extract_titles_from_structure] 标题列表格式无效")
-                return []
+                return {"titles": [], "reason": "标题列表格式无效"}
 
-            logger.info(f"✅ [Tool:extract_titles_from_structure] 提取到 {len(title_list)} 个标题: {title_list}")
-            return title_list
+            logger.info(f"✅ [Tool:extract_titles_from_structure] 提取到 {len(title_list)} 个标题")
+            logger.info(f"📋 [Tool:extract_titles_from_structure]   - 标题: {title_list}")
+            logger.info(f"📋 [Tool:extract_titles_from_structure]   - 原因: {reason}")
+
+            return {
+                "titles": title_list,
+                "reason": reason
+            }
 
         except Exception as e:
             logger.error(f"❌ [Tool:extract_titles_from_structure] 提取标题失败: {e}", exc_info=True)
-            return []
+            return {"titles": [], "reason": f"提取失败: {str(e)}"}
 
     async def search_by_title(self, title_list: str) -> List[str]:
         """
@@ -250,6 +262,7 @@ class RetrievalTools:
             try:
                 refactor_data = ""
                 page_number = []
+                raw_data = {}
                 is_from_cache = False
 
                 # 检查缓存
@@ -257,6 +270,7 @@ class RetrievalTools:
                     cached_data = self.agent.retrieval_data_dict[title]
                     refactor_data = cached_data.get("data", "")
                     page_number = cached_data.get("page", [])
+                    raw_data = cached_data.get("raw_data", {})
                     cache_hits += 1
                     is_from_cache = True
                 else:
@@ -272,6 +286,7 @@ class RetrievalTools:
                             # 处理返回的列表中的每个文档
                             all_refactor_data = []
                             all_page_numbers = []
+                            merged_raw_data = {}  # 合并所有文档的 raw_data
 
                             for doc_item in doc_res:
                                 document = doc_item[0] if isinstance(doc_item, tuple) else doc_item
@@ -287,14 +302,19 @@ class RetrievalTools:
                                 if item_page_numbers:
                                     all_page_numbers.extend(item_page_numbers)
 
+                                # 合并 raw_data
+                                if isinstance(item_raw_data, dict):
+                                    merged_raw_data.update(item_raw_data)
+
                             # 合并所有检索到的数据
                             refactor_data = "\n\n".join(all_refactor_data) if all_refactor_data else ""
                             page_number = list(set(all_page_numbers))  # 去重页面编号
 
-                            # 缓存检索结果
+                            # 缓存检索结果（包含 raw_data）
                             self.agent.retrieval_data_dict[title] = {
                                 "data": refactor_data,
-                                "page": page_number
+                                "page": page_number,
+                                "raw_data": merged_raw_data
                             }
 
                             successful_retrievals += 1
@@ -310,11 +330,12 @@ class RetrievalTools:
                     # 检查是否已存在相同内容
                     existing_contents = [item["content"] if isinstance(item, dict) else item for item in context_data]
                     if refactor_data not in existing_contents:
-                        # 返回结构化数据：包含内容和元数据
+                        # 返回结构化数据：包含内容、元数据和原始数据
                         context_data.append({
-                            "content": refactor_data,
+                            "content": refactor_data,  # refactor 后的内容，用于 evaluate
                             "title": title,
-                            "pages": sorted(page_number, key=lambda x: int(x) if str(x).isdigit() else 0) if page_number else []
+                            "pages": sorted(page_number, key=lambda x: int(x) if str(x).isdigit() else 0) if page_number else [],
+                            "raw_data": raw_data  # 原始数据，用于 format 生成最终答案
                         })
                         # 记录用于日志汇总
                         returned_titles.append({

@@ -1282,7 +1282,7 @@ class ExecutorAgent(GraphBase):
         try:
             # 配置图执行参数
             chat_config = {
-                "recursion_limit": 5,  # 限制递归深度，防止无限循环
+                "recursion_limit": 10,  # 限制递归深度，防止无限循环
                 "thread_id": f"executor_{asyncio.current_task().get_name() if asyncio.current_task() else 'unknown'}"
             }
             

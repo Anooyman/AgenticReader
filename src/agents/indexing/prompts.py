@@ -1,8 +1,8 @@
 """
-Indexing Agent prompts.
+IndexingAgent Prompts Configuration
 
-This module contains all prompts used by IndexingAgent for document parsing,
-content extraction, summarization, and index building.
+定义 IndexingAgent 使用的所有 system prompts。
+用于文档解析、内容提取、总结和索引构建。
 """
 
 # Indexing role constants

@@ -9,8 +9,8 @@ import logging
 from typing import Any, Dict, List, Tuple
 
 from src.utils.async_utils import run_async, parallel_process_with_filter
-from src.config.prompts.indexing_prompts import IndexingRole
-from src.config.prompts.common_prompts import CommonRole
+from src.agents.indexing.prompts import IndexingRole
+from src.agents.common.prompts import CommonRole
 
 logger = logging.getLogger(__name__)
 

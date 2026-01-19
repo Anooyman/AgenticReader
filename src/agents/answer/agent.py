@@ -41,6 +41,9 @@ class AnswerAgent(AgentBase):
         # 当前文档上下文
         self.current_doc = doc_name
 
+        # 对话轮次追踪（用于传递给 Retrieval Agent）
+        self.conversation_turn = 0
+
         # 延迟加载Retrieval Agent
         self.retrieval_agent = None
 

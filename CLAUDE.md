@@ -82,18 +82,67 @@ python tests/test_llm_client.py         # Test LLM client
 python tests/test_llm_providers.py      # Test provider implementations
 ```
 
+## Architecture Overview
+
+### Modular Agent-Centric Design
+
+The codebase follows a **fully modularized, agent-centric architecture** where each agent is a self-contained module with all its configuration colocated:
+
+```
+src/agents/
+├── common/           # Shared utilities across agents
+│   └── prompts.py    # Common prompts (CommonRole)
+├── indexing/         # Self-contained IndexingAgent
+│   ├── prompts.py    # Indexing-specific prompts
+│   └── agent.py, nodes.py, tools.py, utils.py, state.py
+├── answer/           # Self-contained AnswerAgent
+│   ├── prompts.py    # Answer-specific prompts
+│   ├── tools_config.py
+│   └── agent.py, nodes.py, tools.py, utils.py, state.py
+└── retrieval/        # Self-contained RetrievalAgent
+    ├── prompts.py    # Retrieval-specific prompts
+    ├── tools_config.py
+    └── agent.py, nodes.py, tools.py, utils.py, state.py
+```
+
+**Key Principles:**
+- **Modularity**: Each agent owns its prompts, tools, and logic
+- **Cohesion**: All agent-related code is in one directory
+- **Clarity**: Easy to find and modify agent-specific configurations
+- **Scalability**: New agents can be added without touching global configs
+
+**Import Examples:**
+```python
+# Agent-specific imports
+from src.agents.common.prompts import CommonRole
+from src.agents.indexing.prompts import IndexingRole
+from src.agents.answer.prompts import AnswerRole
+from src.agents.answer.tools_config import ANSWER_TOOLS_CONFIG
+from src.agents.retrieval.prompts import RetrievalRole
+from src.agents.retrieval.tools_config import RETRIEVAL_TOOLS_CONFIG
+
+# Multi-agent coordination (config level)
+from src.config.prompts.agent_prompts import AgentType
+```
+
 ## High-Level Architecture
 
 ### Core Architecture Patterns
 
-**1. Multi-Agent System (src/agents/)**
+**1. Multi-Agent System (src/agents/)** - Fully Modularized Architecture
 - **IndexingAgent**: Document indexing agent responsible for PDF parsing, structure extraction, chunking, and vectorization
 - **AnswerAgent**: User-facing Q&A agent that handles intent analysis, retrieval decision-making, and answer generation
 - **RetrievalAgent**: Document retrieval agent for semantic search and context assembly
 - **AgentBase**: Base class providing LLM instance management and LangGraph workflow building
+- **CommonModule**: Shared prompts and utilities used across multiple agents
 - Built on **LangGraph** framework with asynchronous state graph processing
 - Uses typed state dictionaries (IndexingState, AnswerState, RetrievalState) defined with TypedDict
 - All agent workflows compiled as StateGraph objects with nodes, edges, and conditional routing
+- **Self-Contained Modules**: Each agent is fully self-contained with its own:
+  - `prompts.py`: Agent-specific system prompts and role definitions
+  - `tools_config.py`: Tool configurations with descriptions and parameters
+  - `agent.py`, `nodes.py`, `tools.py`, `utils.py`, `state.py`: Core agent logic
+  - This modular design allows for easy agent management, testing, and extension
 
 **2. Document Registry System (src/agents/indexing/doc_registry.py)**
 - **DocumentRegistry**: Centralized metadata management for all indexed documents
@@ -158,11 +207,17 @@ Query + Doc → semantic_search (vector DB) → assemble_context → ranked resu
 ### Settings Structure (src/config/settings.py)
 - **LLM_CONFIG**: Azure OpenAI, OpenAI, and Ollama configuration via environment variables
 - **LLM_EMBEDDING_CONFIG**: Embedding model configuration for vector generation
-- **Prompt System**: Role-based prompts now organized in `src/config/prompts/` directory
-  - `indexing_prompts.py`: Prompts for document indexing tasks
-  - `answer_prompts.py`: Prompts for Q&A generation
-  - `retrieval_prompts.py`: Prompts for retrieval tasks
-  - `common_prompts.py`: Shared prompt templates
+- **Prompt System**: Role-based prompts organized by agent modularity
+  - Agent-specific prompts are located in their respective agent directories:
+    - `src/agents/common/prompts.py`: Shared prompts used across multiple agents
+    - `src/agents/indexing/prompts.py`: IndexingAgent prompts for document parsing and extraction
+    - `src/agents/answer/prompts.py`: AnswerAgent prompts for intent analysis and Q&A
+    - `src/agents/retrieval/prompts.py`: RetrievalAgent prompts for intelligent retrieval
+  - Multi-agent coordination prompts remain in `src/config/prompts/`:
+    - `agent_prompts.py`: Prompts for PlanAgent, ExecutorAgent, MemoryAgent coordination
+- **Tools Configuration**: Agent-specific tool configs moved to agent directories
+  - `src/agents/answer/tools_config.py`: AnswerAgent tool configurations
+  - `src/agents/retrieval/tools_config.py`: RetrievalAgent tool configurations
 - **MCP_CONFIG**: External service configurations for web fetching and memory services
 - **Data Paths**: Configurable storage locations for all generated content
 - **Constants**: Centralized in `src/config/constants.py` with organized classes
@@ -360,10 +415,14 @@ GET    /health                                   - Application health status mon
 ### Adding New Agents
 1. Create agent directory under `src/agents/new_agent/`
 2. Create `state.py` with TypedDict definition for agent state
-3. Create `agent.py` inheriting from AgentBase, implement `build_graph()` method
-4. Create `nodes.py` with node function implementations
-5. Create `tools.py` and `utils.py` as needed
-6. Follow dependency injection pattern: tools/utils take agent instance in constructor
+3. Create `prompts.py` with agent-specific system prompts and role constants
+4. Create `tools_config.py` if the agent uses tools (define tool configurations)
+5. Create `agent.py` inheriting from AgentBase, implement `build_graph()` method
+6. Create `nodes.py` with node function implementations
+7. Create `tools.py` and `utils.py` as needed
+8. Create `__init__.py` to export agent class and state
+9. Follow dependency injection pattern: tools/utils take agent instance in constructor
+10. Import prompts from local `prompts.py` using `from .prompts import YourRole`
 
 ### Extending Document Processing
 1. Modify IndexingAgent workflow by adding new nodes in `src/agents/indexing/nodes.py`
@@ -517,13 +576,24 @@ grep -A 10 "MCP_CONFIG" src/config/settings.py
 - **src/config/**: Configuration management
   - `settings.py`: Main settings and LLM config
   - `constants.py`: Organized constants classes (MCPConstants, ProcessingLimits, PathConstants, etc.)
-  - `prompts/`: Prompt templates organized by agent type
-  - `tools/`: Agent tool definitions (answer_tools.py, retrieval_tools.py)
-- **src/agents/**: Multi-agent system
+  - `prompts/`: Multi-agent coordination prompts only
+    - `agent_prompts.py`: Prompts for PlanAgent, ExecutorAgent, MemoryAgent
+  - `tools/`: Empty directory (legacy, kept for reference)
+- **src/agents/**: Multi-agent system (fully modularized)
   - `base.py`: AgentBase class with LLM management
-  - `indexing/`: IndexingAgent, tools, nodes, utils, state, doc_registry
-  - `answer/`: AnswerAgent, tools, nodes, utils, state
-  - `retrieval/`: RetrievalAgent, tools, nodes, utils, state
+  - `common/`: Shared utilities and prompts
+    - `prompts.py`: Common prompts used across multiple agents
+  - `indexing/`: IndexingAgent (self-contained module)
+    - `prompts.py`: IndexingAgent-specific prompts
+    - `agent.py`, `nodes.py`, `tools.py`, `utils.py`, `state.py`, `doc_registry.py`
+  - `answer/`: AnswerAgent (self-contained module)
+    - `prompts.py`: AnswerAgent-specific prompts
+    - `tools_config.py`: AnswerAgent tool configurations
+    - `agent.py`, `nodes.py`, `tools.py`, `utils.py`, `state.py`
+  - `retrieval/`: RetrievalAgent (self-contained module)
+    - `prompts.py`: RetrievalAgent-specific prompts
+    - `tools_config.py`: RetrievalAgent tool configurations
+    - `agent.py`, `nodes.py`, `tools.py`, `utils.py`, `state.py`
 - **src/core/**: Core functionality
   - `llm/`: LLM abstraction (client.py, providers.py, history.py)
   - `processing/`: Document processing utilities (index_document.py, manage_documents.py, parallel_processor.py, text_splitter.py)
@@ -559,12 +629,14 @@ The agent system uses LangGraph's StateGraph with TypedDict state definitions:
 - Tools and utilities injected into agents via dependency injection pattern
 
 ### Agent Architecture Pattern
-Each agent follows a consistent structure:
+Each agent follows a consistent, self-contained structure:
 - `agent.py`: Main agent class inheriting from AgentBase, builds LangGraph workflow
 - `state.py`: TypedDict definition for agent state
 - `nodes.py`: Graph node implementations (entry points for workflow steps)
 - `tools.py`: Tool functions that agents can use (if applicable)
 - `utils.py`: Helper utilities for the agent
+- `prompts.py`: Agent-specific system prompts and role definitions
+- `tools_config.py`: Tool configurations with descriptions and parameters (for agents with tools)
 
 ### Async Patterns
 - All LLM calls are async: use `await` or `asyncio.run()` when calling from sync context

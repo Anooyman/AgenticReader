@@ -83,7 +83,7 @@ async def test_single_query(
     retrieval_agent: RetrievalAgent,
     doc_name: str,
     query: str,
-    max_iterations: int = 3
+    max_iterations: int = 3  # 测试用较小值，生产环境使用 ProcessingLimits.MAX_RETRIEVAL_ITERATIONS
 ) -> Dict[str, Any]:
     """
     测试单个查询
