@@ -57,7 +57,8 @@ def load_vector_db(doc_name: str) -> VectorDBClient:
         VectorDBClient 实例
     """
     # 构建 vector db 路径
-    vector_db_path = Path(DATA_ROOT) / "vector_db" / f"{doc_name}_data_index"
+    # vector_db_path = Path(DATA_ROOT) / "vector_db" / f"{doc_name}_data_index"
+    vector_db_path = Path(DATA_ROOT) / "vector_db" / "_metadata"
 
     logger.info(f"📂 Vector DB 路径: {vector_db_path}")
 

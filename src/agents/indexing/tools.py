@@ -287,7 +287,7 @@ class IndexingTools:
             logger.info(f"📄 [Tool:extract_pdf]   - 使用LLM: {self.agent.llm.provider}")
 
             # 直接使用异步方法（因为当前已经在async上下文中）
-            from src.core.processing.parallel_processor import PageExtractor
+            from src.core.parallel import PageExtractor
             extractor = PageExtractor(self.agent.llm, extract_prompt, max_concurrent=5)
             image_content_list = await extractor.extract_pages_parallel(sorted_image_paths)
 

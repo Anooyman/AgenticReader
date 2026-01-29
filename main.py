@@ -2,11 +2,13 @@
 主入口文件 - 基于 AnswerAgent 的智能对话系统
 
 功能：
-1. 支持选择文档进行对话（或不选文档进行通用对话）
-2. 使用 AnswerAgent 处理所有对话
-3. 自动意图分析和文档检索
-4. 保持多轮对话上下文
-5. 友好的交互界面
+1. 单文档对话模式（选择特定文档）
+2. 跨文档智能对话模式（自动选择相关文档）
+3. 跨文档手动选择模式（手动指定多个文档）- 新增
+4. 文档索引和管理
+5. 自动意图分析和文档检索
+6. 保持多轮对话上下文
+7. 模式切换支持
 
 运行方式：
     python main.py
@@ -17,9 +19,9 @@ from pathlib import Path
 from typing import Optional
 
 from src.agents.answer import AnswerAgent
-from src.agents.indexing import DocumentRegistry
-from src.core.processing.index_document import select_pdf_interactive, index_pdf_document
-from src.core.processing.manage_documents import (
+from src.core.document_management import DocumentRegistry
+from src.core.document_management.indexer import select_pdf_interactive, index_pdf_document
+from src.core.document_management.manager import (
     list_all_documents,
     display_document_info,
     delete_document_files
@@ -40,7 +42,7 @@ def print_banner():
 ║                                                                            ║
 ║                     AgenticReader - 智能文档对话助手                        ║
 ║                                                                            ║
-║  功能：智能文档问答、多轮对话、自动检索、上下文记忆                          ║
+║  功能：单文档对话、跨文档检索、手动选择模式、自动文档选择、智能问答           ║
 ║                                                                            ║
 ╚════════════════════════════════════════════════════════════════════════════╝
     """
@@ -148,15 +150,114 @@ def list_indexed_documents() -> dict:
     return indexed_docs
 
 
-async def select_document() -> Optional[str]:
+def select_multiple_documents_interactive() -> Optional[list]:
     """
-    让用户选择文档
+    交互式选择多个文档
 
     Returns:
-        Optional[str]: 文档名称，或 None（不选文档）
+        Optional[list]: 选择的文档名列表，如果取消则返回 None
     """
     print("\n" + "=" * 80)
-    print("  文档选择")
+    print("  手动选择文档")
+    print("=" * 80 + "\n")
+
+    indexed_docs = list_indexed_documents()
+
+    if len(indexed_docs) == 0:
+        logger.warning("⚠️  当前没有已索引的文档")
+        return None
+
+    # 显示文档列表
+    print("📚 可用文档列表:\n")
+    doc_list = list(indexed_docs.keys())
+    for idx, doc_name in enumerate(doc_list, 1):
+        doc_info = indexed_docs[doc_name]
+        brief_summary = doc_info.get("brief_summary", "无摘要")[:60]
+        print(f"  [{idx}] {doc_name}")
+        print(f"      {brief_summary}...\n")
+
+    print("\n💡 提示：")
+    print("   - 输入文档编号，用逗号或空格分隔（例如: 1,3,5 或 1 3 5）")
+    print("   - 输入 'all' 选择所有文档")
+    print("   - 输入 'cancel' 取消选择\n")
+
+    while True:
+        try:
+            user_input = input("请选择文档编号: ").strip().lower()
+
+            # 取消选择
+            if user_input == 'cancel':
+                logger.info("取消文档选择")
+                return None
+
+            # 选择所有文档
+            if user_input == 'all':
+                logger.info(f"✅ 已选择所有 {len(doc_list)} 个文档")
+                return doc_list
+
+            # 解析输入的编号
+            # 支持逗号或空格分隔
+            separators = [',', ' ']
+            indices_str = user_input
+            for sep in separators:
+                indices_str = indices_str.replace(sep, ',')
+
+            # 去除多余的逗号
+            indices_str = ','.join([s.strip() for s in indices_str.split(',') if s.strip()])
+
+            # 提取编号
+            try:
+                indices = [int(s) for s in indices_str.split(',')]
+            except ValueError:
+                print("❌ 输入格式错误，请输入数字编号")
+                continue
+
+            # 验证编号范围
+            invalid_indices = [idx for idx in indices if idx < 1 or idx > len(doc_list)]
+            if invalid_indices:
+                print(f"❌ 以下编号无效: {invalid_indices}，有效范围: 1-{len(doc_list)}")
+                continue
+
+            # 去重
+            indices = list(set(indices))
+            indices.sort()
+
+            # 获取文档名
+            selected_docs = [doc_list[idx - 1] for idx in indices]
+
+            # 显示选择结果
+            print(f"\n✅ 已选择 {len(selected_docs)} 个文档:")
+            for idx, doc_name in enumerate(selected_docs, 1):
+                print(f"   {idx}. {doc_name}")
+
+            # 确认
+            confirm = input("\n确认选择？(y/n): ").strip().lower()
+            if confirm == 'y':
+                return selected_docs
+            else:
+                print("重新选择...\n")
+                continue
+
+        except KeyboardInterrupt:
+            print("\n\n取消选择")
+            return None
+        except Exception as e:
+            logger.error(f"❌ 选择出错: {e}")
+            print("请重新选择")
+            continue
+
+
+async def select_document() -> Optional[tuple]:
+    """
+    让用户选择对话模式和文档
+
+    Returns:
+        Optional[tuple]: (mode, data) - mode 可以是 "single", "cross", "manual", "general"
+                        data: 单文档模式时是 doc_name (str)，手动选择模式时是 doc_list (list)
+                        返回 None 表示退出
+    """
+    print("\n" + "=" * 80)
+    print("  主菜单")
     print("=" * 80 + "\n")
 
     # 获取已索引的文档
@@ -169,72 +270,77 @@ async def select_document() -> Optional[str]:
         logger.info("   - 输入 'm' 进入文档管理（如果有其他文档数据）")
         logger.info("   - 或者输入 '0' 进入通用对话模式（不涉及特定文档）\n")
 
-        choice = input("请选择 (i=索引, m=管理, 0=通用对话): ").strip().lower()
+        choice = input("请选择 (i=索引, m=管理, 0=通用对话, q=退出): ").strip().lower()
         if choice == 'i':
             logger.info("\n启动文档索引工具...")
             try:
-                # 选择 PDF 文件
                 pdf_name = select_pdf_interactive()
                 if pdf_name:
-                    # 索引文档
                     success = await index_pdf_document(pdf_name)
                     if success:
                         logger.info("\n✅ 索引完成，刷新文档列表...")
                         return await select_document()
                     else:
-                        logger.warning("\n⚠️  索引失败，返回文档选择...")
+                        logger.warning("\n⚠️  索引失败")
                         return await select_document()
                 else:
-                    logger.info("未选择文件，返回文档选择...")
+                    logger.info("未选择文件")
                     return await select_document()
             except Exception as e:
                 logger.error(f"❌ 索引过程出错: {e}")
                 import traceback
                 logger.debug(traceback.format_exc())
-                logger.info("返回文档选择...")
                 return await select_document()
         elif choice == 'm':
             logger.info("\n进入文档管理...")
             try:
                 await manage_documents_interactive()
-                # 管理完成后刷新
                 return await select_document()
             except Exception as e:
                 logger.error(f"❌ 文档管理出错: {e}")
                 import traceback
                 logger.debug(traceback.format_exc())
-                logger.info("返回文档选择...")
                 return await select_document()
         elif choice == '0':
+            return ("general", None)
+        elif choice == 'q':
             return None
         else:
-            print("再见！")
-            exit(0)
+            print("❌ 无效选择")
+            return await select_document()
 
     # 显示已索引的文档列表
-    print("已索引的文档：\n")
+    print("📚 已索引的文档：\n")
     doc_list = list(indexed_docs.keys())
     for idx, doc_name in enumerate(doc_list, 1):
         doc_info = indexed_docs[doc_name]
-        brief_summary = doc_info.get("brief_summary", "无摘要")[:80]
+        brief_summary = doc_info.get("brief_summary", "无摘要")[:60]
         print(f"  [{idx}] {doc_name}")
-        print(f"      摘要: {brief_summary}...\n")
+        print(f"      {brief_summary}...\n")
 
-    print(f"  [0] 不选择文档（通用对话模式）")
+    print("\n请选择操作：")
+    print(f"  [1-{len(doc_list)}] 选择文档进行单文档对话")
+    print(f"  [c] 跨文档智能对话（自动选择相关文档）")
+    print(f"  [s] 跨文档手动选择模式（手动指定多个文档）")
+    print(f"  [0] 通用对话模式（不绑定特定文档）")
     print(f"  [i] 索引新文档")
-    print(f"  [m] 管理文档（查看/删除）\n")
+    print(f"  [m] 管理文档（查看/删除）")
+    print(f"  [q] 退出\n")
 
     # 用户选择
     while True:
         try:
-            choice = input("请选择文档编号 (或输入文档名, i=索引, m=管理): ").strip()
+            choice = input("选择: ").strip().lower()
+
+            # 检查是否退出
+            if choice == 'q':
+                return None
 
             # 检查是否选择管理文档
-            if choice.lower() == 'm':
+            if choice == 'm':
                 logger.info("\n进入文档管理...")
                 try:
                     await manage_documents_interactive()
-                    # 管理完成后刷新列表
                     logger.info("\n刷新文档列表...")
                     return await select_document()
                 except Exception as e:
@@ -244,17 +350,14 @@ async def select_document() -> Optional[str]:
                     continue
 
             # 检查是否选择索引新文档
-            if choice.lower() == 'i':
+            if choice == 'i':
                 logger.info("\n启动文档索引工具...")
                 try:
-                    # 选择 PDF 文件
                     pdf_name = select_pdf_interactive()
                     if pdf_name:
-                        # 索引文档
                         success = await index_pdf_document(pdf_name)
                         if success:
                             logger.info("\n✅ 索引完成，刷新文档列表...")
-                            # 递归调用 select_document 重新选择
                             return await select_document()
                         else:
                             logger.warning("\n⚠️  索引失败")
@@ -268,57 +371,76 @@ async def select_document() -> Optional[str]:
                     logger.debug(traceback.format_exc())
                     continue
 
+            # 检查是否选择跨文档模式
+            if choice == 'c':
+                logger.info("✅ 已进入跨文档智能对话模式")
+                return ("cross", None)
+
+            # 检查是否选择手动选择模式
+            if choice == 's':
+                logger.info("进入手动选择文档模式...")
+                selected_docs = select_multiple_documents_interactive()
+                if selected_docs and len(selected_docs) > 0:
+                    logger.info("✅ 已进入跨文档手动选择模式")
+                    return ("manual", selected_docs)
+                else:
+                    logger.info("未选择文档，返回主菜单")
+                    continue
+
             # 检查是否选择通用模式
             if choice == '0':
                 logger.info("✅ 已进入通用对话模式（不绑定特定文档）")
-                return None
+                return ("general", None)
 
-            # 检查是否为数字
+            # 检查是否为数字（选择特定文档）
             if choice.isdigit():
                 idx = int(choice)
                 if 1 <= idx <= len(doc_list):
                     selected_doc = doc_list[idx - 1]
                     logger.info(f"✅ 已选择文档: {selected_doc}")
-                    return selected_doc
+                    return ("single", selected_doc)
                 else:
-                    print(f"❌ 编号无效，请输入 0-{len(doc_list)} 之间的数字")
+                    print(f"❌ 编号无效，请输入 1-{len(doc_list)}")
             else:
-                # 检查是否为文档名
-                if choice in indexed_docs:
-                    logger.info(f"✅ 已选择文档: {choice}")
-                    return choice
-                else:
-                    print(f"❌ 文档未找到: {choice}")
+                print(f"❌ 无效选择")
 
         except KeyboardInterrupt:
             print("\n\n再见！")
-            exit(0)
+            return None
         except Exception as e:
             logger.error(f"❌ 选择失败: {e}")
 
 
-async def chat_loop(answer_agent: AnswerAgent, doc_name: Optional[str]):
+async def chat_loop(answer_agent: AnswerAgent, mode: str, doc_name: Optional[str] = None):
     """
     对话循环
 
     Args:
         answer_agent: AnswerAgent实例
-        doc_name: 文档名称（None表示通用模式）
+        mode: "single"（单文档）、"cross"（跨文档）或 "general"（通用模式）
+        doc_name: 文档名称（单文档模式时使用）
+
+    Returns:
+        str: "quit"=退出, "clear"=清除历史, "switch"=切换模式, "main"=返回主菜单
     """
     print("\n" + "=" * 80)
-    print("  开始对话")
+    if mode == "single":
+        print(f"  📄 单文档对话模式: {doc_name}")
+    elif mode == "cross":
+        print(f"  🌐 跨文档智能对话模式")
+    else:
+        print(f"  💬 通用对话模式")
     print("=" * 80 + "\n")
 
-    if doc_name:
-        print(f"📄 当前文档: {doc_name}")
-    else:
-        print("💬 通用对话模式（未绑定特定文档）")
-
-    print("\n💡 提示：")
+    print("💡 提示：")
     print("   - 输入问题开始对话")
-    print("   - 输入 'quit', 'exit', '退出', '再见' 结束对话")
-    print("   - 输入 'clear' 清空对话历史\n")
-
+    if mode == "cross":
+        print("   - 系统会自动选择相关文档进行检索")
+    if mode in ["single", "cross"]:
+        print("   - 输入 'switch' 切换模式")
+    print("   - 输入 'clear' 清除对话历史")
+    print("   - 输入 'main' 返回主菜单")
+    print("   - 输入 'quit' 或 'exit' 退出\n")
     print("=" * 80 + "\n")
 
     turn_count = 0
@@ -326,19 +448,28 @@ async def chat_loop(answer_agent: AnswerAgent, doc_name: Optional[str]):
     while True:
         try:
             # 获取用户输入
-            user_input = input("\n👤 You: ").strip()
+            if mode == "single":
+                mode_label = f"单文档 ({doc_name})"
+            elif mode == "cross":
+                mode_label = "跨文档模式"
+            else:
+                mode_label = "通用模式"
 
-            # 检查退出命令
-            if user_input.lower() in ["quit", "exit", "退出", "再见", "bye"]:
-                print("\n🤖 Assistant: 再见！期待下次与您对话。\n")
-                break
+            user_input = input(f"\n[{mode_label}] 👤 Query: ").strip()
 
-            # 检查清空历史命令
+            # 检查命令
+            if user_input.lower() in ["quit", "exit", "退出", "再见"]:
+                return "quit"
+
             if user_input.lower() == "clear":
-                # 重新初始化 agent（清空历史）
-                logger.info("🔄 清空对话历史...")
-                # 返回 True 表示需要重新初始化
-                return True
+                print("\n🔄 清除对话历史...")
+                return "clear"
+
+            if user_input.lower() == "switch":
+                return "switch"
+
+            if user_input.lower() == "main":
+                return "main"
 
             # 检查空输入
             if not user_input:
@@ -346,68 +477,277 @@ async def chat_loop(answer_agent: AnswerAgent, doc_name: Optional[str]):
                 continue
 
             turn_count += 1
-            logger.info(f"\n{'=' * 80}")
-            logger.info(f"第 {turn_count} 轮对话")
-            logger.info(f"{'=' * 80}\n")
 
-            # 调用 AnswerAgent
-            result = await answer_agent.graph.ainvoke({
-                "user_query": user_input,
-                "current_doc": doc_name,
-                "needs_retrieval": False,
-                "is_complete": False
-            })
+            # 调用 AnswerAgent（使用 query() 方法，自动管理状态）
+            result = await answer_agent.query(
+                user_query=user_input,
+                current_doc=doc_name,
+                needs_retrieval=False
+            )
 
             # 提取回答
             final_answer = result.get("final_answer", "")
-            needs_retrieval = result.get("needs_retrieval", False)
-            analysis_reason = result.get("analysis_reason", "")
+            selected_documents = result.get("selected_documents", [])
 
-            # 显示意图分析（仅在 DEBUG 模式）
-            if logger.level == logging.DEBUG:
-                logger.debug(f"\n🤔 意图分析:")
-                logger.debug(f"   - 需要检索: {'是' if needs_retrieval else '否'}")
-                logger.debug(f"   - 理由: {analysis_reason}")
+            # 显示选择的文档（跨文档模式）
+            if mode == "cross" and selected_documents:
+                print(f"\n📚 选择的文档 ({len(selected_documents)} 个):")
+                for doc in selected_documents:
+                    print(f"   - {doc['doc_name']} (相似度: {doc.get('similarity_score', 'N/A'):.3f})")
 
             # 显示回答
             print(f"\n🤖 Assistant: {final_answer}")
 
         except KeyboardInterrupt:
-            print("\n\n🤖 Assistant: 再见！期待下次与您对话。\n")
-            break
+            print("\n\n返回主菜单")
+            return "main"
         except Exception as e:
-            logger.error(f"\n❌ 对话出错: {e}")
+            logger.error(f"\n❌ 查询出错: {e}")
             import traceback
             logger.debug(traceback.format_exc())
             print(f"\n❌ 抱歉，处理您的问题时出现错误: {str(e)}\n")
 
-    return False  # 正常退出，不需要重新初始化
+
+async def single_doc_chat_mode(doc_name: str):
+    """单文档对话模式"""
+    # 初始化 AnswerAgent
+    logger.info(f"\n🔧 初始化 AnswerAgent（单文档模式: {doc_name}）...")
+    answer_agent = AnswerAgent(doc_name=doc_name)
+    logger.info("✅ AnswerAgent 初始化完成\n")
+
+    while True:
+        action = await chat_loop(answer_agent, mode="single", doc_name=doc_name)
+
+        if action == "quit":
+            print("\n再见！\n")
+            break
+        elif action == "clear":
+            # 清除对话历史和持久化状态
+            logger.info("🔧 清除对话历史和状态...")
+            answer_agent.clear_state()
+            answer_agent.llm.clear_all_history()
+            logger.info("✅ 对话历史已清除\n")
+            continue
+        elif action == "switch":
+            # 切换到跨文档模式
+            await cross_doc_chat_mode()
+            break
+        elif action == "main":
+            break
+
+
+async def cross_doc_chat_mode():
+    """跨文档智能对话模式"""
+    print("\n" + "=" * 80)
+    print("  跨文档智能对话模式")
+    print("=" * 80 + "\n")
+
+    # 检查文档数量
+    indexed_docs = list_indexed_documents()
+    if len(indexed_docs) < 2:
+        print(f"⚠️  当前只有 {len(indexed_docs)} 个已索引文档")
+        print("💡 建议至少索引2个文档以体验跨文档检索功能\n")
+
+        choice = input("是否继续？(y/n): ").strip().lower()
+        if choice != 'y':
+            return
+
+    # 初始化 AnswerAgent（doc_name=None 表示跨文档模式）
+    logger.info("\n🔧 初始化 AnswerAgent（跨文档模式）...")
+    answer_agent = AnswerAgent(doc_name=None)
+    logger.info("✅ AnswerAgent 初始化完成\n")
+
+    while True:
+        action = await chat_loop(answer_agent, mode="cross", doc_name=None)
+
+        if action == "quit":
+            print("\n再见！\n")
+            break
+        elif action == "clear":
+            # 清除对话历史和持久化状态
+            logger.info("🔧 清除对话历史和状态...")
+            answer_agent.clear_state()
+            answer_agent.llm.clear_all_history()
+            logger.info("✅ 对话历史已清除\n")
+            continue
+        elif action == "switch":
+            # 切换到单文档模式
+            indexed_docs = list_indexed_documents()
+            if len(indexed_docs) == 0:
+                print("\n⚠️  没有已索引的文档")
+                input("\n按回车键继续...")
+                continue
+
+            print("\n已索引的文档:")
+            doc_list = list(indexed_docs.keys())
+            for idx, doc_name in enumerate(doc_list, 1):
+                print(f"  [{idx}] {doc_name}")
+
+            choice = input("\n请选择文档编号: ").strip()
+            if choice.isdigit():
+                idx = int(choice)
+                if 1 <= idx <= len(doc_list):
+                    selected_doc = doc_list[idx - 1]
+                    await single_doc_chat_mode(selected_doc)
+                    break
+                else:
+                    print("❌ 无效选择")
+            else:
+                print("❌ 无效输入")
+        elif action == "main":
+            break
+
+
+async def manual_selection_chat_mode(selected_docs: list):
+    """跨文档手动选择模式"""
+    print("\n" + "=" * 80)
+    print("  跨文档手动选择模式")
+    print("=" * 80 + "\n")
+
+    print(f"📚 已选择 {len(selected_docs)} 个文档作为背景知识:")
+    for idx, doc_name in enumerate(selected_docs, 1):
+        print(f"   {idx}. {doc_name}")
+
+    # 初始化 AnswerAgent
+    logger.info("\n🔧 初始化 AnswerAgent（手动选择模式）...")
+    answer_agent = AnswerAgent(doc_name=None)
+
+    # 验证文档
+    valid_docs, invalid_docs = answer_agent.validate_manual_selected_docs(selected_docs)
+
+    if invalid_docs:
+        logger.warning(f"⚠️  以下文档未找到或未索引: {invalid_docs}")
+        print(f"\n⚠️  警告: 以下文档无效，将被跳过:")
+        for doc in invalid_docs:
+            print(f"   - {doc}")
+
+    if len(valid_docs) == 0:
+        logger.error("❌ 没有有效的文档可以使用")
+        print("\n❌ 没有有效的文档，无法继续")
+        input("\n按回车键返回主菜单...")
+        return
+
+    print(f"\n✅ 有效文档数: {len(valid_docs)}")
+    logger.info("✅ AnswerAgent 初始化完成\n")
+
+    # 修改 chat_loop 以支持手动选择模式
+    while True:
+        try:
+            # 获取用户输入
+            user_input = input(f"\n[手动选择 ({len(valid_docs)} 个文档)] 👤 Query: ").strip()
+
+            # 检查命令
+            if user_input.lower() in ["quit", "exit", "退出", "再见"]:
+                print("\n再见！\n")
+                break
+
+            if user_input.lower() == "clear":
+                print("\n🔄 清除对话历史...")
+                logger.info("🔧 重新初始化 AnswerAgent...")
+                # 清除持久化状态
+                answer_agent.clear_state()
+                # 清除 LLM 对话历史
+                answer_agent.llm.clear_all_history()
+                logger.info("✅ AnswerAgent 重新初始化完成\n")
+                continue
+
+            if user_input.lower() == "main":
+                break
+
+            if user_input.lower() == "switch":
+                # 允许重新选择文档
+                new_selected_docs = select_multiple_documents_interactive()
+                if new_selected_docs and len(new_selected_docs) > 0:
+                    await manual_selection_chat_mode(new_selected_docs)
+                    break
+                else:
+                    continue
+
+            # 检查空输入
+            if not user_input:
+                print("⚠️  请输入问题")
+                continue
+
+            # 调用 AnswerAgent（手动选择模式）
+            # 状态持久化已自动集成到工作流中，直接使用 graph.ainvoke 即可
+            result = await answer_agent.graph.ainvoke({
+                "user_query": user_input,
+                "current_doc": None,  # 跨文档模式
+                "manual_selected_docs": valid_docs,  # 手动选择的文档列表
+                "needs_retrieval": True,  # 需要检索
+                "is_complete": False
+            })
+
+            # 提取回答
+            final_answer = result.get("final_answer", "")
+            retrieval_mode = result.get("retrieval_mode", "unknown")
+            multi_doc_results = result.get("multi_doc_results", {})
+
+            # 显示使用的文档
+            if multi_doc_results:
+                print(f"\n📚 检索的文档 ({len(multi_doc_results)} 个):")
+                for doc_name in multi_doc_results.keys():
+                    print(f"   - {doc_name}")
+
+            # 显示回答
+            print(f"\n🤖 Assistant: {final_answer}")
+            print(f"\n🔧 模式: {retrieval_mode}")
+
+        except KeyboardInterrupt:
+            print("\n\n返回主菜单")
+            break
+        except Exception as e:
+            logger.error(f"\n❌ 查询出错: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            print(f"\n❌ 抱歉，处理您的问题时出现错误: {str(e)}\n")
 
 
 async def main_async():
     """异步主函数"""
     print_banner()
 
-    # 步骤1：选择文档
-    doc_name = await select_document()
-
-    # 步骤2：初始化 AnswerAgent
-    logger.info("\n🔧 初始化 AnswerAgent...")
-    answer_agent = AnswerAgent(doc_name=doc_name)
-    logger.info("✅ AnswerAgent 初始化完成\n")
-
-    # 步骤3：进入对话循环
     while True:
-        should_restart = await chat_loop(answer_agent, doc_name)
+        # 步骤1：选择模式和文档
+        choice = await select_document()
 
-        if should_restart:
-            # 重新初始化 agent
-            logger.info("🔧 重新初始化 AnswerAgent...")
-            answer_agent = AnswerAgent(doc_name=doc_name)
-            logger.info("✅ AnswerAgent 重新初始化完成\n")
-        else:
-            # 正常退出
+        if choice is None:
+            # 用户选择退出
             break
+
+        mode, data = choice
+
+        # 步骤2：进入对应的对话模式
+        if mode == "single":
+            # 单文档模式：data 是 doc_name (str)
+            await single_doc_chat_mode(data)
+        elif mode == "cross":
+            # 跨文档自动选择模式
+            await cross_doc_chat_mode()
+        elif mode == "manual":
+            # 跨文档手动选择模式：data 是 selected_docs (list)
+            await manual_selection_chat_mode(data)
+        elif mode == "general":
+            # 通用对话模式
+            logger.info("\n🔧 初始化 AnswerAgent（通用模式）...")
+            answer_agent = AnswerAgent(doc_name=None)
+            logger.info("✅ AnswerAgent 初始化完成\n")
+
+            while True:
+                action = await chat_loop(answer_agent, mode="general", doc_name=None)
+
+                if action == "quit":
+                    print("\n再见！\n")
+                    return  # 退出整个程序
+                elif action == "clear":
+                    # 清除对话历史和持久化状态
+                    logger.info("🔧 清除对话历史和状态...")
+                    answer_agent.clear_state()
+                    answer_agent.llm.clear_all_history()
+                    logger.info("✅ 对话历史已清除\n")
+                    continue
+                elif action == "main":
+                    break  # 返回主菜单
 
 
 def main():

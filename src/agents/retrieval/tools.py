@@ -24,7 +24,7 @@ class RetrievalTools:
         """
         self.agent = agent
 
-    async def search_by_context(self, query: str) -> List[str]:
+    async def search_by_context(self, query: str) -> Dict:
         """
         基于上下文的语义检索方法
 
@@ -34,8 +34,14 @@ class RetrievalTools:
             query: 搜索查询字符串，应描述要查找的内容语义
 
         Returns:
-            检索到的相关文档内容列表
+            标准格式的工具响应：
+            {
+                "type": "content",
+                "tool": "search_by_context",
+                "items": [{"content": ..., "title": ..., "pages": ..., "raw_data": ...}, ...]
+            }
         """
+        from ..common.tool_response_format import create_content_response
         logger.info(f"🔍 [Tool:search_by_context] ---------- 语义检索 ----------")
         logger.info(f"🔍 [Tool:search_by_context] 查询内容: {query}")
 
@@ -120,11 +126,13 @@ class RetrievalTools:
             else:
                 logger.warning("⚠️ [Tool:search_by_context] 在向量数据库中未找到与查询相关的内容")
 
-            return context_data
+            # 返回标准格式
+            return create_content_response("search_by_context", context_data)
 
         except Exception as e:
             logger.error(f"❌ [Tool:search_by_context] 通过上下文检索数据时出错: {e}", exc_info=True)
-            return []
+            # 错误时返回空结果的标准格式
+            return create_content_response("search_by_context", [])
 
     async def extract_titles_from_structure(self, query: str) -> Dict:
         """
@@ -137,24 +145,27 @@ class RetrievalTools:
             query: 用户查询字符串
 
         Returns:
-            包含标题列表和选择原因的字典：
+            标准格式的工具响应：
             {
-                "titles": ["章节1", "章节2", ...],
-                "reason": "选择这些章节的原因"
+                "type": "metadata",
+                "tool": "extract_titles_from_structure",
+                "items": ["章节1", "章节2", ...],
+                "metadata": {"reason": "选择这些章节的原因"}
             }
         """
         from src.utils.helpers import extract_data_from_LLM_res
         from src.agents.common.prompts import CommonRole
+        from ..common.tool_response_format import create_metadata_response
 
         logger.info(f"📋 [Tool:extract_titles_from_structure] 从结构中提取标题: {query[:50]}...")
 
         if not query or not query.strip():
             logger.warning("❌ [Tool:extract_titles_from_structure] 查询字符串为空")
-            return {"titles": [], "reason": "查询为空"}
+            return create_metadata_response("extract_titles_from_structure", [], {"reason": "查询为空"})
 
         if not self.agent.vector_db_client:
             logger.error("❌ [Tool:extract_titles_from_structure] VectorDBClient 未初始化")
-            return {"titles": [], "reason": "向量数据库未初始化"}
+            return create_metadata_response("extract_titles_from_structure", [], {"reason": "向量数据库未初始化"})
 
         try:
             # 步骤1: 从向量数据库获取 agenda_dict
@@ -162,7 +173,7 @@ class RetrievalTools:
 
             if not agenda_dict:
                 logger.warning("⚠️ [Tool:extract_titles_from_structure] 未找到文档结构信息")
-                return {"titles": [], "reason": "未找到文档结构信息"}
+                return create_metadata_response("extract_titles_from_structure", [], {"reason": "未找到文档结构信息"})
 
             # 步骤2: 使用 LLM 提取标题列表和原因
             response = self.agent.llm.call_llm_chain(
@@ -181,22 +192,24 @@ class RetrievalTools:
             # 验证结果
             if not isinstance(title_list, list):
                 logger.warning("⚠️ [Tool:extract_titles_from_structure] 标题列表格式无效")
-                return {"titles": [], "reason": "标题列表格式无效"}
+                return create_metadata_response("extract_titles_from_structure", [], {"reason": "标题列表格式无效"})
 
             logger.info(f"✅ [Tool:extract_titles_from_structure] 提取到 {len(title_list)} 个标题")
             logger.info(f"📋 [Tool:extract_titles_from_structure]   - 标题: {title_list}")
             logger.info(f"📋 [Tool:extract_titles_from_structure]   - 原因: {reason}")
 
-            return {
-                "titles": title_list,
-                "reason": reason
-            }
+            # 返回标准格式
+            return create_metadata_response(
+                "extract_titles_from_structure",
+                title_list,
+                {"reason": reason}
+            )
 
         except Exception as e:
             logger.error(f"❌ [Tool:extract_titles_from_structure] 提取标题失败: {e}", exc_info=True)
-            return {"titles": [], "reason": f"提取失败: {str(e)}"}
+            return create_metadata_response("extract_titles_from_structure", [], {"reason": f"提取失败: {str(e)}"})
 
-    async def search_by_title(self, title_list: str) -> List[str]:
+    async def search_by_title(self, title_list: str) -> Dict:
         """
         基于标题列表的精确检索工具
 
@@ -206,8 +219,14 @@ class RetrievalTools:
             title_list: 标题列表（JSON格式字符串或列表）
 
         Returns:
-            检索到的匹配标题的文档内容列表
+            标准格式的工具响应：
+            {
+                "type": "content",
+                "tool": "search_by_title",
+                "items": [{"content": ..., "title": ..., "pages": ..., "raw_data": ...}, ...]
+            }
         """
+        from ..common.tool_response_format import create_content_response
         logger.info(f"📑 [Tool:search_by_title] ---------- 标题检索 ----------")
         logger.info(f"📑 [Tool:search_by_title] 输入标题: {title_list}")
 
@@ -377,9 +396,10 @@ class RetrievalTools:
         logger.info("=" * 60)
         logger.info("")
 
-        return context_data
+        # 返回标准格式
+        return create_content_response("search_by_title", context_data)
 
-    async def get_document_structure(self, query: str = "") -> List[str]:
+    async def get_document_structure(self, query: str = "") -> Dict:
         """
         获取文档的目录结构工具
 
@@ -389,14 +409,21 @@ class RetrievalTools:
             query: 查询参数（此工具不需要具体查询内容，保留用于接口兼容）
 
         Returns:
-            文档目录结构列表
+            标准格式的工具响应：
+            {
+                "type": "structure",
+                "tool": "get_document_structure",
+                "items": ["第1章 引言", "第2章 背景", ...]
+            }
         """
+        from ..common.tool_response_format import create_structure_response
+
         _ = query  # 参数保留用于接口兼容，实际不使用
         logger.info(f"📚 [Tool:get_document_structure] ---------- 获取文档结构 ----------")
 
         if not self.agent.vector_db_client:
             logger.error("📚 [Tool:get_document_structure] ❌ VectorDBClient 未初始化")
-            return ["文档结构信息不可用（向量数据库未初始化）"]
+            return create_structure_response("get_document_structure", ["文档结构信息不可用（向量数据库未初始化）"])
 
         try:
             # 获取 agenda_dict
@@ -404,7 +431,7 @@ class RetrievalTools:
 
             if not agenda_dict:
                 logger.warning("⚠️ [Tool:get_document_structure] 文档结构信息为空")
-                return ["文档目录信息不可用"]
+                return create_structure_response("get_document_structure", ["文档目录信息不可用"])
 
             # 格式化目录结构
             structure_list = []
@@ -429,8 +456,9 @@ class RetrievalTools:
             structure_list.append("=" * 60)
 
             logger.info(f"✅ [Tool:get_document_structure] 获取到 {len(agenda_dict)} 个章节")
-            return structure_list
+            # 返回标准格式
+            return create_structure_response("get_document_structure", structure_list)
 
         except Exception as e:
             logger.error(f"❌ [Tool:get_document_structure] 获取失败: {e}", exc_info=True)
-            return ["文档结构信息不可用"]
+            return create_structure_response("get_document_structure", ["文档结构信息不可用"])

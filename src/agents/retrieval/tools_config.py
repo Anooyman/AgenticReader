@@ -38,12 +38,11 @@ RETRIEVAL_TOOLS_CONFIG: List[Dict[str, Any]] = [
         },
         "enabled": True,
         "priority": 1,
-        "requires_summary": True,
     },
     {
         "name": "extract_titles_from_structure",
         "method_name": "extract_titles_from_structure",
-        "description": """从文档结构中智能提取标题列表。根据用户查询，从文档目录中提取最相关的章节标题。
+        "description": """从文档结构中智能提取标题列表。根据用户查询，从文档目录中提取最相关的章节标题。**此工具只返回标题，不包含实际内容**。
 
 **核心功能**:
 - 自动获取文档结构（内部调用，无需先执行 get_document_structure）
@@ -67,12 +66,13 @@ RETRIEVAL_TOOLS_CONFIG: List[Dict[str, Any]] = [
 
 **后续步骤**:
 - 此工具会返回章节标题列表
-- **必须**: 下一步应使用 search_by_title，传入提取的标题列表来检索具体内容
+- **通常必须**: 下一步应使用 search_by_title，传入提取的标题列表来检索具体内容
+- **例外**: 仅当用户只询问"有哪些章节"时，可以直接基于标题列表回答
 - **不要**: 提取标题后又切换到 search_by_context（会破坏结构化检索的一致性）
 
 **典型工作流（推荐）**:
 1. extract_titles_from_structure（智能提取相关标题）← 当前工具
-2. search_by_title（检索这些章节的具体内容）
+2. search_by_title（检索这些章节的具体内容）← **通常必需**
 
 **可选工作流**（如果用户明确询问结构）:
 1. get_document_structure（展示完整目录给用户）
@@ -82,13 +82,12 @@ RETRIEVAL_TOOLS_CONFIG: List[Dict[str, Any]] = [
 **注意事项**:
 - 返回的是**标题列表**（结构化数据），不包含实际内容
 - 智能匹配：根据查询选择最相关的章节，通常不会返回所有章节
-- 后续必须使用 search_by_title 来获取实际内容""",
+- **关键**: 除非用户只问"有哪些章节"，否则必须继续使用 search_by_title 获取实际内容""",
         "parameters": {
             "query": "用户查询字符串，描述查询意图和需要查找的主题"
         },
         "enabled": True,
         "priority": 2,
-        "requires_summary": False,
     },
     {
         "name": "search_by_title",
@@ -121,7 +120,6 @@ RETRIEVAL_TOOLS_CONFIG: List[Dict[str, Any]] = [
         },
         "enabled": True,
         "priority": 3,
-        "requires_summary": True,
     },
     {
         "name": "get_document_structure",
@@ -179,7 +177,6 @@ RETRIEVAL_TOOLS_CONFIG: List[Dict[str, Any]] = [
         },
         "enabled": True,
         "priority": 4,
-        "requires_summary": False,
     },
 ]
 

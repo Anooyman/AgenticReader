@@ -10,7 +10,7 @@ import logging
 
 from ..base import AgentBase
 from .state import IndexingState
-from .doc_registry import DocumentRegistry
+from src.core.document_management import DocumentRegistry
 from .tools import IndexingTools
 from .nodes import IndexingNodes
 from .utils import IndexingUtils

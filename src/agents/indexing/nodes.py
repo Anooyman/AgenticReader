@@ -583,7 +583,7 @@ class IndexingNodes:
         doc_name = state["doc_name"]
 
         try:
-            from src.core.processing.parallel_processor import ChapterProcessor
+            from src.core.parallel import ChapterProcessor
             from .prompts import IndexingRole
             from src.agents.common.prompts import CommonRole
 
@@ -922,6 +922,49 @@ class IndexingNodes:
             logger.info(f"  - JSON: {1 if generated_files.get('json_data') else 0} 个")
             logger.info(f"  - 向量DB: {1 if generated_files.get('vector_db') else 0} 个")
             logger.info(f"  - 摘要: {len(generated_files.get('summaries', []))} 个")
+
+            # ========== 提取并存储元数据（用于多PDF检索） ==========
+            logger.info(f"")
+            logger.info(f"📋 [Register] ========== 提取文档元数据 ==========")
+            try:
+                from .components import MetadataExtractor
+
+                # 提取元数据
+                extractor = MetadataExtractor(self.agent.llm)
+                metadata_enhanced = await extractor.extract_metadata(
+                    doc_name=doc_name,
+                    brief_summary=state.get("brief_summary", ""),
+                    structure=state.get("agenda_dict", {})
+                )
+
+                # 保存元数据到doc_registry（使用并发安全的方法）
+                success = self.agent.doc_registry.update_metadata(
+                    doc_id=doc_id,
+                    metadata_key="metadata_enhanced",
+                    metadata_value=metadata_enhanced
+                )
+                if success:
+                    logger.info(f"✅ [Register] 元数据已保存到文档注册表")
+                else:
+                    logger.warning(f"⚠️ [Register] 元数据保存失败，文档ID不存在: {doc_id}")
+
+                # 添加到元数据向量数据库
+                from src.core.vector_db.metadata_db import MetadataVectorDB
+
+                metadata_db = MetadataVectorDB()
+                metadata_db.add_document(
+                    doc_id=doc_id,
+                    doc_name=doc_name,
+                    embedding_summary=metadata_enhanced.get("embedding_summary", "")
+                )
+
+                logger.info(f"✅ [Register] 元数据已添加到向量数据库")
+
+            except Exception as e:
+                logger.error(f"❌ [Register] 元数据提取/存储失败: {e}")
+                logger.warning(f"⚠️  [Register] 跳过元数据处理，继续完成注册")
+
+            logger.info(f"")
 
             # 直接在 state 上修改
             state["doc_id"] = doc_id

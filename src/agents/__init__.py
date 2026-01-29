@@ -16,7 +16,10 @@ Agent系统
 from .base import AgentBase
 from .answer import AnswerAgent, AnswerState
 from .retrieval import RetrievalAgent, RetrievalState
-from .indexing import IndexingAgent, IndexingState, DocumentRegistry
+from .indexing import IndexingAgent, IndexingState
+
+# 导入文档管理组件
+from src.core.document_management import DocumentRegistry
 
 __all__ = [
     # 基类

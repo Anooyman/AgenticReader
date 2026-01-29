@@ -20,7 +20,7 @@ from typing import List, Dict, Any
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.agents.retrieval import RetrievalAgent
-from src.agents.indexing import DocumentRegistry
+from src.core.document_management import DocumentRegistry
 from src.config.settings import VECTOR_DB_PATH
 
 # 配置日志

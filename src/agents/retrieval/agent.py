@@ -5,7 +5,7 @@ Retrieval Agent - 智能检索Agent
 """
 
 from langgraph.graph import StateGraph, END
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import logging
 
 from ..base import AgentBase
@@ -46,6 +46,11 @@ class RetrievalAgent(AgentBase):
 
         # 检索缓存字典（提升性能，避免重复检索）
         self.retrieval_data_dict: Dict[str, Any] = {}
+
+        # 持久化状态（跨多轮检索保留 ReAct 历史）
+        # 保留：thoughts, actions, observations, retrieved_content 等
+        # 用于：基于历史优化查询、避免重复检索
+        self.persistent_state: Optional[RetrievalState] = None
 
         # 初始化功能模块（使用依赖注入）
         self.utils = RetrievalUtils(self)
@@ -99,3 +104,17 @@ class RetrievalAgent(AgentBase):
         workflow.set_entry_point("initialize")
 
         return workflow.compile()
+
+    # ==================== 状态持久化管理 ====================
+
+    def clear_state(self):
+        """
+        清除持久化状态
+
+        清除所有历史信息：
+        - thoughts, actions, observations
+        - retrieved_content
+        - 等等
+        """
+        self.persistent_state = None
+        logger.info(f"🗑️  [{self.current_doc or 'MultiDoc'}] 已清除 RetrievalAgent 持久化状态")

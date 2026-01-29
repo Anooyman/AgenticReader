@@ -20,7 +20,7 @@ from typing import List, Dict, Any
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.agents.answer import AnswerAgent
-from src.agents.indexing import DocumentRegistry
+from src.core.document_management import DocumentRegistry
 
 # 配置日志
 logging.basicConfig(

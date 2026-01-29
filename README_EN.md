@@ -2,7 +2,7 @@
 
 [中文](README.md) | English
 
-AgenticReader is an advanced document analysis and intelligent Q&A tool powered by large language models (LLM) and Multi-Agent architecture. Built on Agent orchestration patterns, it supports PDF document parsing, integrates multiple LLM providers (Azure OpenAI, OpenAI, Ollama), and automatically extracts content, generates summaries, builds vector databases, and supports multi-turn intelligent conversations.
+AgenticReader is an advanced document analysis and intelligent Q&A tool powered by large language models (LLM) and Multi-Agent architecture. Built on Agent orchestration patterns, focused on **deep PDF document parsing**, integrates multiple LLM providers (Azure OpenAI, OpenAI, Ollama, Gemini), and automatically extracts content, generates summaries, builds vector databases, and supports multi-turn intelligent conversations. Offers both **CLI command-line** and **Web interface** modes.
 
 ---
 
@@ -23,19 +23,29 @@ AgenticReader is an advanced document analysis and intelligent Q&A tool powered 
 - **Incremental Caching**: Stage-wise caching to avoid reprocessing
 
 ### 💬 Intelligent Q&A | Intelligent Q&A
+- **Four Dialogue Modes**:
+  - Single Document Mode - Deep Q&A for specific documents
+  - Cross-Document Intelligent Mode - Auto-select relevant documents for retrieval
+  - Cross-Document Manual Mode - Manually specify multiple documents as background knowledge
+  - General Mode - Free conversation without binding to specific documents
 - **Intent Recognition**: Auto-determine if document retrieval is needed
 - **Context Management**: Smart caching of retrieval results for multi-turn dialogue
 - **History Compression**: LLM auto-summarizes conversation history, saves context space (90%+ compression rate)
 - **Document Summary**: Auto-generate brief summaries (brief_summary.md)
-- **Multi-document Support**: Switch between multiple indexed documents
 
-### 🌐 Modern Web Interface | Modern Web Interface
-- **FastAPI + WebSocket**: Real-time chat communication
-- **Session Persistence**: Auto-save, backup rotation (keeps latest 10), import/export
-- **Dual Storage Architecture**: Client localStorage + server file storage
-- **PDF Viewer**: Integrated online PDF preview with page navigation
-- **Data Management System**: Granular data management with partial deletion, batch operations, smart cleanup
-- **Responsive Design**: Mobile-friendly adaptive interface
+### 🌐 Dual Operation Modes | Dual Operation Modes
+- **CLI Command-line Mode**:
+  - Interactive menu system supporting document indexing, management, and dialogue
+  - Free switching between four dialogue modes
+  - Real-time view of document selection and retrieval process
+  - Suitable for technical users and automation scenarios
+- **Web Interface Mode**:
+  - **Dashboard**: Document overview, quick indexing, mode selection
+  - **Smart Chat**: WebSocket real-time communication, supports Markdown/LaTeX rendering
+  - **Session Management**: Three modes with independent session storage, support import/export
+  - **Data Management**: Granular data control with partial deletion, batch operations, smart cleanup
+  - **Configuration Center**: LLM provider switching, parameter adjustment
+  - **Responsive Design**: Mobile-friendly adaptive interface
 
 ---
 
@@ -91,6 +101,12 @@ EMBEDDING_MODEL=text-embedding-ada-002
 # OLLAMA_BASE_URL=http://localhost:11434
 # CHAT_MODEL_NAME=llama3
 
+# === Or use Gemini (Google) ===
+# GEMINI_API_KEY=your_gemini_api_key
+# GEMINI_MODEL_NAME=gemini-1.5-pro
+# GEMINI_EMBEDDING_MODEL=text-embedding-004
+# GEMINI_BASE_URL=your_gemini_api_endpoint
+
 # === Optional Configuration ===
 LOGGING_LEVEL=INFO
 ```
@@ -100,6 +116,7 @@ LOGGING_LEVEL=INFO
 ### Running the Application | Running the Application
 
 #### Method 1: Web Interface (Recommended)
+
 ```bash
 # Start FastAPI server
 python src/ui/run_server.py
@@ -107,26 +124,101 @@ python src/ui/run_server.py
 # Or use uvicorn (supports auto-reload)
 uvicorn src.ui.backend.app:app --reload --host 0.0.0.0 --port 8000
 
-# Access Web Interface
-# http://localhost:8000
+# Access: http://localhost:8000
 ```
 
-**Web Interface Features:**
-- 📄 **PDF Processing**: Upload PDF → Auto-index → Start chat
-- 💬 **Smart Dialogue**: Multi-turn Q&A, history management, session switching
-- 📊 **Data Management**: View storage usage, delete document data, smart cleanup
-- ⚙️ **Configuration Management**: Switch LLM providers, adjust parameters
+**📊 Dashboard (/) - Main Menu**
+- Document list and overview
+- Quick indexing (batch/single)
+- Mode selection (Single/Cross/Manual)
+- Quick access to chat page
 
-#### Method 2: CLI Mode
+**💬 Chat Page (/chat) - Intelligent Dialogue**
+
+Three chat modes:
+- **Single Mode**: Select specific document for deep Q&A
+- **Cross Mode**: Auto-select relevant documents (intelligent decision)
+- **Manual Mode**: Manually specify multiple documents as background
+
+Features:
+- WebSocket real-time communication
+- Markdown and LaTeX formula rendering
+- Timestamp display (year/month/day hour:minute:second)
+- Session persistence (three modes independently managed)
+- Clear history (clears both file and memory)
+- Display selected documents and similarity scores
+
+**📁 Data Management (/data) - Documents & Sessions**
+
+Document Management:
+- View all indexed documents and storage usage
+- **Granular partial deletion**: Delete specific data types for individual documents
+  - JSON data, Vector DB, Images, Summary
+- Batch operations: Select multiple documents for deletion
+- Smart cleanup: Auto-clean data older than N days (default 30)
+
+Session Management:
+- View all mode sessions (Single/Cross/Manual)
+- Session detail view (Markdown/LaTeX rendering support)
+- Delete specific sessions
+- Import/export session data
+
+**⚙️ Configuration Center (/config) - LLM Settings**
+- Switch LLM providers (Azure OpenAI, OpenAI, Ollama, Gemini)
+- Adjust model parameters
+- API Key management
+
+**🔧 Structure Editor (/structure) - Document Structure**
+- View and edit document chapter structure
+- PDF online preview
+- Rebuild vector database
+
+---
+
+#### Method 2: CLI Command-line Mode
+
 ```bash
-# Interactive command-line interface
+# Start interactive CLI
 python main.py
-
-# Workflow:
-# 1. Select or index document
-# 2. Start conversation
-# 3. Enter questions, AI auto-retrieves and answers
 ```
+
+**Four Dialogue Modes:**
+
+1. **Single Mode** - Select specific document
+   ```
+   [Single (doc.pdf)] 👤 Query: What is this document about?
+   🤖 Assistant: This document discusses...
+   ```
+
+2. **Cross Mode** - Auto-select relevant documents
+   ```
+   [Cross Mode] 👤 Query: Compare the viewpoints
+   📚 Selected Documents (2):
+      - doc1.pdf (similarity: 0.856)
+      - doc2.pdf (similarity: 0.742)
+   🤖 Assistant: Based on retrieval...
+   ```
+
+3. **Manual Mode** - Manually select multiple documents
+   ```
+   Select documents: 1,2 (or 'all')
+   [Manual (2 docs)] 👤 Query: Summarize both
+   🤖 Assistant: Comprehensive summary...
+   ```
+
+4. **General Mode** - Free conversation
+   ```
+   [General Mode] 👤 Query: What is machine learning?
+   🤖 Assistant: Machine learning is...
+   ```
+
+**Commands:**
+- `i` - Index new document
+- `m` - Manage documents (view/delete)
+- `clear` - Clear conversation history
+- `switch` - Switch mode
+- `main` - Return to main menu
+- `quit`/`exit` - Exit program
 
 ---
 
@@ -410,6 +502,25 @@ CHAT_MODEL_NAME=your_model
 
 <details>
 <summary><b>📝 Changelog (Click to expand)</b></summary>
+
+### 2026-01-29 - Batch Indexing and Session Management Enhancements
+- 🐛 **Batch Indexing Fixes**
+  - ✅ Fixed concurrent write race condition during batch PDF indexing
+  - ✅ Enhanced DocumentRegistry concurrent safety (reload-before-save pattern)
+  - ✅ Ensured all documents register correctly when indexing multiple PDFs simultaneously
+  - ✅ Added `update_metadata()` method for safe metadata updates
+- 💬 **Session Management Optimization**
+  - ✅ Fixed chat history clearing (clears both file and memory)
+  - ✅ Re-instantiate AnswerAgent and RetrievalAgent when clearing history
+  - ✅ Fixed memory-file synchronization (update `current_session` to prevent stale data)
+  - ✅ Fixed single-mode session detail loading (support session_id lookup)
+- 🎨 **UI Enhancements**
+  - ✅ Added timestamp display to all chat modes (format: year/month/day hour:minute:second)
+  - ✅ Session detail modal supports Markdown and LaTeX rendering
+  - ✅ Historical messages display original timestamps (not current time)
+- 🔧 **Code Improvements**
+  - ✅ Unified AnswerAgent initialization parameters (only uses `doc_name`)
+  - ✅ Enhanced data consistency guarantees in concurrent environments
 
 ### 2026-01-17 - Major Architecture Refactor: Migration to Multi-Agent System
 - 🏗️ **Architecture Refactor**

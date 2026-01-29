@@ -6,6 +6,5 @@ Indexing Agent模块
 
 from .agent import IndexingAgent
 from .state import IndexingState
-from .doc_registry import DocumentRegistry
 
-__all__ = ['IndexingAgent', 'IndexingState', 'DocumentRegistry']
+__all__ = ['IndexingAgent', 'IndexingState']

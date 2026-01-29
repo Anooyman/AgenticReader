@@ -22,6 +22,11 @@ class ProcessingLimits:
     # Retrieval Agent 迭代次数配置
     MAX_RETRIEVAL_ITERATIONS = 10  # Retrieval Agent 最大迭代次数（ReAct循环）
 
+    # Retrieval Agent 持久化历史长度控制
+    MAX_PERSISTENT_HISTORY_LENGTH = 10  # 持久化历史的最大长度（thoughts, actions, observations, retrieved_content）
+    # 只保留最近的 N 条记录，避免上下文无限增长
+    # 建议值：5-20，根据 LLM 上下文窗口大小调整
+
     # 注意：会话历史相关配置（max_messages, max_tokens）已移至 SessionHistoryConfig
 
 

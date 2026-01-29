@@ -24,14 +24,13 @@ class RetrievalState(TypedDict, total=False):
     thoughts: List[str]  # 思考过程
     actions: List[Dict]  # 执行的动作 [{"tool": str, "params": dict}, ...]
     observations: List[str]  # 观察结果
-    current_iteration: int  # 当前迭代次数
+    current_iteration: int  # 当前迭代次数（内部轮数，用于ReAct循环控制和query重写判断）
 
     # ============ 当前步骤 ============
     current_tool: Optional[str]  # 当前选择的工具
     action_input: Optional[str]  # think 节点输出的原始输入（字符串）
     current_params: Optional[Dict]  # act 节点构建的工具参数（用于记录）
     last_result: Optional[Any]  # 上一步的结果
-    requires_summary: bool  # 当前工具执行后是否需要总结
 
     # ============ 输出 ============
     retrieved_content: List[Dict]  # 检索到的内容列表 [{"content": str, "title": str, "pages": List}, ...]

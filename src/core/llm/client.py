@@ -5,7 +5,7 @@ This module provides the main LLMBase class for managing chat conversations,
 integrating with different LLM providers and handling message history.
 
 Enhanced Features:
-- Multi-provider support (Azure, OpenAI, Ollama)
+- Multi-provider support (Azure, OpenAI, Ollama, Gemini)
 - Tool calling support for MCP integration
 - Async operations support
 - Session-based message history management
@@ -35,7 +35,8 @@ from src.core.llm.history import LimitedChatMessageHistory
 from src.core.llm.providers import (
     AzureLLMProvider,
     OpenAILLMProvider,
-    OllamaLLMProvider
+    OllamaLLMProvider,
+    GeminiLLMProvider
 )
 
 logging.basicConfig(
@@ -59,7 +60,7 @@ class LLMBase:
     def __init__(self, provider: str) -> None:
         """
         Args:
-            provider (str): 'azure', 'openai', 'ollama'
+            provider (str): 'azure', 'openai', 'ollama', 'gemini'
         """
         self.message_histories = {}
         self.provider = provider.lower()
@@ -67,6 +68,7 @@ class LLMBase:
             "azure": AzureLLMProvider(),
             "openai": OpenAILLMProvider(),
             "ollama": OllamaLLMProvider(),
+            "gemini": GeminiLLMProvider(),
         }
         
         # Validate provider

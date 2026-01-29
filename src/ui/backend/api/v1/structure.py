@@ -5,11 +5,8 @@ from typing import Dict, Any, List
 from pydantic import BaseModel
 import json
 from pathlib import Path
-import asyncio
 
-from ...config import settings, get_logger
-
-logger = get_logger(__name__)
+from ...config import JSON_DATA_DIR, PDF_DIR
 
 router = APIRouter()
 
@@ -32,8 +29,11 @@ async def get_structure(doc_name: str) -> Dict[str, Any]:
         structure.json 内容
     """
     try:
+        # Strip .pdf extension if present to get base name for folder lookup
+        doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
+
         # 构建 structure.json 路径
-        structure_path = settings.data_dir / "json_data" / doc_name / "structure.json"
+        structure_path = JSON_DATA_DIR / doc_name_base / "structure.json"
 
         if not structure_path.exists():
             raise HTTPException(
@@ -62,7 +62,7 @@ async def get_structure(doc_name: str) -> Dict[str, Any]:
             )
 
         # 同时读取 PDF 数据以获取总页数
-        data_path = settings.data_dir / "json_data" / doc_name / "data.json"
+        data_path = JSON_DATA_DIR / doc_name_base / "data.json"
         total_pages = 0
         if data_path.exists():
             with open(data_path, 'r', encoding='utf-8') as f:
@@ -70,7 +70,7 @@ async def get_structure(doc_name: str) -> Dict[str, Any]:
                 if isinstance(pdf_data, list):
                     total_pages = len(pdf_data)
 
-        logger.info(f"✅ 获取结构成功: {doc_name}, {len(agenda_dict)} 个章节")
+        print(f"✅ 获取结构成功: {doc_name}, {len(agenda_dict)} 个章节")
 
         return {
             "success": True,
@@ -84,7 +84,7 @@ async def get_structure(doc_name: str) -> Dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ 获取结构失败: {e}")
+        print(f"❌ 获取结构失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -104,8 +104,11 @@ async def update_structure(
         更新结果
     """
     try:
+        # Strip .pdf extension if present to get base name for folder lookup
+        doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
+
         # 构建路径
-        doc_json_folder = settings.data_dir / "json_data" / doc_name
+        doc_json_folder = JSON_DATA_DIR / doc_name_base
         structure_path = doc_json_folder / "structure.json"
 
         if not doc_json_folder.exists():
@@ -140,7 +143,7 @@ async def update_structure(
         with open(structure_path, 'w', encoding='utf-8') as f:
             json.dump(structure_data, f, ensure_ascii=False, indent=2)
 
-        logger.info(f"✅ 结构更新成功: {doc_name}, {len(structure.agenda_dict)} 个章节")
+        print(f"✅ 结构更新成功: {doc_name}, {len(structure.agenda_dict)} 个章节")
 
         return {
             "success": True,
@@ -152,7 +155,7 @@ async def update_structure(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ 更新结构失败: {e}")
+        print(f"❌ 更新结构失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -182,10 +185,12 @@ async def rebuild_from_structure(
     """
     try:
         from src.agents.indexing import IndexingAgent
-        from pathlib import Path
+
+        # Strip .pdf extension if present to get base name for folder lookup
+        doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
 
         # 验证文档存在
-        structure_path = settings.data_dir / "json_data" / doc_name / "structure.json"
+        structure_path = JSON_DATA_DIR / doc_name_base / "structure.json"
         if not structure_path.exists():
             raise HTTPException(
                 status_code=404,
@@ -193,27 +198,27 @@ async def rebuild_from_structure(
             )
 
         # 获取文档路径
-        pdf_path = settings.data_dir / "pdf" / f"{doc_name}.pdf"
+        pdf_path = PDF_DIR / f"{doc_name_base}.pdf"
         if not pdf_path.exists():
             raise HTTPException(
                 status_code=404,
                 detail=f"PDF 文件不存在: {doc_name}.pdf"
             )
 
-        logger.info(f"🔄 开始全面重建文档数据: {doc_name}")
-        logger.info(f"   重建内容: chunks + summaries + vectordb + brief_summary")
+        print(f"🔄 开始全面重建文档数据: {doc_name}")
+        print(f"   重建内容: chunks + summaries + vectordb + brief_summary")
 
         # 初始化 IndexingAgent
         indexing_agent = IndexingAgent()
 
         # 调用重建方法（全面重建）
         result = await indexing_agent.rebuild_from_structure(
-            doc_name=doc_name,
+            doc_name=doc_name_base,
             doc_path=str(pdf_path)
         )
 
         if result.get("success"):
-            logger.info(f"✅ 重建完成: {doc_name}")
+            print(f"✅ 重建完成: {doc_name}")
             return {
                 "success": True,
                 "message": "文档数据重建完成",
@@ -222,7 +227,7 @@ async def rebuild_from_structure(
             }
         else:
             error_msg = result.get("error", "未知错误")
-            logger.error(f"❌ 重建失败: {error_msg}")
+            print(f"❌ 重建失败: {error_msg}")
             raise HTTPException(
                 status_code=500,
                 detail=f"重建失败: {error_msg}"
@@ -231,9 +236,9 @@ async def rebuild_from_structure(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ 重建失败: {e}")
+        print(f"❌ 重建失败: {e}")
         import traceback
-        logger.error(traceback.format_exc())
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -253,8 +258,11 @@ async def delete_chapter(
         删除结果
     """
     try:
+        # Strip .pdf extension if present to get base name for folder lookup
+        doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
+
         # 读取当前结构
-        structure_path = settings.data_dir / "json_data" / doc_name / "structure.json"
+        structure_path = JSON_DATA_DIR / doc_name_base / "structure.json"
 
         if not structure_path.exists():
             raise HTTPException(
@@ -291,7 +299,7 @@ async def delete_chapter(
         with open(structure_path, 'w', encoding='utf-8') as f:
             json.dump(new_structure, f, ensure_ascii=False, indent=2)
 
-        logger.info(f"✅ 章节删除成功: {chapter_title}")
+        print(f"✅ 章节删除成功: {chapter_title}")
 
         return {
             "success": True,
@@ -302,5 +310,5 @@ async def delete_chapter(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ 删除章节失败: {e}")
+        print(f"❌ 删除章节失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))

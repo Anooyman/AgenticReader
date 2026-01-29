@@ -1,302 +1,188 @@
-"""会话管理API路由"""
+"""
+会话管理 API
 
-import tempfile
-import os
-from typing import Dict, Any
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File
-from fastapi.responses import FileResponse
+提供会话列表、加载、删除等功能
+"""
 
-from ...services.session_service import SessionService
-from ...models.session import (
-    SessionListResponse,
-    SessionExportRequest,
-    SessionImportRequest
-)
-from ...config.logging import get_logger
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import Optional, List
+from ...services.chat_service import chat_service
 
-logger = get_logger(__name__)
 router = APIRouter()
 
-# 依赖注入
-def get_session_service() -> SessionService:
-    """获取会话服务实例"""
-    return SessionService()
+
+class SessionListResponse(BaseModel):
+    """会话列表响应"""
+    sessions: List[dict]
 
 
-@router.post("/sessions/save")
-async def save_sessions(
-    session_service: SessionService = Depends(get_session_service)
-):
-    """手动保存当前会话"""
+class SessionResponse(BaseModel):
+    """会话响应"""
+    session_id: str
+    mode: str
+    doc_name: Optional[str]
+    selected_docs: Optional[List[str]]
+    title: str
+    created_at: str
+    updated_at: str
+    message_count: int
+    messages: Optional[List[dict]] = None
+
+
+@router.get("/list/{mode}")
+async def list_sessions(mode: str, limit: Optional[int] = None):
+    """
+    列出指定模式的会话列表
+
+    Args:
+        mode: 会话模式 (single/cross/manual)
+        limit: 限制返回数量（可选）
+
+    Returns:
+        会话列表
+    """
     try:
-        success = session_service.save_sessions(create_backup=True)
-        if success:
-            return {"status": "success", "message": "会话已保存"}
-        else:
-            raise HTTPException(status_code=500, detail="保存会话失败")
-    except Exception as e:
-        logger.error(f"保存会话失败: {e}")
-        raise HTTPException(status_code=500, detail=f"保存会话失败: {str(e)}")
+        if mode not in ["single", "cross", "manual"]:
+            raise HTTPException(status_code=400, detail="无效的模式")
 
-
-@router.post("/sessions/add")
-async def save_single_session(
-    session_data: Dict[str, Any],
-    session_service: SessionService = Depends(get_session_service)
-):
-    """保存单个会话数据"""
-    try:
-        # 提取会话信息
-        chat_id = session_data.get('chatId')
-        doc_name = session_data.get('docName')
-        messages = session_data.get('messages', [])
-        timestamp = session_data.get('timestamp')
-        has_pdf_reader = session_data.get('hasPdfReader', False)
-        has_web_reader = session_data.get('hasWebReader', False)
-        provider = session_data.get('provider', 'openai')
-
-        if not chat_id or not doc_name:
-            raise HTTPException(status_code=400, detail="缺少必要的会话信息")
-
-        # 创建会话数据模型
-        from ...models.session import ChatMessage
-
-        # 转换消息格式
-        converted_messages = []
-        for msg in messages:
-            if isinstance(msg, list) and len(msg) >= 3:
-                converted_messages.append(ChatMessage(
-                    role=msg[0],
-                    content=msg[1],
-                    timestamp=msg[2]
-                ))
-
-        # 创建会话模型并添加到缓存
-        from ...models.session import SessionModel
-        from datetime import datetime
-
-        session = SessionModel(
-            chat_id=chat_id,
-            doc_name=doc_name,
-            has_pdf_reader=has_pdf_reader,
-            has_web_reader=has_web_reader,
-            provider=provider,
-            messages=converted_messages,
-            timestamp=timestamp,
-            created_at=datetime.now(),
-            updated_at=datetime.now()
-        )
-
-        # 检查是否已存在相同的会话，如果存在则只更新，不创建新备份
-        existing_session = session_service._sessions_cache.get(chat_id)
-        is_new_session = existing_session is None
-
-        # 添加到缓存
-        session_service._sessions_cache[chat_id] = session
-
-        # 🔥 优化备份策略：只有新会话或消息数量显著增加时才创建备份
-        should_create_backup = is_new_session
-        if not is_new_session and existing_session:
-            # 如果消息数量增加了5条或更多，才创建备份
-            existing_message_count = len(existing_session.messages) if existing_session.messages else 0
-            current_message_count = len(converted_messages)
-            should_create_backup = (current_message_count - existing_message_count) >= 5
-
-        success = session_service.save_sessions(create_backup=should_create_backup)
-
-        if success:
-            backup_info = "创建备份" if should_create_backup else "仅更新"
-            logger.info(f"会话已保存: {chat_id}, 文档: {doc_name}, 消息数: {len(messages)}, 操作: {backup_info}")
-            return {"status": "success", "message": f"会话已保存: {chat_id} ({backup_info})"}
-        else:
-            raise HTTPException(status_code=500, detail="保存会话到文件失败")
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"保存单个会话失败: {e}")
-        raise HTTPException(status_code=500, detail=f"保存会话失败: {str(e)}")
-
-
-@router.get("/sessions/list", response_model=SessionListResponse)
-async def list_sessions(
-    session_service: SessionService = Depends(get_session_service)
-):
-    """获取所有会话列表"""
-    try:
-        sessions = session_service.get_all_sessions()
-        return SessionListResponse(
-            sessions=sessions,
-            count=len(sessions)
-        )
-    except Exception as e:
-        logger.error(f"获取会话列表失败: {e}")
-        raise HTTPException(status_code=500, detail=f"获取会话列表失败: {str(e)}")
-
-
-@router.post("/sessions/export")
-async def export_sessions(
-    request: SessionExportRequest,
-    session_service: SessionService = Depends(get_session_service)
-):
-    """导出会话数据"""
-    try:
-        export_path = session_service.export_sessions(request.filename)
-
-        return {
-            "status": "success",
-            "message": "会话导出成功",
-            "export_path": export_path,
-            "filename": os.path.basename(export_path)
-        }
-    except Exception as e:
-        logger.error(f"导出会话失败: {e}")
-        raise HTTPException(status_code=500, detail=f"导出会话失败: {str(e)}")
-
-
-@router.post("/sessions/import")
-async def import_sessions(
-    request: SessionImportRequest,
-    file: UploadFile = File(...),
-    session_service: SessionService = Depends(get_session_service)
-):
-    """导入会话数据"""
-    try:
-        # 检查文件类型
-        if not file.filename.lower().endswith('.json'):
-            raise HTTPException(status_code=400, detail="只支持JSON文件")
-
-        # 保存上传的文件到临时位置
-        with tempfile.NamedTemporaryFile(mode='wb', delete=False, suffix='.json') as tmp_file:
-            content = await file.read()
-            tmp_file.write(content)
-            tmp_path = tmp_file.name
-
-        try:
-            # 导入会话数据
-            success = session_service.import_sessions(tmp_path, merge=request.merge)
-
-            if success:
-                # 保存到文件
-                session_service.save_sessions(create_backup=True)
-
-                return {
-                    "status": "success",
-                    "message": f"会话导入成功({'合并' if request.merge else '替换'}模式)",
-                    "merge": request.merge
-                }
-            else:
-                raise HTTPException(status_code=400, detail="导入文件格式无效")
-
-        finally:
-            # 清理临时文件
-            try:
-                os.unlink(tmp_path)
-            except:
-                pass
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"导入会话失败: {e}")
-        raise HTTPException(status_code=500, detail=f"导入会话失败: {str(e)}")
-
-
-@router.get("/sessions/export/{filename}")
-async def download_export(
-    filename: str,
-    session_service: SessionService = Depends(get_session_service)
-):
-    """下载导出的会话文件"""
-    export_path = session_service.exports_dir / filename
-
-    if not export_path.exists():
-        raise HTTPException(status_code=404, detail="导出文件不存在")
-
-    return FileResponse(
-        str(export_path),
-        media_type='application/json',
-        filename=filename
-    )
-
-
-@router.delete("/sessions/clear")
-async def clear_all_sessions(
-    session_service: SessionService = Depends(get_session_service)
-):
-    """清空所有会话"""
-    try:
-        success = session_service.clear_all_sessions()
-
-        if success:
-            # 保存到文件
-            session_service.save_sessions(create_backup=True)
-            return {"status": "success", "message": "所有会话已清空"}
-        else:
-            raise HTTPException(status_code=500, detail="清空会话失败")
+        sessions = chat_service.list_sessions(mode, limit)
+        return {"sessions": sessions}
 
     except Exception as e:
-        logger.error(f"清空会话失败: {e}")
-        raise HTTPException(status_code=500, detail=f"清空会话失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/sessions/{session_id}")
-async def delete_session(
-    session_id: str,
-    session_service: SessionService = Depends(get_session_service)
-):
-    """删除指定会话"""
+@router.get("/{mode}/{session_id}")
+async def get_session(mode: str, session_id: str):
+    """
+    获取指定会话的完整信息（包含消息）
+
+    Args:
+        mode: 会话模式
+        session_id: 会话ID（或 single 模式的 doc_name）
+
+    Returns:
+        完整的会话信息
+    """
     try:
-        # 检查会话是否存在
-        if session_id not in session_service._sessions_cache:
+        if mode not in ["single", "cross", "manual"]:
+            raise HTTPException(status_code=400, detail="无效的模式")
+
+        session = chat_service.session_manager.load_session(session_id, mode)
+        if not session:
             raise HTTPException(status_code=404, detail="会话不存在")
-        
-        # 记录被删除会话的信息用于日志
-        deleted_session = session_service._sessions_cache.get(session_id)
-        
-        # 从内存中删除会话
-        success = session_service.delete_session(session_id)
 
-        if success:
-            # 🔥 关键：删除会话后立即保存到文件，确保JSON也被更新
-            session_service.save_sessions(create_backup=False)
-            
-            if deleted_session:
-                logger.info(f"成功删除会话 {session_id}: {deleted_session.doc_name}")
-            
-            return {
-                "status": "success", 
-                "message": "会话已删除",
-                "deleted_session_id": session_id
-            }
-        else:
-            raise HTTPException(status_code=500, detail="删除会话失败")
+        return session
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"删除会话失败: {e}")
-        raise HTTPException(status_code=500, detail=f"删除会话失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/sessions/cleanup")
-async def cleanup_meaningless_sessions(
-    session_service: SessionService = Depends(get_session_service)
-):
-    """清理无意义的会话"""
+@router.delete("/{mode}/{session_id}")
+async def delete_session(mode: str, session_id: str):
+    """
+    删除指定会话
+
+    Args:
+        mode: 会话模式
+        session_id: 会话ID
+
+    Returns:
+        删除结果
+    """
     try:
-        cleaned_count = session_service.cleanup_meaningless_sessions()
+        if mode not in ["single", "cross", "manual"]:
+            raise HTTPException(status_code=400, detail="无效的模式")
 
-        if cleaned_count > 0:
-            # 保存清理后的数据
-            session_service.save_sessions(create_backup=False)
+        # SessionManager 会自动处理 single 模式的特殊情况
+        # （通过 session_id 查找对应的 doc_name.json 文件）
+        chat_service.delete_session(session_id, mode)
+        return {"success": True, "message": "会话已删除"}
 
-        return {
-            "status": "success",
-            "message": f"清理了 {cleaned_count} 个无意义会话",
-            "cleaned_count": cleaned_count
-        }
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/current/info")
+async def get_current_session():
+    """
+    获取当前会话信息
+
+    Returns:
+        当前会话信息，如果没有返回 null
+    """
+    try:
+        current_session = chat_service.get_current_session()
+        if not current_session:
+            return None
+
+        return current_session
 
     except Exception as e:
-        logger.error(f"清理会话失败: {e}")
-        raise HTTPException(status_code=500, detail=f"清理会话失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class RenameRequest(BaseModel):
+    """重命名请求"""
+    new_title: str
+
+
+@router.patch("/{mode}/{session_id}/rename")
+async def rename_session(mode: str, session_id: str, request: RenameRequest):
+    """
+    重命名会话
+
+    Args:
+        mode: 会话模式
+        session_id: 会话ID
+        request: 重命名请求
+
+    Returns:
+        更新后的会话信息
+    """
+    try:
+        if mode not in ["single", "cross", "manual"]:
+            raise HTTPException(status_code=400, detail="无效的模式")
+
+        if not request.new_title or len(request.new_title.strip()) == 0:
+            raise HTTPException(status_code=400, detail="标题不能为空")
+
+        # Load session
+        session = chat_service.session_manager.load_session(session_id, mode)
+        if not session:
+            raise HTTPException(status_code=404, detail="会话不存在")
+
+        # Update title
+        session["title"] = request.new_title.strip()
+
+        # Save session
+        from datetime import datetime
+        session["updated_at"] = datetime.now().isoformat()
+
+        from pathlib import Path
+        session_dir = chat_service.session_manager._get_session_dir(mode)
+
+        # For single mode, use doc_name as filename; for others, use session_id
+        if mode == "single":
+            filename = session.get("doc_name", session_id)
+        else:
+            filename = session_id
+
+        session_path = session_dir / f"{filename}.json"
+        chat_service.session_manager._save_session_file(session_path, session)
+
+        return {
+            "success": True,
+            "session": session,
+            "message": "会话已重命名"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

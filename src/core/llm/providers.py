@@ -5,17 +5,21 @@ This module provides a unified interface for different LLM providers:
 - Azure OpenAI
 - OpenAI
 - Ollama (local models)
+- Gemini (Google Generative AI)
 
 Classes:
     LLMProviderBase: Abstract base class defining the provider interface
     AzureLLMProvider: Azure OpenAI implementation
     OpenAILLMProvider: OpenAI implementation
     OllamaLLMProvider: Ollama local model implementation
+    GeminiLLMProvider: Gemini (Google Generative AI) implementation
 """
 from abc import ABC, abstractmethod
 from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings, ChatOpenAI, OpenAIEmbeddings
 from langchain_community.chat_models import ChatOllama
 from langchain_community.embeddings import OllamaEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from google.api_core.client_options import ClientOptions
 
 from src.config.settings import LLM_CONFIG, LLM_EMBEDDING_CONFIG
 
@@ -149,3 +153,53 @@ class OllamaLLMProvider(LLMProviderBase):
             base_url=kwargs.get("base_url", LLM_EMBEDDING_CONFIG.get("ollama_base_url", "http://localhost:11434")),
             model=kwargs.get("model", LLM_EMBEDDING_CONFIG.get("ollama_model", "llama3")),
         )
+
+
+class GeminiLLMProvider(LLMProviderBase):
+    """Gemini (Google Generative AI) Provider 实现"""
+
+    def get_chat_model(self, **kwargs):
+        """
+        获取 Gemini 聊天模型
+
+        Args:
+            **kwargs: 模型配置参数，可覆盖默认配置
+
+        Returns:
+            ChatGoogleGenerativeAI: Gemini 聊天模型实例
+        """
+        base_url = kwargs.get("base_url", LLM_CONFIG.get("gemini_base_url"))
+        
+        config = {
+            "google_api_key": kwargs.get("google_api_key", LLM_CONFIG.get("gemini_api_key")),
+            "model": kwargs.get("model_name", LLM_CONFIG.get("gemini_model_name", "gemini-1.5-pro")),
+            "temperature": kwargs.get("temperature", 0.7),
+            "max_retries": kwargs.get("max_retries", 5)
+        }
+        
+        if base_url:
+            config["client_options"] = ClientOptions(api_endpoint=base_url)
+        
+        return ChatGoogleGenerativeAI(**config)
+
+    def get_embedding_model(self, **kwargs):
+        """
+        获取 Gemini 嵌入模型
+
+        Args:
+            **kwargs: 模型配置参数，可覆盖默认配置
+
+        Returns:
+            GoogleGenerativeAIEmbeddings: Gemini 嵌入模型实例
+        """
+        base_url = kwargs.get("base_url", LLM_EMBEDDING_CONFIG.get("gemini_base_url"))
+        
+        config = {
+            "google_api_key": kwargs.get("google_api_key", LLM_EMBEDDING_CONFIG.get("gemini_api_key")),
+            "model": kwargs.get("model", LLM_EMBEDDING_CONFIG.get("gemini_embedding_model", "text-embedding-004"))
+        }
+        
+        if base_url:
+            config["client_options"] = ClientOptions(api_endpoint=base_url)
+        
+        return GoogleGenerativeAIEmbeddings(**config)

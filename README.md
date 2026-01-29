@@ -2,7 +2,7 @@
 
 中文 | [English](README_EN.md)
 
-AgenticReader 是一个基于大语言模型（LLM）和多智能体架构（Multi-Agent）的智能文档分析与问答工具。采用 Agent 编排模式，支持 PDF 文档解析，集成多种 LLM 提供商（Azure OpenAI、OpenAI、Ollama），可自动提取内容、生成摘要、构建向量数据库并支持多轮智能问答。
+AgenticReader 是一个基于大语言模型（LLM）和多智能体架构（Multi-Agent）的智能文档分析与问答工具。采用 Agent 编排模式，专注于 **PDF 文档深度解析**，集成多种 LLM 提供商（Azure OpenAI、OpenAI、Ollama、Gemini），可自动提取内容、生成摘要、构建向量数据库并支持多轮智能问答。提供 **CLI 命令行** 和 **Web 界面** 两种使用方式。
 
 ---
 
@@ -23,19 +23,29 @@ AgenticReader 是一个基于大语言模型（LLM）和多智能体架构（Mul
 - **增量缓存**: 支持各阶段缓存，避免重复处理
 
 ### 💬 智能问答 | Intelligent Q&A
+- **四种对话模式**:
+  - 单文档深度对话（Single）- 针对特定文档的深入问答
+  - 跨文档智能对话（Cross）- 自动选择相关文档进行检索
+  - 跨文档手动选择（Manual）- 手动指定多个文档作为背景知识
+  - 通用对话模式（General）- 不绑定特定文档的自由对话
 - **意图识别**: 自动判断是否需要检索文档
 - **上下文管理**: 智能缓存检索结果，支持多轮对话
 - **历史压缩**: LLM 自动总结对话历史，节省上下文空间（90%+ 压缩率）
 - **文档摘要**: 自动生成简要摘要（brief_summary.md）
-- **多文档支持**: 可在多个已索引文档间切换
 
-### 🌐 现代化 Web 界面 | Modern Web Interface
-- **FastAPI + WebSocket**: 实时聊天通信
-- **会话持久化**: 自动保存、备份轮换（保留最近 10 个）、导入导出
-- **双存储架构**: 客户端 localStorage + 服务端文件存储
-- **PDF 查看器**: 集成 PDF 在线预览，支持页面导航
-- **数据管理系统**: 细粒度数据管理，支持部分删除、批量操作、智能清理
-- **响应式设计**: 移动端友好的自适应界面
+### 🌐 双模式操作 | Dual Operation Modes
+- **CLI 命令行模式**:
+  - 交互式菜单系统，支持文档索引、管理、对话
+  - 四种对话模式自由切换
+  - 实时查看文档选择和检索过程
+  - 适合技术用户和自动化场景
+- **Web 界面模式**:
+  - **仪表板**: 文档概览、快速索引、模式选择
+  - **智能聊天**: WebSocket 实时通信，支持 Markdown/LaTeX 渲染
+  - **会话管理**: 三种模式独立会话存储，支持导入/导出
+  - **数据管理**: 细粒度数据控制，支持部分删除、批量操作、智能清理
+  - **配置中心**: LLM 提供商切换、参数调整
+  - **响应式设计**: 移动端友好的自适应界面
 
 ---
 
@@ -91,6 +101,12 @@ EMBEDDING_MODEL=text-embedding-ada-002
 # OLLAMA_BASE_URL=http://localhost:11434
 # CHAT_MODEL_NAME=llama3
 
+# === 或使用 Gemini (Google) ===
+# GEMINI_API_KEY=your_gemini_api_key
+# GEMINI_MODEL_NAME=gemini-1.5-pro
+# GEMINI_EMBEDDING_MODEL=text-embedding-004
+# GEMINI_BASE_URL=your_gemini_api_endpoint
+
 # === 可选配置 ===
 LOGGING_LEVEL=INFO
 ```
@@ -100,6 +116,7 @@ LOGGING_LEVEL=INFO
 ### 运行应用 | Running the Application
 
 #### 方式 1: Web 界面（推荐）
+
 ```bash
 # 启动 FastAPI 服务器
 python src/ui/run_server.py
@@ -111,22 +128,266 @@ uvicorn src.ui.backend.app:app --reload --host 0.0.0.0 --port 8000
 # http://localhost:8000
 ```
 
-**Web 界面功能：**
-- 📄 **PDF 处理**: 上传PDF → 自动索引 → 开始聊天
-- 💬 **智能对话**: 多轮问答、历史管理、会话切换
-- 📊 **数据管理**: 查看存储占用、删除文档数据、智能清理
-- ⚙️ **配置管理**: 切换 LLM 提供商、调整参数
+**Web 界面页面说明：**
 
-#### 方式 2: CLI 模式
+<details>
+<summary><b>📊 仪表板 (/) - 主菜单</b></summary>
+
+- 文档列表展示（已索引文档概览）
+- 快速索引入口（批量/单个文档）
+- 模式选择（Single/Cross/Manual）
+- 快速进入聊天页面
+</details>
+
+<details>
+<summary><b>💬 聊天页面 (/chat) - 智能对话</b></summary>
+
+**三种聊天模式：**
+- **Single 单文档模式**: 选择特定文档进行深度问答
+- **Cross 跨文档智能模式**: 自动选择相关文档进行检索（系统智能决策）
+- **Manual 跨文档手动模式**: 手动指定多个文档作为背景知识
+
+**功能特性：**
+- WebSocket 实时通信，即时响应
+- Markdown 和 LaTeX 公式渲染
+- 时间戳显示（年/月/日 时:分:秒）
+- 会话持久化存储（三种模式独立管理）
+- 清空历史功能（同时清空文件和内存）
+- 显示选中文档和相似度评分
+
+**使用流程：**
+1. 选择对话模式（Single/Cross/Manual）
+2. 根据模式选择/指定文档
+3. 开始对话，系统自动检索和回答
+4. 支持多轮对话，上下文自动管理
+</details>
+
+<details>
+<summary><b>📁 数据管理 (/data) - 文档和会话管理</b></summary>
+
+**文档管理：**
+- 查看所有已索引文档和存储占用
+- **细粒度部分删除**：可单独删除某个文档的特定数据类型
+  - JSON 数据（解析后的文档内容）
+  - Vector DB（向量数据库索引）
+  - Images（PDF 转换的图片文件）
+  - Summary（生成的摘要文件）
+- 批量操作：一次选择多个文档删除
+- 智能清理：自动清理指定天数前的旧数据（默认 30 天）
+
+**会话管理：**
+- 查看所有模式的会话列表（Single/Cross/Manual）
+- 会话详情查看（支持 Markdown/LaTeX 渲染）
+- 删除特定会话
+- 会话统计信息（总数、消息数、最近活动）
+- 导入/导出会话数据
+
+**存储概览：**
+- 实时统计：文档数量、存储大小、会话数、备份数
+- 数据备份功能（会话、输出、配置）
+- 缓存管理（PDF 图片、Vector DB、JSON 数据）
+</details>
+
+<details>
+<summary><b>⚙️ 配置中心 (/config) - LLM 配置管理</b></summary>
+
+- 切换 LLM 提供商（Azure OpenAI、OpenAI、Ollama、Gemini）
+- 调整模型参数（temperature、max_tokens 等）
+- 配置 Embedding 模型
+- API Key 管理
+- 系统设置
+</details>
+
+<details>
+<summary><b>🔧 结构编辑器 (/structure) - 文档结构管理</b></summary>
+
+- 查看和编辑文档章节结构
+- PDF 在线预览
+- 章节元数据编辑
+- 批量重建向量数据库
+</details>
+
+---
+
+#### 方式 2: CLI 命令行模式
+
 ```bash
-# 交互式命令行界面
+# 启动交互式命令行界面
 python main.py
-
-# 流程:
-# 1. 选择或索引文档
-# 2. 开始对话
-# 3. 输入问题，AI 自动检索并回答
 ```
+
+**CLI 主菜单选项：**
+
+<details>
+<summary><b>点击查看 CLI 详细使用说明</b></summary>
+
+**文档选择阶段：**
+```
+主菜单
+═══════════════════════════════════════════════════════════════════════════
+📚 已索引的文档：
+
+  [1] document1.pdf
+      这是第一个文档的简要摘要...
+
+  [2] document2.pdf
+      这是第二个文档的简要摘要...
+
+请选择操作：
+  [1-N] 选择文档进行单文档对话（Single 模式）
+  [c] 跨文档智能对话（Cross 模式 - 自动选择相关文档）
+  [s] 跨文档手动选择模式（Manual 模式 - 手动指定多个文档）
+  [0] 通用对话模式（General 模式 - 不绑定特定文档）
+  [i] 索引新文档
+  [m] 管理文档（查看/删除）
+  [q] 退出
+```
+
+**四种对话模式说明：**
+
+1. **Single 模式 - 单文档深度对话**
+   ```
+   选择: 1
+   ✅ 已选择文档: document1.pdf
+   🔧 初始化 AnswerAgent（单文档模式: document1.pdf）...
+
+   [单文档 (document1.pdf)] 👤 Query: 这个文档讲了什么？
+   🤖 Assistant: 这个文档主要讲述了...
+   ```
+   - 专注于单个文档的深入问答
+   - 所有检索都限定在选中的文档内
+   - 适合深度学习和理解特定文档
+
+2. **Cross 模式 - 跨文档智能对话**
+   ```
+   选择: c
+   ✅ 已进入跨文档智能对话模式
+
+   [跨文档模式] 👤 Query: 比较这两个文档的观点
+   📚 选择的文档 (2 个):
+      - document1.pdf (相似度: 0.856)
+      - document2.pdf (相似度: 0.742)
+   🤖 Assistant: 根据检索结果，这两个文档的主要观点...
+   ```
+   - 系统自动选择与问题最相关的文档
+   - 支持跨文档比较和综合分析
+   - 适合探索性研究和多文档对比
+
+3. **Manual 模式 - 跨文档手动选择**
+   ```
+   选择: s
+
+   手动选择文档
+   ═══════════════════════════════════════════════════════════════════════════
+   📚 可用文档列表:
+
+     [1] document1.pdf
+         这是第一个文档的简要摘要...
+
+     [2] document2.pdf
+         这是第二个文档的简要摘要...
+
+     [3] document3.pdf
+         这是第三个文档的简要摘要...
+
+   💡 提示：
+      - 输入文档编号，用逗号或空格分隔（例如: 1,3,5 或 1 3 5）
+      - 输入 'all' 选择所有文档
+      - 输入 'cancel' 取消选择
+
+   请选择文档编号: 1,2
+
+   ✅ 已选择 2 个文档:
+      1. document1.pdf
+      2. document2.pdf
+
+   确认选择？(y/n): y
+
+   [手动选择 (2 个文档)] 👤 Query: 总结这两个文档的核心内容
+   📚 检索的文档 (2 个):
+      - document1.pdf
+      - document2.pdf
+   🤖 Assistant: 综合两个文档的内容...
+   ```
+   - 手动指定要使用的文档
+   - 适合明确知道需要哪些文档的场景
+   - 支持多文档综合回答
+
+4. **General 模式 - 通用对话**
+   ```
+   选择: 0
+   ✅ 已进入通用对话模式（不绑定特定文档）
+
+   [通用模式] 👤 Query: 什么是机器学习？
+   🤖 Assistant: 机器学习是人工智能的一个分支...
+   ```
+   - 不依赖任何文档的自由对话
+   - 纯粹的 LLM 对话能力
+   - 适合通用问题和闲聊
+
+**对话中的命令：**
+- `clear` - 清除对话历史和上下文
+- `switch` - 切换到其他对话模式
+- `main` - 返回主菜单
+- `quit` / `exit` - 退出程序
+
+**文档管理（选择 m）：**
+```
+文档管理
+═══════════════════════════════════════════════════════════════════════════
+已索引的文档:
+
+  [1] document1.pdf (125.5 MB)
+  [2] document2.pdf (89.2 MB)
+
+  [0] 返回主菜单
+
+请选择要管理的文档编号: 1
+
+文档详情:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📄 文档名称: document1.pdf
+📊 数据类型:
+   - JSON 数据: 2.5 MB
+   - Vector DB: 45.8 MB
+   - Images: 75.2 MB
+   - Summary: 2.0 MB
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+管理选项:
+  [d] 删除此文档及所有相关数据
+  [b] 返回文档列表
+
+请选择操作: d
+确认删除？(y/n): y
+✅ 文档 document1.pdf 已成功删除
+```
+
+**文档索引（选择 i）：**
+```
+启动文档索引工具...
+
+可用的 PDF 文件：
+  [1] new_document.pdf
+  [2] another_document.pdf
+
+选择要索引的文件（输入编号）: 1
+
+开始索引 new_document.pdf...
+✅ [Parse] 解析PDF完成
+✅ [Structure] 提取文档结构完成
+✅ [Chunk] 文本分块完成
+✅ [Process] 并行处理章节完成
+✅ [Index] 构建向量数据库完成
+✅ [Summary] 生成摘要完成
+✅ [Register] 注册到文档库完成
+
+✅ 索引完成！
+```
+
+</details>
+
+---
 
 ---
 
@@ -135,67 +396,140 @@ python main.py
 
 ```
 AgenticReader/
-├── main.py                        # CLI 入口（使用 AnswerAgent）
+├── main.py                        # CLI 入口（支持4种对话模式）
 ├── src/
-│   ├── agents/                    # 🤖 多智能体系统
-│   │   ├── indexing/              # IndexingAgent - 文档索引
+│   ├── agents/                    # 🤖 多智能体系统（完全模块化）
+│   │   ├── base.py                # AgentBase 基类
+│   │   ├── common/                # 共享模块
+│   │   │   ├── prompts.py         # 通用提示词
+│   │   │   └── __init__.py
+│   │   ├── indexing/              # IndexingAgent（文档索引代理）
 │   │   │   ├── agent.py           # 索引代理实现
-│   │   │   ├── state.py           # 索引状态定义
-│   │   │   └── doc_registry.py    # 文档注册表
-│   │   ├── answer/                # AnswerAgent - 智能问答
+│   │   │   ├── nodes.py           # 工作流节点
+│   │   │   ├── tools.py           # 索引工具
+│   │   │   ├── state.py           # 状态定义（TypedDict）
+│   │   │   ├── prompts.py         # 索引专用提示词
+│   │   │   ├── utils.py           # 辅助函数
+│   │   │   └── __init__.py
+│   │   ├── answer/                # AnswerAgent（问答代理）
 │   │   │   ├── agent.py           # 问答代理实现
-│   │   │   └── state.py           # 问答状态定义
-│   │   └── retrieval/             # RetrievalAgent - 文档检索
+│   │   │   ├── nodes.py           # 工作流节点
+│   │   │   ├── tools.py           # 问答工具
+│   │   │   ├── state.py           # 状态定义（TypedDict）
+│   │   │   ├── prompts.py         # 问答专用提示词
+│   │   │   ├── tools_config.py    # 工具配置
+│   │   │   ├── components/        # 组件模块
+│   │   │   │   ├── coordinator.py # 跨文档协调器
+│   │   │   │   ├── synthesizer.py # 答案综合器
+│   │   │   │   └── formatter.py   # 答案格式化
+│   │   │   └── __init__.py
+│   │   └── retrieval/             # RetrievalAgent（检索代理）
 │   │       ├── agent.py           # 检索代理实现
-│   │       └── state.py           # 检索状态定义
+│   │       ├── nodes.py           # 工作流节点
+│   │       ├── tools.py           # 检索工具
+│   │       ├── state.py           # 状态定义（TypedDict）
+│   │       ├── prompts.py         # 检索专用提示词
+│   │       ├── tools_config.py    # 工具配置
+│   │       └── __init__.py
 │   ├── core/                      # 核心功能
 │   │   ├── llm/                   # LLM 抽象层
 │   │   │   ├── client.py          # 统一 LLM 客户端
-│   │   │   ├── providers.py       # 多提供商支持
-│   │   │   └── history.py         # 对话历史管理
+│   │   │   ├── providers.py       # 多提供商支持（Azure/OpenAI/Ollama/Gemini）
+│   │   │   ├── history.py         # 对话历史管理和压缩
+│   │   │   └── __init__.py
 │   │   ├── vector_db/             # 向量数据库
-│   │   │   └── vector_db_client.py
+│   │   │   ├── vector_db_client.py # FAISS 向量存储
+│   │   │   ├── metadata_db.py     # 元数据管理
+│   │   │   └── __init__.py
+│   │   ├── document_management/   # 文档管理（新增）
+│   │   │   ├── registry.py        # 文档注册表（并发安全）
+│   │   │   ├── indexer.py         # 文档索引器
+│   │   │   ├── manager.py         # 文档管理器
+│   │   │   └── __init__.py
+│   │   ├── parallel/              # 并行处理
+│   │   │   ├── processor.py       # 并行处理器
+│   │   │   └── __init__.py
 │   │   └── processing/            # 文档处理工具
-│   │       ├── index_document.py  # 文档索引入口
-│   │       ├── manage_documents.py # 文档管理工具
-│   │       ├── parallel_processor.py # 并行处理器
-│   │       └── text_splitter.py   # 文本分割器
+│   │       ├── text_splitter.py   # 文本分割器
+│   │       └── __init__.py
 │   ├── config/                    # 配置管理
-│   │   ├── settings.py            # 全局配置
-│   │   ├── prompts/               # 提示词模板
-│   │   └── tools/                 # Agent 工具定义
-│   ├── services/                  # 外部服务
-│   │   └── mcp_client.py          # MCP 客户端（保留）
-│   ├── ui/                        # Web 界面
+│   │   ├── settings.py            # 全局配置（LLM、Embedding、MCP）
+│   │   ├── constants.py           # 常量定义
+│   │   ├── prompts/               # 多代理协调提示词
+│   │   │   ├── agent_prompts.py   # Plan/Executor/Memory Agent
+│   │   │   └── metadata_prompts.py
+│   │   └── __init__.py
+│   ├── ui/                        # Web 界面（FastAPI）
 │   │   ├── run_server.py          # FastAPI 启动脚本
 │   │   ├── backend/               # 后端 API
-│   │   │   ├── app.py             # FastAPI 应用
-│   │   │   ├── api/v1/            # API 端点
-│   │   │   │   ├── pdf.py         # PDF 处理（使用 IndexingAgent）
-│   │   │   │   ├── chapters.py    # 章节查看
-│   │   │   │   ├── chat.py        # WebSocket 聊天
-│   │   │   │   └── data.py        # 数据管理
+│   │   │   ├── app.py             # FastAPI 应用入口
+│   │   │   ├── config.py          # UI 配置
+│   │   │   ├── api/               # API 路由
+│   │   │   │   ├── pages.py       # 页面路由（/、/chat、/data、/config、/structure）
+│   │   │   │   ├── websocket.py   # WebSocket 实时通信
+│   │   │   │   └── v1/            # API v1 端点
+│   │   │   │       ├── documents.py # 文档管理
+│   │   │   │       ├── chat.py    # 聊天初始化
+│   │   │   │       ├── pdf.py     # PDF 上传和索引
+│   │   │   │       ├── chapters.py # 章节信息
+│   │   │   │       ├── structure.py # 文档结构
+│   │   │   │       ├── config.py  # 配置管理
+│   │   │   │       ├── sessions.py # 会话管理（三种模式独立）
+│   │   │   │       └── data.py    # 数据管理（细粒度删除）
 │   │   │   └── services/          # 服务层
 │   │   │       ├── chat_service.py # 聊天服务（使用 AnswerAgent）
-│   │   │       ├── session_service.py # 会话管理
-│   │   │       └── data_service.py    # 数据管理
+│   │   │       └── session_manager.py # 会话管理器
 │   │   ├── templates/             # Jinja2 模板
+│   │   │   ├── base.html          # 基础模板
+│   │   │   ├── dashboard.html     # 仪表板页面
+│   │   │   ├── chat.html          # 聊天页面
+│   │   │   ├── manage.html        # 数据管理页面
+│   │   │   ├── config.html        # 配置页面
+│   │   │   └── structure_editor.html # 结构编辑器
 │   │   └── static/                # 静态资源
-│   └── utils/                     # 工具函数
+│   │       ├── css/               # 样式表
+│   │       │   ├── variables.css  # CSS 变量
+│   │       │   ├── base.css       # 基础样式
+│   │       │   └── components.css # 组件样式
+│   │       └── js/                # JavaScript
+│   │           ├── dashboard.js   # 仪表板逻辑
+│   │           ├── chat.js        # 聊天逻辑
+│   │           ├── manage.js      # 数据管理逻辑
+│   │           ├── config.js      # 配置逻辑
+│   │           ├── api.js         # API 封装
+│   │           ├── ui-components.js # UI 组件
+│   │           └── utils.js       # 工具函数
+│   └── utils/                     # 通用工具函数
 ├── data/                          # 数据目录
-│   ├── pdf/                       # PDF 源文件
-│   ├── pdf_image/                 # PDF 转图片
+│   ├── pdf/                       # PDF 源文件（放置待索引的 PDF）
+│   ├── pdf_image/                 # PDF 转图片（按文档名分文件夹）
+│   │   └── {doc_name}/            # 文档图片文件夹
+│   │       ├── page_1.jpg
+│   │       ├── page_2.jpg
+│   │       └── ...
 │   ├── json_data/                 # 文档数据（按文档名分文件夹）
 │   │   └── {doc_name}/            # 文档数据文件夹
 │   │       ├── data.json          # 原始提取数据
-│   │       ├── structure.json     # 文档结构
-│   │       └── chunks.json        # 分块数据
-│   ├── vector_db/                 # 向量数据库
+│   │       ├── structure.json     # 文档结构（章节信息）
+│   │       └── chunks.json        # 分块数据（用于向量化）
+│   ├── vector_db/                 # 向量数据库（FAISS 索引）
+│   │   └── {doc_name}/            # 文档向量数据库
 │   ├── output/                    # 生成的摘要文件
+│   │   └── {doc_name}/
+│   │       ├── brief_summary.md   # 简要摘要
+│   │       └── detailed_summary.pdf # 详细摘要（可选）
 │   ├── sessions/                  # 会话数据
-│   │   ├── backups/               # 会话备份
-│   │   └── exports/               # 会话导出
-│   └── doc_registry.json          # 文档注册表
+│   │   ├── single/                # 单文档模式会话（按 doc_name.json 命名）
+│   │   ├── cross/                 # 跨文档智能模式会话（按 session_id.json 命名）
+│   │   ├── manual/                # 跨文档手动模式会话（按 session_id.json 命名）
+│   │   ├── backups/               # 会话备份（保留最近 10 个）
+│   │   └── exports/               # 用户导出的会话
+│   └── doc_registry.json          # 文档注册表（元数据、处理状态、文件路径）
+├── tests/                         # 测试文件
+│   ├── test_answer_agent.py
+│   ├── test_retrieval_agent.py
+│   ├── test_vector_db_content.py
+│   └── ...
 └── requirements.txt               # Python 依赖
 ```
 
@@ -340,69 +674,192 @@ python -c "from src.agents.answer import AnswerAgent; print('OK')"
 <details>
 <summary><b>❓ 常见问题（点击展开）</b></summary>
 
-### 1. PDF 文件未被识别？
-- 确保文件已放入 `data/pdf/` 目录
-- 检查文件名拼写是否正确
-- 支持的格式: `.pdf`
+### 1. 支持哪些文件格式？
+- ✅ **PDF 文件**：完全支持，自动提取文本、图片、结构
+- ❌ **URL/网页**：暂时不支持（已移除 Web Reader 功能）
+- ❌ **Word/PPT**：暂不支持（计划中）
 
-### 2. 索引失败怎么办？
-- 检查 LLM API 配置是否正确
-- 确认网络连接正常
-- 查看日志输出定位错误
-- 尝试使用 `LOGGING_LEVEL=DEBUG` 查看详细信息
+### 2. 四种对话模式有什么区别？
+- **Single（单文档）**：专注单个文档的深度问答，所有检索限定在选中文档内
+- **Cross（跨文档智能）**：系统自动选择与问题最相关的文档进行检索和综合
+- **Manual（跨文档手动）**：手动指定多个文档作为背景知识，系统在这些文档中检索
+- **General（通用）**：不依赖任何文档的纯 LLM 对话
 
-### 3. 对话历史如何管理？
-- 由 `LLMBase.message_histories` 自动管理
-- LLM 会自动总结历史以节省上下文
-- Web 界面支持查看和清空历史
+**推荐使用场景：**
+- 学习特定文档内容 → Single 模式
+- 探索性研究、不确定用哪个文档 → Cross 模式
+- 明确需要对比多个文档 → Manual 模式
+- 通用问题、闲聊 → General 模式
 
-### 4. 如何查看已索引的文档？
+### 3. 如何索引新文档？
+**CLI 模式：**
 ```bash
-# CLI 模式
 python main.py
-# 选择 'm' 进入文档管理
-
-# Web 模式
-访问 http://localhost:8000/data
+# 选择 'i' - 索引新文档
+# 从 data/pdf/ 目录选择文件
+# 等待索引完成（自动解析、分块、向量化）
 ```
 
-### 5. 如何删除文档？
+**Web 模式：**
+```
+访问 http://localhost:8000/
+点击"批量索引"或"单个索引"
+上传 PDF 文件
+等待后台处理完成
+```
+
+### 4. 索引失败怎么办？
+**常见原因和解决方法：**
+- ❌ **LLM API 错误**：检查 `.env` 中的 API Key 和 Endpoint 配置
+- ❌ **网络问题**：确认可以访问 LLM 服务
+- ❌ **PDF 格式问题**：确保 PDF 不是扫描版或加密文件
+- ❌ **内存不足**：大文件可能需要更多内存
+
+**调试方法：**
 ```bash
-# CLI 模式
-python -m src.core.processing.manage_documents
-
-# Web 模式
-访问 http://localhost:8000/data
-# 使用细粒度删除功能
+export LOGGING_LEVEL=DEBUG
+python main.py
+# 查看详细错误信息
 ```
 
-### 6. 会话数据丢失如何恢复？
-- 访问 `data/sessions/backups/` 目录
-- 使用 Web 界面的导入功能恢复备份
-- 备份文件按时间戳命名，最多保留10个
-
-### 7. 如何切换 LLM 提供商？
+### 5. 如何查看和管理已索引的文档？
+**CLI 模式：**
 ```bash
-# 修改 .env 文件
-CHAT_API_KEY=your_api_key
-CHAT_MODEL_NAME=your_model
-
-# 或在 Web 界面的配置页面切换
+python main.py
+# 选择 'm' - 管理文档
+# 查看文档列表和存储占用
+# 可删除特定文档
 ```
 
-### 8. 如何清理旧数据释放空间？
-- 访问 `http://localhost:8000/data` 进入数据管理界面
-- 使用"智能清理"功能自动清理30天前的数据
-- 或手动选择文档，删除特定数据类型（如只删除图片）
+**Web 模式：**
+```
+访问 http://localhost:8000/data
+查看所有文档和数据类型
+使用细粒度删除（只删除特定数据类型）
+或批量删除多个文档
+```
 
-### 9. 误删数据如何恢复？
-- 会话数据可以从 `data/sessions/backups/` 恢复
-- 文档数据建议定期使用"数据备份"功能
-- 备份文件保存在 `data/backups/` 目录
+### 6. 什么是"细粒度删除"？
+**传统删除**：删除文档时删除所有相关数据
 
-### 10. IndexingAgent vs 旧的 Reader？
-- ✅ **IndexingAgent** (新): 基于 LangGraph 的状态机工作流，支持缓存、增量处理、阶段跟踪
-- ❌ **PDFReader/WebReader** (已移除): 旧的类继承架构，已完全移除
+**细粒度删除**：可选择性删除特定数据类型，例如：
+- 只删除 Images（PDF 图片）→ 释放最多空间
+- 只删除 Vector DB → 重建索引时使用
+- 只删除 Summary → 重新生成摘要时使用
+- 保留 JSON 数据 → 避免重新解析 PDF
+
+**使用场景：**
+- 空间不足但想保留文档 → 删除 Images
+- 索引损坏需要重建 → 删除 Vector DB
+- 优化索引参数 → 删除 Vector DB 和 Chunks，保留 JSON
+
+### 7. 对话历史如何管理？
+**自动管理：**
+- LLM 自动总结历史对话（90%+ 压缩率）
+- 保持上下文连贯性的同时节省 token
+
+**手动清空：**
+- **CLI**：输入 `clear` 命令
+- **Web**：点击"清空历史"按钮
+- 清空操作同时清除文件和内存，并重新实例化 Agent
+
+**会话持久化：**
+- 所有对话自动保存到 `data/sessions/{mode}/` 目录
+- 三种模式独立存储：single、cross、manual
+- Single 模式：每个文档一个会话文件（doc_name.json）
+- Cross/Manual 模式：每个会话一个文件（session_id.json）
+
+### 8. 会话数据丢失如何恢复？
+**备份机制：**
+- 系统自动备份会话到 `data/sessions/backups/`
+- 保留最近 10 个备份（按时间戳命名）
+- 每次 LLM 响应后自动触发备份
+
+**恢复方法：**
+```
+1. 访问 http://localhost:8000/data
+2. 在"会话管理"区域点击"导入会话"
+3. 选择备份文件（.json 格式）
+4. 系统自动恢复会话
+```
+
+### 9. 如何切换 LLM 提供商？
+**方法 1：修改 .env 文件**
+```bash
+# Azure OpenAI
+CHAT_API_KEY=your_azure_key
+CHAT_AZURE_ENDPOINT=https://your-endpoint.openai.azure.com/
+CHAT_DEPLOYMENT_NAME=gpt-4
+CHAT_API_VERSION=2024-02-15-preview
+
+# OpenAI
+CHAT_API_KEY=your_openai_key
+CHAT_MODEL_NAME=gpt-4
+OPENAI_BASE_URL=https://api.openai.com/v1/
+
+# Ollama（本地）
+OLLAMA_BASE_URL=http://localhost:11434
+CHAT_MODEL_NAME=llama3
+
+# Gemini
+GEMINI_API_KEY=your_gemini_key
+GEMINI_MODEL_NAME=gemini-1.5-pro
+```
+
+**方法 2：Web 配置页面**
+```
+访问 http://localhost:8000/config
+选择 LLM 提供商
+填写 API Key 和配置
+保存并重启
+```
+
+### 10. 如何清理旧数据释放空间？
+**智能清理（推荐）：**
+```
+访问 http://localhost:8000/data
+点击"智能清理"
+设置天数（默认 30 天）
+系统自动清理旧数据
+```
+
+**手动清理：**
+- 选择特定文档 → 细粒度删除（只删除 Images/Vector DB）
+- 批量选择 → 一次删除多个文档
+- 缓存管理 → 清空 PDF 图片缓存、JSON 缓存
+
+**最占空间的数据类型：**
+1. Images（PDF 图片）- 通常占 60-70% 空间
+2. Vector DB（向量索引）- 通常占 20-30% 空间
+3. JSON 数据 - 通常占 5-10% 空间
+4. Summary - 通常占 1-2% 空间
+
+### 11. 批量索引时只有部分文档注册成功？
+这是早期版本的并发写入问题，**已在 2026-01-29 版本修复**：
+- ✅ DocumentRegistry 增加并发安全性（重载-保存模式）
+- ✅ 所有文档现在都能正确注册
+
+**如果仍遇到此问题：**
+```bash
+# 更新到最新版本
+git pull origin main
+
+# 重新索引失败的文档
+python main.py
+# 选择 'i' - 索引新文档
+```
+
+### 12. 清空历史后再次对话仍显示旧内容？
+这是内存-文件同步问题，**已在 2026-01-29 版本修复**：
+- ✅ 清空历史时同时更新文件和内存
+- ✅ 重新实例化 AnswerAgent 和 RetrievalAgent
+
+**如果仍遇到此问题，请更新到最新版本。**
+
+### 13. 为什么移除了 Web Reader 功能？
+- 专注于 PDF 文档的深度解析和问答
+- Web 内容结构复杂，质量参差不齐
+- 计划未来重新设计更好的 Web 内容处理方案
 
 </details>
 
@@ -410,6 +867,25 @@ CHAT_MODEL_NAME=your_model
 
 <details>
 <summary><b>📝 更新日志 | Changelog（点击展开）</b></summary>
+
+### 2026-01-29 - 批量索引和会话管理增强
+- 🐛 **批量索引修复**
+  - ✅ 修复批量 PDF 索引时的并发写入竞争条件
+  - ✅ 增强 DocumentRegistry 并发安全性（重载-保存模式）
+  - ✅ 确保多文档同时索引时所有文档都能正确注册
+  - ✅ 新增 `update_metadata()` 方法支持安全的元数据更新
+- 💬 **会话管理优化**
+  - ✅ 修复清空聊天历史功能（同时清空文件和内存）
+  - ✅ 清空历史时重新实例化 AnswerAgent 和 RetrievalAgent
+  - ✅ 修复内存-文件同步问题（更新 `current_session` 防止返回过期数据）
+  - ✅ 修复单文档模式会话详情加载（支持通过 session_id 查找文件）
+- 🎨 **UI 增强**
+  - ✅ 所有聊天模式添加时间戳显示（格式：年/月/日 时:分:秒）
+  - ✅ 会话详情弹窗支持 Markdown 和 LaTeX 渲染
+  - ✅ 历史消息加载时正确显示原始时间戳（而非当前时间）
+- 🔧 **代码改进**
+  - ✅ 统一 AnswerAgent 初始化参数（仅使用 `doc_name`）
+  - ✅ 增强并发环境下的数据一致性保证
 
 ### 2026-01-17 - 架构大重构：迁移到 Multi-Agent 系统
 - 🏗️ **架构重构**

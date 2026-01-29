@@ -32,6 +32,7 @@ from src.agents.common.prompts import COMMON_PROMPTS
 from src.agents.indexing.prompts import INDEXING_PROMPTS
 from src.agents.retrieval.prompts import RETRIEVAL_PROMPTS
 from src.agents.answer.prompts import ANSWER_PROMPTS
+from .metadata_prompts import METADATA_PROMPTS  # Metadata extraction prompts
 
 # Create unified SYSTEM_PROMPT_CONFIG for backward compatibility
 # This combines all prompts from different agents into a single dictionary
@@ -41,6 +42,7 @@ SYSTEM_PROMPT_CONFIG = {
     **RETRIEVAL_PROMPTS,   # RetrievalAgent prompts
     **ANSWER_PROMPTS,      # AnswerAgent prompts
     **AGENT_PROMPTS,       # Multi-agent coordination prompts
+    **METADATA_PROMPTS,    # Metadata extraction prompts
 }
 
 __all__ = [
