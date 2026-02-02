@@ -36,11 +36,14 @@ class AnswerAgent(AgentBase):
     - 所有回答都结合历史对话上下文生成
     """
 
-    def __init__(self, doc_name: str = None, provider: str = 'openai'):
+    def __init__(self, doc_name: str = None, provider: str = 'openai', progress_callback=None):
         super().__init__(name="AnswerAgent", provider=provider)
 
         # 当前文档上下文
         self.current_doc = doc_name
+
+        # 进度回调函数（用于实时上报处理进度）
+        self.progress_callback = progress_callback
 
         # 对话轮次追踪（用于传递给 Retrieval Agent）
         # 每个文档独立追踪对话轮次

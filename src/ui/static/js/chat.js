@@ -18,12 +18,18 @@ class ChatApp {
         this.devicePixelRatio = window.devicePixelRatio || 2;
         this.isSending = false;  // Track if we're waiting for a response
         this.loadingMessageId = null;  // Track loading indicator
+
+        // ✅ 历史消息分页加载
+        this.loadedMessageCount = 0;  // 已加载的消息数
+        this.totalMessageCount = 0;   // 总消息数
+        this.hasMoreMessages = false;  // 是否还有更多历史消息
+        this.isLoadingMore = false;    // 是否正在加载更多
         
         // PDF懒加载相关
         this.renderedPages = new Set();  // 已渲染的页面
         this.renderQueue = [];  // 待渲染队列
         this.isRendering = false;  // 是否正在渲染
-        this.initialRenderCount = 3;  // 初始渲染页数
+        this.initialRenderCount = 1;  // 初始渲染页数（仅1页加快加载）
         this.renderBuffer = 2;  // 可见区域前后缓冲页数
         
         this.init();
@@ -196,21 +202,40 @@ class ChatApp {
             if (result.messages && result.messages.length > 0) {
                 console.log('加载历史消息:', result.messages.length, '条');
                 this.loadHistoryMessages(result.messages);
+                this.loadedMessageCount = result.messages.length;
             }
 
-            // 连接WebSocket
-            await this.connectWebSocket();
+            // 设置分页信息
+            this.totalMessageCount = result.message_count || 0;
+            this.hasMoreMessages = result.has_more_messages || false;
 
-            // 处理PDF预览
+            // 如果有更多历史消息，显示"加载更多"按钮
+            if (this.hasMoreMessages) {
+                this.showLoadMoreButton();
+            }
+
+            // ✅ 优化: 异步连接WebSocket，不阻塞初始化
+            this.connectWebSocket().catch(err => {
+                console.error('WebSocket连接失败:', err);
+                Utils.notify('连接失败，请刷新页面重试', 'error');
+            });
+
+            // 处理PDF预览（异步加载，不阻塞聊天）
             if (this.mode === 'single' && this.docName) {
-                // 单文档模式：直接加载PDF
-                await this.loadPdf(this.docName);
+                // 单文档模式：异步加载PDF，不等待完成
+                this.loadPdf(this.docName).catch(err => {
+                    console.error('PDF加载失败:', err);
+                });
             } else if (this.mode === 'manual' && this.selectedDocs && this.selectedDocs.length > 0) {
                 // 手动选择模式：显示PDF选择器，填充已选择的文档
-                await this.setupPdfSelector(this.selectedDocs);
+                this.setupPdfSelector(this.selectedDocs).catch(err => {
+                    console.error('PDF选择器设置失败:', err);
+                });
             } else if (this.mode === 'cross') {
-                // 跨文档智能模式：显示PDF选择器，填充所有已索引文档
-                await this.setupPdfSelectorForCross();
+                // 跨文档智能模式：延迟加载文档列表，减少初始化时间
+                this.setupPdfSelectorForCross().catch(err => {
+                    console.error('获取文档列表失败:', err);
+                });
             }
 
             Utils.notify('初始化完成', 'success');
@@ -228,10 +253,22 @@ class ChatApp {
         // 清空欢迎消息
         messagesDiv.innerHTML = '';
 
-        // 渲染历史消息
+        // ✅ 优化: 使用 DocumentFragment 批量添加，减少DOM操作
+        const fragment = document.createDocumentFragment();
+
         messages.forEach(msg => {
-            this.addMessage(msg.role, msg.content, msg.references, msg.timestamp);
+            const messageElement = this.createMessageElement(
+                msg.role,
+                msg.content,
+                msg.references,
+                msg.timestamp
+            );
+            fragment.appendChild(messageElement);
         });
+
+        // 一次性添加所有消息
+        messagesDiv.appendChild(fragment);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
 
     async connectWebSocket() {
@@ -276,6 +313,9 @@ class ChatApp {
             // Re-enable send button
             this.isSending = false;
             document.getElementById('send-btn').disabled = false;
+        } else if (data.type === 'progress') {
+            // Update progress indicator
+            this.updateProgressIndicator(data);
         } else if (data.type === 'error') {
             // Remove loading indicator on error
             this.removeLoadingIndicator();
@@ -285,13 +325,11 @@ class ChatApp {
         }
     }
 
-    addMessage(role, content, references = null, messageTimestamp = null) {
-        const messagesDiv = document.getElementById('messages');
-
-        // 移除欢迎消息
-        const welcome = messagesDiv.querySelector('.welcome');
-        if (welcome) welcome.remove();
-
+    /**
+     * 创建消息DOM元素（不添加到DOM）
+     * @private
+     */
+    createMessageElement(role, content, references = null, messageTimestamp = null) {
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message message-' + role;
 
@@ -343,7 +381,22 @@ class ChatApp {
         bubble.appendChild(timestamp);
 
         messageDiv.appendChild(bubble);
-        messagesDiv.appendChild(messageDiv);
+        return messageDiv;
+    }
+
+    /**
+     * 添加单条消息到聊天界面（用于实时消息）
+     */
+    addMessage(role, content, references = null, messageTimestamp = null) {
+        const messagesDiv = document.getElementById('messages');
+
+        // 移除欢迎消息
+        const welcome = messagesDiv.querySelector('.welcome');
+        if (welcome) welcome.remove();
+
+        // 创建并添加消息元素
+        const messageElement = this.createMessageElement(role, content, references, messageTimestamp);
+        messagesDiv.appendChild(messageElement);
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
     }
 
@@ -397,8 +450,8 @@ class ChatApp {
         // 显示选择器
         selector.style.display = 'block';
 
-        // 自动显示PDF区域
-        document.getElementById('pdf-section').classList.remove('hidden');
+        // 不自动显示PDF区域，等待用户选择文档后再加载
+        // document.getElementById('pdf-section').classList.remove('hidden');
 
         console.log('PDF选择器已设置，文档数:', docList.length);
     }
@@ -486,6 +539,9 @@ class ChatApp {
         const width = Math.floor(baseViewport.width);
         const height = Math.floor(baseViewport.height);
 
+        // 使用DocumentFragment优化DOM操作
+        const fragment = document.createDocumentFragment();
+
         // 为所有页面创建占位符
         for (let pageNum = 1; pageNum <= this.totalPages; pageNum++) {
             const pageDiv = document.createElement('div');
@@ -511,8 +567,11 @@ class ChatApp {
             placeholder.textContent = `第 ${pageNum} 页（滚动时加载）`;
 
             pageDiv.appendChild(placeholder);
-            container.appendChild(pageDiv);
+            fragment.appendChild(pageDiv);
         }
+
+        // 一次性添加所有占位符
+        container.appendChild(fragment);
     }
 
     async renderPage(pageNum) {
@@ -711,13 +770,597 @@ class ChatApp {
 
         const bubble = document.createElement('div');
         bubble.className = 'bubble';
-        bubble.innerHTML = '<div style="display: flex; align-items: center; gap: 0.5rem; color: var(--text-muted);"><div class="spinner"></div><span>正在思考...</span></div>';
+        bubble.innerHTML = `
+            <div class="progress-container">
+                <div class="progress-header">
+                    <div class="spinner"></div>
+                    <div class="progress-text">
+                        <div id="progress-main-text" style="font-size: 1rem; font-weight: 600;">🤔 正在思考...</div>
+                    </div>
+                </div>
+                
+                <!-- 单一进度条（用于单文档/非检索阶段） -->
+                <div id="progress-bar-wrapper" style="display: none;">
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="progress-bar" style="width: 0%"></div>
+                    </div>
+                    <div style="text-align: right; font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">
+                        <span id="progress-percentage">0%</span>
+                    </div>
+                </div>
+
+                <!-- 单一进度详情 -->
+                <div id="progress-details" class="progress-details" style="display: none;">
+                    <div id="progress-agent" class="progress-detail-item"></div>
+                    <div id="progress-stage" class="progress-detail-item"></div>
+                    <div id="progress-iteration" class="progress-detail-item"></div>
+                    <div id="progress-tool" class="progress-detail-item"></div>
+                    <div id="progress-message" class="progress-detail-item" style="font-style: italic;"></div>
+                </div>
+
+                <!-- 并行文档进度（用于跨文档检索） -->
+                <div id="parallel-docs-progress" style="display: none;">
+                    <div style="margin-top: 0.75rem; margin-bottom: 0.5rem; font-weight: 600; color: var(--text-primary);">
+                        📚 并行检索进度
+                    </div>
+                    <div id="docs-progress-list" style="display: flex; flex-direction: column; gap: 0.5rem;"></div>
+                </div>
+
+                <div id="node-flow" class="node-flow" style="display: none;"></div>
+            </div>
+        `;
 
         messageDiv.appendChild(bubble);
         messagesDiv.appendChild(messageDiv);
         messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
         this.loadingMessageId = 'loading-indicator';
+        this.parallelDocsState = {};  // 用于跟踪并行文档的状态
+        this.collapsedDocs = {};  // 用于跟踪哪些文档是折叠的
+    }
+
+    updateProgressIndicator(progressData) {
+        const mainText = document.getElementById('progress-main-text');
+        const detailsDiv = document.getElementById('progress-details');
+        const agentDiv = document.getElementById('progress-agent');
+        const stageDiv = document.getElementById('progress-stage');
+        const iterationDiv = document.getElementById('progress-iteration');
+        const toolDiv = document.getElementById('progress-tool');
+        const messageDiv = document.getElementById('progress-message');
+        const progressBarWrapper = document.getElementById('progress-bar-wrapper');
+        const progressBar = document.getElementById('progress-bar');
+        const progressPercentage = document.getElementById('progress-percentage');
+        const nodeFlow = document.getElementById('node-flow');
+        const parallelDocsProgress = document.getElementById('parallel-docs-progress');
+
+        if (!mainText || !detailsDiv) return;
+
+        // 检测是否为并行检索场景
+        // 关键判断：当 agent='retrieval' 且 doc_name 不是 'MultiDoc' 时，说明是具体文档的检索
+        // 如果已经有其他文档在 parallelDocsState 中，或者 mode 是 cross/manual，就使用并行视图
+        const isRetrievalAgent = progressData.agent === 'retrieval';
+        const hasSpecificDoc = progressData.doc_name && progressData.doc_name !== 'MultiDoc';
+        const isMultiDocMode = this.mode === 'cross' || this.mode === 'manual';
+        const hasMultipleDocs = this.parallelDocsState && Object.keys(this.parallelDocsState).length > 0;
+        
+        // 情况1：回答代理进入 retrieve_multi 阶段（准备并行检索）
+        const isParallelStageStart = progressData.stage === 'retrieve_multi' && progressData.doc_name === 'MultiDoc';
+        
+        // 情况2：检索代理的具体文档进度（在跨文档模式下）
+        const isParallelRetrieval = isRetrievalAgent && hasSpecificDoc && (isMultiDocMode || hasMultipleDocs);
+        
+        if (isParallelStageStart) {
+            // 准备并行视图（显示等待状态）
+            this.prepareParallelView(progressData);
+            return;
+        }
+        
+        if (isParallelRetrieval) {
+            // 使用并行文档进度视图（更新具体文档）
+            this.updateParallelDocsProgress(progressData);
+            return;
+        }
+
+        // Agent type mapping with icons
+        const agentConfig = {
+            'answer': { name: '💬 回答代理', icon: '💬', color: '#667eea' },
+            'retrieval': { name: '🔍 检索代理', icon: '🔍', color: '#10b981' }
+        };
+
+        // Stage configuration with icons
+        const stageConfig = {
+            // Answer Agent stages
+            'analyze_intent': { name: '意图分析', icon: '🎯' },
+            'retrieve_single': { name: '单文档检索', icon: '📄' },
+            'select_docs': { name: '文档选择', icon: '📚' },
+            'rewrite_queries': { name: '查询改写', icon: '✏️' },
+            'retrieve_multi': { name: '多文档检索', icon: '🔎' },
+            'synthesize': { name: '综合答案', icon: '🧩' },
+            'generate': { name: '生成答案', icon: '✨' },
+            'generate_answer': { name: '生成答案', icon: '✨' },
+            // Retrieval Agent stages
+            'rewrite': { name: '查询重写', icon: '📝' },
+            'think': { name: '思考选择', icon: '💭' },
+            'act': { name: '执行检索', icon: '⚡' },
+            'summary': { name: '累积总结', icon: '📊' },
+            'evaluate': { name: '评估结果', icon: '✅' },
+            'format': { name: '格式化输出', icon: '📋' }
+        };
+
+        // Tool configuration with icons
+        const toolConfig = {
+            'search_by_context': { name: '语义检索', icon: '🔍' },
+            'extract_titles_from_structure': { name: '提取标题', icon: '📑' },
+            'search_by_title': { name: '标题匹配', icon: '🎯' },
+            'get_document_structure': { name: '获取结构', icon: '🏗️' },
+            'search_by_page_range': { name: '页码检索', icon: '📖' },
+            'get_pages': { name: '获取页面', icon: '📄' },
+            'vector_search': { name: '向量检索', icon: '🔍' },
+            'get_page_content': { name: '获取内容', icon: '📄' },
+            'get_chapter_structure': { name: '获取章节', icon: '📚' },
+            'get_images': { name: '获取图片', icon: '🖼️' }
+        };
+
+        const agent = agentConfig[progressData.agent] || { name: progressData.agent, icon: '🤖', color: '#667eea' };
+        const stage = stageConfig[progressData.stage] || stageConfig[progressData.stage_name] || { name: progressData.stage || progressData.stage_name, icon: '⚙️' };
+
+        // 隐藏并行进度视图（如果之前显示过）
+        if (parallelDocsProgress) {
+            parallelDocsProgress.style.display = 'none';
+        }
+
+        // Update main text with icon
+        mainText.innerHTML = `${agent.icon} <strong>${agent.name}</strong> - ${stage.icon} ${stage.name}`;
+
+        // Update progress bar if iteration info available
+        if (progressData.iteration !== undefined && progressData.max_iterations !== undefined) {
+            progressBarWrapper.style.display = 'block';
+            const percentage = (progressData.iteration / progressData.max_iterations) * 100;
+            progressBar.style.width = percentage + '%';
+            progressPercentage.textContent = Math.round(percentage) + '%';
+        } else {
+            progressBarWrapper.style.display = 'none';
+        }
+
+        // Show details
+        detailsDiv.style.display = 'block';
+
+        // Update agent info
+        agentDiv.innerHTML = `<strong>🤖 代理:</strong> ${agent.name} <span class="progress-badge">${progressData.doc_name || 'MultiDoc'}</span>`;
+        agentDiv.style.display = 'flex';
+
+        // Update stage info
+        stageDiv.innerHTML = `<strong>⚙️ 阶段:</strong> ${stage.icon} ${stage.name}`;
+        stageDiv.style.display = 'flex';
+
+        // Update iteration info
+        if (progressData.iteration !== undefined && progressData.max_iterations !== undefined) {
+            iterationDiv.innerHTML = `<strong>🔄 迭代:</strong> 第 <span class="progress-badge">${progressData.iteration}/${progressData.max_iterations}</span> 轮`;
+            iterationDiv.style.display = 'flex';
+        } else {
+            iterationDiv.style.display = 'none';
+        }
+
+        // Update tool info
+        if (progressData.tool) {
+            const tool = toolConfig[progressData.tool] || { name: progressData.tool, icon: '🔧' };
+            toolDiv.innerHTML = `<strong>🛠️ 工具:</strong> ${tool.icon} ${tool.name}`;
+            toolDiv.style.display = 'flex';
+        } else {
+            toolDiv.style.display = 'none';
+        }
+
+        // Update message
+        if (progressData.message) {
+            messageDiv.innerHTML = `<strong>💬 信息:</strong> ${progressData.message}`;
+            messageDiv.style.display = 'flex';
+        } else {
+            messageDiv.style.display = 'none';
+        }
+
+        // Update node flow visualization
+        // 对于单文档检索（agent=retrieval），也显示节点流程
+        this.updateNodeFlow(progressData, agent, stageConfig);
+
+        // Auto-scroll to bottom
+        const messagesContainer = document.getElementById('messages');
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    updateNodeFlow(progressData, agent, stageConfig) {
+        const nodeFlow = document.getElementById('node-flow');
+        if (!nodeFlow) return;
+
+        // Define workflow stages for each agent type
+        const workflows = {
+            'answer': [
+                { key: 'analyze_intent', label: '意图分析' },
+                { key: 'select_docs', label: '文档选择' },
+                { key: 'retrieve_multi', label: '检索' },
+                { key: 'synthesize', label: '综合' },
+                { key: 'generate', label: '生成' }
+            ],
+            'retrieval': [
+                { key: 'rewrite', label: '改写' },
+                { key: 'think', label: '思考' },
+                { key: 'act', label: '执行' },
+                { key: 'evaluate', label: '评估' },
+                { key: 'format', label: '输出' }
+            ]
+        };
+
+        const workflow = workflows[progressData.agent] || [];
+        if (workflow.length === 0) {
+            nodeFlow.style.display = 'none';
+            return;
+        }
+
+        // 总是显示节点流程（包括单文档检索）
+        nodeFlow.style.display = 'flex';
+        
+        // Build node flow HTML
+        let html = '';
+        workflow.forEach((node, index) => {
+            const stageInfo = stageConfig[node.key] || { icon: '⚙️' };
+            const isActive = progressData.stage === node.key || progressData.stage_name === node.key;
+            const isCompleted = index < workflow.findIndex(n => n.key === progressData.stage || n.key === progressData.stage_name);
+            
+            let nodeClass = 'node';
+            if (isActive) nodeClass += ' active';
+            else if (isCompleted) nodeClass += ' completed';
+
+            html += `
+                <div class="${nodeClass}">
+                    <div class="node-icon">${stageInfo.icon || '⚙️'}</div>
+                    <div class="node-label">${node.label}</div>
+                </div>
+            `;
+
+            if (index < workflow.length - 1) {
+                html += '<div class="node-arrow">→</div>';
+            }
+        });
+
+        nodeFlow.innerHTML = html;
+    }
+
+    prepareParallelView(progressData) {
+        /**
+         * 准备并行文档视图（当收到 retrieve_multi 的总体进度时）
+         * 显示等待状态，等待具体文档的进度更新
+         */
+        const parallelDocsProgress = document.getElementById('parallel-docs-progress');
+        const docsProgressList = document.getElementById('docs-progress-list');
+        const mainText = document.getElementById('progress-main-text');
+        const nodeFlow = document.getElementById('node-flow');
+        const progressBarWrapper = document.getElementById('progress-bar-wrapper');
+        const progressDetails = document.getElementById('progress-details');
+
+        if (!parallelDocsProgress || !docsProgressList) return;
+
+        // 隐藏单一进度视图
+        progressBarWrapper.style.display = 'none';
+        progressDetails.style.display = 'none';
+        nodeFlow.style.display = 'none';
+
+        // 显示并行进度视图
+        parallelDocsProgress.style.display = 'block';
+
+        // 更新主文本
+        mainText.innerHTML = `🔎 <strong>多文档并行检索</strong>`;
+
+        // 显示等待状态
+        docsProgressList.innerHTML = `
+            <div style="text-align: center; padding: 2rem; color: var(--text-muted);">
+                <div class="spinner" style="margin: 0 auto 1rem;"></div>
+                <div>${progressData.message || '正在准备并行检索...'}</div>
+            </div>
+        `;
+
+        // 重置状态
+        this.parallelDocsState = {};
+
+        // 滚动到底部
+        const messagesContainer = document.getElementById('messages');
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    updateParallelDocsProgress(progressData) {
+        /**
+         * 更新并行文档检索进度
+         * 为每个文档显示独立的进度条
+         */
+        const parallelDocsProgress = document.getElementById('parallel-docs-progress');
+        const docsProgressList = document.getElementById('docs-progress-list');
+        const mainText = document.getElementById('progress-main-text');
+        const nodeFlow = document.getElementById('node-flow');
+        const progressBarWrapper = document.getElementById('progress-bar-wrapper');
+        const progressDetails = document.getElementById('progress-details');
+
+        if (!parallelDocsProgress || !docsProgressList) return;
+
+        // 隐藏单一进度视图
+        progressBarWrapper.style.display = 'none';
+        progressDetails.style.display = 'none';
+        nodeFlow.style.display = 'none';
+
+        // 显示并行进度视图
+        parallelDocsProgress.style.display = 'block';
+
+        // 更新主文本
+        mainText.innerHTML = `🔎 <strong>多文档并行检索</strong>`;
+
+        const docName = progressData.doc_name;
+        
+        // 初始化或更新文档状态
+        if (!this.parallelDocsState) {
+            this.parallelDocsState = {};
+        }
+        
+        this.parallelDocsState[docName] = progressData;
+
+        // 重新渲染所有文档的进度
+        this.renderParallelDocsProgress();
+    }
+
+    renderParallelDocsProgress() {
+        /**
+         * 渲染所有并行文档的进度条（增量更新，避免刷新整个列表）
+         */
+        const docsProgressList = document.getElementById('docs-progress-list');
+        if (!docsProgressList || !this.parallelDocsState) return;
+
+        // 工具配置
+        const toolConfig = {
+            'search_by_context': { name: '语义检索', icon: '🔍' },
+            'extract_titles_from_structure': { name: '提取标题', icon: '📑' },
+            'search_by_title': { name: '标题匹配', icon: '🎯' },
+            'get_document_structure': { name: '获取结构', icon: '🏗️' },
+            'search_by_page_range': { name: '页码检索', icon: '📖' },
+            'get_pages': { name: '获取页面', icon: '📄' },
+            'vector_search': { name: '向量检索', icon: '🔍' },
+            'get_page_content': { name: '获取内容', icon: '📄' },
+            'get_chapter_structure': { name: '获取章节', icon: '📚' },
+            'get_images': { name: '获取图片', icon: '🖼️' }
+        };
+
+        // 阶段配置
+        const stageConfig = {
+            'rewrite': { name: '查询重写', icon: '📝', color: '#3b82f6' },
+            'think': { name: '思考选择', icon: '💭', color: '#8b5cf6' },
+            'act': { name: '执行检索', icon: '⚡', color: '#f59e0b' },
+            'summary': { name: '累积总结', icon: '📊', color: '#10b981' },
+            'evaluate': { name: '评估结果', icon: '✅', color: '#06b6d4' },
+            'format': { name: '格式化输出', icon: '📋', color: '#6366f1' }
+        };
+
+        // 检索代理工作流
+        const retrievalWorkflow = [
+            { key: 'rewrite', label: '改写' },
+            { key: 'think', label: '思考' },
+            { key: 'act', label: '执行' },
+            { key: 'evaluate', label: '评估' },
+            { key: 'format', label: '输出' }
+        ];
+
+        const docs = Object.entries(this.parallelDocsState);
+        
+        // 增量更新：只更新变化的文档，不重建整个列表
+        docs.forEach(([docName, progressData]) => {
+            const stage = stageConfig[progressData.stage] || { name: progressData.stage, icon: '⚙️', color: '#6b7280' };
+            const tool = progressData.tool ? toolConfig[progressData.tool] || { name: progressData.tool, icon: '🔧' } : null;
+            
+            // 计算进度百分比
+            let progressPercent = 0;
+            if (progressData.iteration !== undefined && progressData.max_iterations !== undefined) {
+                progressPercent = Math.round((progressData.iteration / progressData.max_iterations) * 100);
+            }
+
+            // 状态颜色
+            const statusColor = stage.color || '#667eea';
+            
+            // 检查是否折叠（默认展开）
+            const isCollapsed = this.collapsedDocs[docName] === true;
+            const toggleIcon = isCollapsed ? '▶' : '▼';
+            const docId = 'doc-progress-' + docName.replace(/[^a-zA-Z0-9]/g, '-');
+            const cardId = 'doc-card-' + docName.replace(/[^a-zA-Z0-9]/g, '-');
+
+            // 检查文档卡片是否已存在
+            let docCard = document.getElementById(cardId);
+            
+            if (!docCard) {
+                // 卡片不存在，创建新卡片
+                docCard = document.createElement('div');
+                docCard.id = cardId;
+                docCard.className = 'doc-progress-item';
+                docCard.style.cssText = `
+                    background: var(--bg-tertiary);
+                    border-radius: 0.5rem;
+                    padding: 0.75rem;
+                    border-left: 3px solid ${statusColor};
+                    transition: all 0.3s ease;
+                `;
+                docsProgressList.appendChild(docCard);
+            } else {
+                // 卡片已存在，只更新边框颜色
+                docCard.style.borderLeftColor = statusColor;
+            }
+
+            // 更新卡片内容（使用innerHTML，但只更新这一个卡片）
+            docCard.innerHTML = `
+                <!-- 可点击的标题栏 -->
+                <div onclick="chatApp.toggleDocProgress('${docName}')" style="
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    cursor: pointer;
+                    user-select: none;
+                    margin-bottom: ${isCollapsed ? '0' : '0.5rem'};
+                ">
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span style="font-size: 0.9rem; color: var(--text-muted);">${toggleIcon}</span>
+                        <div style="font-weight: 600; color: var(--text-primary); font-size: 0.9rem;">
+                            📄 ${docName}
+                        </div>
+                    </div>
+                    <div style="font-size: 0.75rem; color: var(--text-muted);">
+                        ${stage.icon} ${stage.name} ${progressPercent > 0 ? `(${progressPercent}%)` : ''}
+                    </div>
+                </div>
+
+                <!-- 折叠时的简化进度条 -->
+                ${isCollapsed && progressData.iteration !== undefined && progressData.max_iterations !== undefined ? `
+                    <div style="margin-top: 0.5rem;">
+                        <div class="progress-bar-container" style="height: 4px;">
+                            <div class="progress-bar" style="width: ${progressPercent}%; background: ${statusColor};"></div>
+                        </div>
+                    </div>
+                ` : ''}
+
+                <!-- 展开时的详细内容 -->
+                <div id="${docId}" style="display: ${isCollapsed ? 'none' : 'block'};">
+                    <!-- 节点流程图 -->
+                    <div class="node-flow" style="
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        gap: 0.25rem;
+                        padding: 0.75rem 0.5rem;
+                        background: var(--bg-primary);
+                        border-radius: 0.375rem;
+                        margin-bottom: 0.75rem;
+                        flex-wrap: wrap;
+                    ">
+                        ${this.renderRetrievalNodeFlow(progressData, retrievalWorkflow, stageConfig)}
+                    </div>
+
+                    <!-- 详细进度信息 -->
+                    ${progressData.iteration !== undefined && progressData.max_iterations !== undefined ? `
+                        <div style="margin-bottom: 0.5rem;">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.25rem;">
+                                <span>迭代进度</span>
+                                <span>${progressData.iteration}/${progressData.max_iterations} (${progressPercent}%)</span>
+                            </div>
+                            <div class="progress-bar-container" style="height: 4px;">
+                                <div class="progress-bar" style="width: ${progressPercent}%; background: ${statusColor};"></div>
+                            </div>
+                        </div>
+                    ` : ''}
+
+                    ${tool ? `
+                        <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.25rem;">
+                            🛠️ 当前工具: ${tool.icon} ${tool.name}
+                        </div>
+                    ` : ''}
+
+                    ${progressData.message ? `
+                        <div style="font-size: 0.75rem; color: var(--text-muted); font-style: italic; margin-top: 0.25rem;">
+                            💬 ${progressData.message}
+                        </div>
+                    ` : ''}
+                </div>
+            `;
+        });
+
+        // 只在第一次创建时滚动到底部，避免频繁滚动打断用户查看
+        if (!this._hasScrolledToParallel) {
+            const messagesContainer = document.getElementById('messages');
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            this._hasScrolledToParallel = true;
+        }
+    }
+
+    renderRetrievalNodeFlow(progressData, workflow, stageConfig) {
+        /**
+         * 为单个检索代理渲染节点流程
+         */
+        let html = '';
+        workflow.forEach((node, index) => {
+            const stageInfo = stageConfig[node.key] || { icon: '⚙️' };
+            const isActive = progressData.stage === node.key;
+            const isCompleted = index < workflow.findIndex(n => n.key === progressData.stage);
+            
+            let nodeClass = 'node';
+            if (isActive) nodeClass += ' active';
+            else if (isCompleted) nodeClass += ' completed';
+
+            html += `
+                <div class="${nodeClass}" style="
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 0.25rem;
+                    padding: 0.375rem 0.5rem;
+                    border-radius: 0.375rem;
+                    font-size: 0.75rem;
+                    transition: all 0.3s ease;
+                    ${isActive ? 'background: linear-gradient(135deg, rgba(102, 126, 234, 0.15) 0%, rgba(118, 75, 162, 0.15) 100%); transform: scale(1.05);' : ''}
+                    ${isCompleted ? 'opacity: 0.6;' : ''}
+                ">
+                    <div style="font-size: 1.2rem;">${stageInfo.icon || '⚙️'}</div>
+                    <div style="font-size: 0.7rem; color: var(--text-secondary); white-space: nowrap;">${node.label}</div>
+                </div>
+            `;
+
+            if (index < workflow.length - 1) {
+                html += '<div style="color: var(--text-muted); font-size: 0.8rem;">→</div>';
+            }
+        });
+        return html;
+    }
+
+    toggleDocProgress(docName) {
+        /**
+         * 切换文档进度的折叠/展开状态
+         */
+        // 切换状态
+        this.collapsedDocs[docName] = !this.collapsedDocs[docName];
+        
+        // 重新渲染（现在是增量更新，不会闪烁）
+        this.renderParallelDocsProgress();
+    }
+
+    prepareParallelView(progressData) {
+        /**
+         * 准备并行文档视图（当收到 retrieve_multi 的总体进度时）
+         * 显示等待状态，等待具体文档的进度更新
+         */
+        const parallelDocsProgress = document.getElementById('parallel-docs-progress');
+        const docsProgressList = document.getElementById('docs-progress-list');
+        const mainText = document.getElementById('progress-main-text');
+        const nodeFlow = document.getElementById('node-flow');
+        const progressBarWrapper = document.getElementById('progress-bar-wrapper');
+        const progressDetails = document.getElementById('progress-details');
+
+        if (!parallelDocsProgress || !docsProgressList) return;
+
+        // 隐藏单一进度视图
+        progressBarWrapper.style.display = 'none';
+        progressDetails.style.display = 'none';
+        nodeFlow.style.display = 'none';
+
+        // 显示并行进度视图
+        parallelDocsProgress.style.display = 'block';
+
+        // 更新主文本
+        mainText.innerHTML = `🔎 <strong>多文档并行检索</strong>`;
+
+        // 显示等待状态（只在列表为空时显示）
+        if (docsProgressList.children.length === 0) {
+            docsProgressList.innerHTML = `
+                <div style="text-align: center; padding: 2rem; color: var(--text-muted);">
+                    <div class="spinner" style="margin: 0 auto 1rem;"></div>
+                    <div>${progressData.message || '正在准备并行检索...'}</div>
+                </div>
+            `;
+        }
+
+        // 重置滚动标记
+        this._hasScrolledToParallel = false;
+
+        // 滚动到底部
+        const messagesContainer = document.getElementById('messages');
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
 
     removeLoadingIndicator() {
@@ -734,9 +1377,142 @@ class ChatApp {
         try {
             await API.chat.clear();
             document.getElementById('messages').innerHTML = '<div class="welcome"><div style="font-size: 4rem; margin-bottom: 1rem;">✨</div><h3>对话已清空</h3><p>可以开始新的对话了</p></div>';
+            // 重置分页状态
+            this.loadedMessageCount = 0;
+            this.totalMessageCount = 0;
+            this.hasMoreMessages = false;
             Utils.notify('对话已清空', 'success');
         } catch (error) {
             Utils.notify('清空失败: ' + error.message, 'error');
+        }
+    }
+
+    /**
+     * 显示"加载更多历史消息"按钮
+     */
+    showLoadMoreButton() {
+        const messagesDiv = document.getElementById('messages');
+
+        // 检查是否已存在按钮
+        let loadMoreBtn = document.getElementById('load-more-btn');
+        if (loadMoreBtn) {
+            loadMoreBtn.style.display = 'block';
+            return;
+        }
+
+        // 创建按钮
+        loadMoreBtn = document.createElement('div');
+        loadMoreBtn.id = 'load-more-btn';
+        loadMoreBtn.className = 'load-more-button';
+        loadMoreBtn.innerHTML = `
+            <button onclick="chatApp.loadMoreMessages()">
+                📜 加载更早的消息 (还有 ${this.totalMessageCount - this.loadedMessageCount} 条)
+            </button>
+        `;
+
+        // 插入到消息列表顶部
+        messagesDiv.insertBefore(loadMoreBtn, messagesDiv.firstChild);
+    }
+
+    /**
+     * 隐藏"加载更多"按钮
+     */
+    hideLoadMoreButton() {
+        const loadMoreBtn = document.getElementById('load-more-btn');
+        if (loadMoreBtn) {
+            loadMoreBtn.style.display = 'none';
+        }
+    }
+
+    /**
+     * 加载更多历史消息
+     */
+    async loadMoreMessages() {
+        if (this.isLoadingMore || !this.hasMoreMessages) return;
+
+        this.isLoadingMore = true;
+        const loadMoreBtn = document.getElementById('load-more-btn');
+        const originalHTML = loadMoreBtn ? loadMoreBtn.innerHTML : '';
+
+        try {
+            // 更新按钮状态
+            if (loadMoreBtn) {
+                loadMoreBtn.innerHTML = '<button disabled>⏳ 加载中...</button>';
+            }
+
+            // 调用API加载更多消息
+            const response = await fetch(
+                `/api/v1/chat/load-more-messages?offset=${this.loadedMessageCount}&limit=20`
+            );
+
+            if (!response.ok) {
+                throw new Error('加载失败');
+            }
+
+            const result = await response.json();
+
+            if (result.status === 'success' && result.messages.length > 0) {
+                // 保存当前滚动位置
+                const messagesDiv = document.getElementById('messages');
+                const oldScrollHeight = messagesDiv.scrollHeight;
+
+                // 使用 DocumentFragment 批量添加消息
+                const fragment = document.createDocumentFragment();
+
+                // 倒序添加（因为是从旧到新）
+                result.messages.forEach(msg => {
+                    const messageElement = this.createMessageElement(
+                        msg.role,
+                        msg.content,
+                        msg.references,
+                        msg.timestamp
+                    );
+                    fragment.appendChild(messageElement);
+                });
+
+                // 找到第一条真实消息的位置（跳过load-more按钮）
+                const firstMessage = messagesDiv.querySelector('.message');
+                if (firstMessage) {
+                    messagesDiv.insertBefore(fragment, firstMessage);
+                } else {
+                    messagesDiv.appendChild(fragment);
+                }
+
+                // 恢复滚动位置（保持在原来的消息位置）
+                const newScrollHeight = messagesDiv.scrollHeight;
+                messagesDiv.scrollTop = newScrollHeight - oldScrollHeight;
+
+                // 更新计数
+                this.loadedMessageCount += result.messages.length;
+                this.hasMoreMessages = result.has_more;
+
+                // 更新按钮文本
+                if (this.hasMoreMessages) {
+                    loadMoreBtn.innerHTML = `
+                        <button onclick="chatApp.loadMoreMessages()">
+                            📜 加载更早的消息 (还有 ${this.totalMessageCount - this.loadedMessageCount} 条)
+                        </button>
+                    `;
+                } else {
+                    this.hideLoadMoreButton();
+                }
+
+                console.log(`✅ 已加载 ${result.messages.length} 条历史消息，总共 ${this.loadedMessageCount}/${this.totalMessageCount}`);
+            } else {
+                Utils.notify('没有更多历史消息了', 'info');
+                this.hideLoadMoreButton();
+            }
+
+        } catch (error) {
+            console.error('加载更多消息失败:', error);
+            Utils.notify('加载失败: ' + error.message, 'error');
+
+            // 恢复按钮
+            if (loadMoreBtn) {
+                loadMoreBtn.innerHTML = originalHTML;
+            }
+        } finally {
+            this.isLoadingMore = false;
         }
     }
 }

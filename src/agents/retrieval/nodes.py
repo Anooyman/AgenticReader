@@ -40,6 +40,41 @@ class RetrievalNodes:
         """
         return self.agent.current_doc or "MultiDoc"
 
+    async def _send_progress(self, stage: str, stage_name: str, state: RetrievalState,
+                            status: str = "processing", message: str = "", tool: str = None):
+        """
+        发送进度更新（通过progress_callback）
+
+        Args:
+            stage: 阶段标识（rewrite/think/act/summary/evaluate/format）
+            stage_name: 阶段中文名称
+            state: 当前状态
+            status: 状态（processing/completed/error）
+            message: 详细消息
+            tool: 当前使用的工具（可选）
+        """
+        if not self.agent.progress_callback:
+            return
+
+        try:
+            progress_data = {
+                "agent": "retrieval",
+                "stage": stage,
+                "stage_name": stage_name,
+                "iteration": state.get("current_iteration", 0) + 1,  # +1 显示从1开始
+                "max_iterations": state.get("max_iterations", ProcessingLimits.MAX_RETRIEVAL_ITERATIONS),
+                "status": status,
+                "message": message,
+                "doc_name": self._doc_tag()
+            }
+
+            if tool:
+                progress_data["tool"] = tool
+
+            await self.agent.progress_callback(progress_data)
+        except Exception as e:
+            logger.warning(f"⚠️  发送进度更新失败: {e}")
+
     def _save_persistent_state(self, state: RetrievalState):
         """
         保存状态供下一轮检索使用（内部方法）
@@ -189,6 +224,15 @@ class RetrievalNodes:
         logger.info(f"🔄 [Rewrite|{self._doc_tag()}] 内部迭代: {current_iteration}")
         logger.info(f"🔄 [Rewrite|{self._doc_tag()}] 原始查询: {original_query}")
 
+        # 发送进度更新
+        await self._send_progress(
+            stage="rewrite",
+            stage_name="查询重写",
+            state=state,
+            status="processing",
+            message=f"正在优化查询: {original_query[:30]}..."
+        )
+
         try:
             # 只有外部对话轮次和内部迭代次数都为0时，才跳过重写
             # 其他情况（外部非首轮 或 内部非首次）都需要重写
@@ -196,6 +240,14 @@ class RetrievalNodes:
                 logger.info(f"🔄 [Rewrite|{self._doc_tag()}] 判断: 外部首轮对话且内部首次迭代，跳过查询重写")
                 state["rewritten_query"] = original_query
                 logger.info(f"✅ [Rewrite|{self._doc_tag()}] 输出查询: {original_query}")
+
+                await self._send_progress(
+                    stage="rewrite",
+                    stage_name="查询重写",
+                    state=state,
+                    status="completed",
+                    message="首次查询，无需重写"
+                )
                 return state
 
             logger.info(f"🔄 [Rewrite|{self._doc_tag()}] 判断: 外部非首轮({conversation_turn}) 或 内部非首次({current_iteration})，进行查询优化")
@@ -231,12 +283,28 @@ class RetrievalNodes:
             rewritten_clean = rewritten.strip().strip('"').strip("'").strip()
             state["rewritten_query"] = rewritten_clean
             logger.info(f"✅ [Rewrite|{self._doc_tag()}] 重写后查询: {rewritten_clean}")
+
+            await self._send_progress(
+                stage="rewrite",
+                stage_name="查询重写",
+                state=state,
+                status="completed",
+                message=f"查询已优化: {rewritten_clean[:30]}..."
+            )
             return state
 
         except Exception as e:
             logger.error(f"❌ [Rewrite|{self._doc_tag()}] 失败: {e}", exc_info=True)
             state["rewritten_query"] = original_query
             logger.info(f"⚠️  [Rewrite|{self._doc_tag()}] 回退到原始查询: {original_query}")
+
+            await self._send_progress(
+                stage="rewrite",
+                stage_name="查询重写",
+                state=state,
+                status="error",
+                message="查询优化失败，使用原始查询"
+            )
             return state
 
     async def think(self, state: RetrievalState) -> Dict:
@@ -245,6 +313,14 @@ class RetrievalNodes:
         current_iteration = state.get("current_iteration", 0)
         logger.info(f"🤔 [Think|{self._doc_tag()}] ========== 步骤1: 思考工具选择 ==========")
         logger.info(f"🤔 [Think|{self._doc_tag()}] 迭代进度: 第 {current_iteration + 1}/{state['max_iterations']} 轮")
+
+        await self._send_progress(
+            stage="think",
+            stage_name="思考工具选择",
+            state=state,
+            status="processing",
+            message="正在分析查询并选择合适的检索工具..."
+        )
 
         try:
             tools_description = format_all_tools_for_llm()
@@ -406,6 +482,15 @@ class RetrievalNodes:
         logger.info(f"🔧 [Act|{self._doc_tag()}] ========== 步骤2: 执行工具 ==========")
         logger.info(f"🔧 [Act|{self._doc_tag()}] 工具名称: {tool_name}")
         logger.info(f"🔧 [Act|{self._doc_tag()}] 工具参数: {action_input}")
+
+        await self._send_progress(
+            stage="act",
+            stage_name="执行检索",
+            state=state,
+            status="processing",
+            message=f"正在使用 {tool_name} 检索...",
+            tool=tool_name
+        )
 
         try:
             # 构建可用工具
@@ -657,6 +742,14 @@ class RetrievalNodes:
 
         logger.info(f"⚖️ [Evaluate|{self._doc_tag()}] ========== 步骤4: 评估检索结果 ==========")
 
+        await self._send_progress(
+            stage="evaluate",
+            stage_name="评估结果",
+            state=state,
+            status="processing",
+            message="正在评估检索结果的完整性..."
+        )
+
         try:
             formatted_data = state.get("formatted_data", [])
             current_iteration = state.get("current_iteration", 0)
@@ -898,6 +991,14 @@ class RetrievalNodes:
 
         logger.info(f"🎯 [Format|{self._doc_tag()}] ========== 步骤5: 生成最终总结 ==========")
 
+        await self._send_progress(
+            stage="format",
+            stage_name="生成答案",
+            state=state,
+            status="processing",
+            message="正在生成最终答案..."
+        )
+
         try:
             formatted_data = state.get("formatted_data", [])
             intermediate_summary = state.get("intermediate_summary", "")
@@ -921,14 +1022,16 @@ class RetrievalNodes:
             # 构建最终总结
             logger.info(f"🎯 [Format|{self._doc_tag()}] 调用 LLM 生成最终精准答案...")
 
-            # ========== 步骤1: 去重和合并 raw_data ==========
-            # 使用 raw_data 而不是 content（refactor_data）
-            # 按页码去重：同一页只保留一次
+            # ========== 步骤1: 分类收集数据 ==========
+            # 分别收集结构化信息和常规内容
             all_raw_pages = {}  # {page_num: {"title": str, "content": str}}
+            structured_info_items = []  # 结构化信息列表
 
             for item in formatted_data:
-                # 跳过结构化信息（它们不是实际内容）
+                # 检查是否是结构化信息
                 if item.get("type") == "structured_info":
+                    # 收集结构化信息（文档结构、标题列表等）
+                    structured_info_items.append(item)
                     continue
 
                 title = item.get("title", "未知章节")
@@ -957,26 +1060,55 @@ class RetrievalNodes:
                         }
 
             logger.info(f"🎯 [Format|{self._doc_tag()}] 去重后共 {len(all_raw_pages)} 页原始内容")
+            logger.info(f"🎯 [Format|{self._doc_tag()}] 收集到 {len(structured_info_items)} 条结构化信息")
 
             # ========== 步骤2: 构建检索内容详情 ==========
             content_parts = []
 
-            # 按页码排序
-            sorted_pages = sorted(all_raw_pages.keys(), key=lambda x: int(x) if str(x).isdigit() else 0)
+            # 2.1 先添加结构化信息（如果有）
+            if structured_info_items:
+                for idx, struct_item in enumerate(structured_info_items, 1):
+                    tool_name = struct_item.get("tool", "unknown")
+                    data = struct_item.get("data", [])
+                    content = struct_item.get("content", "")
 
-            for idx, page_num in enumerate(sorted_pages, 1):
-                page_data = all_raw_pages[page_num]
-                title = page_data["title"]
-                content = page_data["content"]
+                    # 构建结构化信息展示
+                    if isinstance(data, list) and data:
+                        struct_content = "\n".join([f"- {item}" for item in data])
+                    else:
+                        struct_content = content or str(data)
 
-                content_block = f"""
+                    content_block = f"""
+## 结构化信息 {idx}: {tool_name}
+
+{struct_content}
+"""
+                    content_parts.append(content_block.strip())
+
+            # 2.2 再添加常规内容（按页码排序）
+            if all_raw_pages:
+                sorted_pages = sorted(all_raw_pages.keys(), key=lambda x: int(x) if str(x).isdigit() else 0)
+
+                for idx, page_num in enumerate(sorted_pages, 1):
+                    page_data = all_raw_pages[page_num]
+                    title = page_data["title"]
+                    content = page_data["content"]
+
+                    content_block = f"""
 ## 内容 {idx}: {title} (页码: {page_num})
 
 {content}
 """
-                content_parts.append(content_block.strip())
+                    content_parts.append(content_block.strip())
 
             # 构建完整的 prompt
+            if not content_parts:
+                # 没有任何可用内容（既没有结构化信息也没有常规内容）
+                logger.warning(f"⚠️  [Format|{self._doc_tag()}] 没有可用内容生成答案，返回提示信息")
+                state["final_summary"] = "未能检索到相关内容。请尝试调整查询或检查文档是否已正确索引。"
+                self._save_persistent_state(state)
+                return state
+
             all_content = "\n\n".join(content_parts)
 
             prompt = f"""# 用户查询
@@ -1000,9 +1132,11 @@ class RetrievalNodes:
 4. 使用清晰的 Markdown 格式组织答案
 5. **页码标注**: 在答案正文中不要频繁标注页码，只在答案末尾简要提及主要来源页码即可
 6. 如果检索内容不足以完全回答问题，明确说明
+7. **结构化信息**: 如果检索到文档结构、标题列表等结构化信息，请清晰地展示出来
 """
 
-            logger.info(f"🎯 [Format|{self._doc_tag()}] 准备生成最终答案，内容数: {len(content_parts)}，总长度: {len(all_content)} 字符")
+            total_items = len(structured_info_items) + len(all_raw_pages)
+            logger.info(f"🎯 [Format|{self._doc_tag()}] 准备生成最终答案，总数据项: {total_items}（结构化: {len(structured_info_items)}, 内容: {len(all_raw_pages)}），总长度: {len(all_content)} 字符")
 
             session_id = f"format_{state.get('doc_name', 'default')}"
             final_summary = await self.agent.llm.async_call_llm_chain(

@@ -35,11 +35,14 @@ class RetrievalAgent(AgentBase):
     - 多文档检索：doc_name=None
     """
 
-    def __init__(self, doc_name: str = None):
+    def __init__(self, doc_name: str = None, progress_callback=None):
         super().__init__(name="RetrievalAgent")
 
         # 当前文档上下文
         self.current_doc = doc_name
+
+        # 进度回调函数（用于实时上报处理进度）
+        self.progress_callback = progress_callback
 
         # 初始化 VectorDBClient（复用实例，避免重复加载）
         self.vector_db_client = None

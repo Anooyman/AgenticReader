@@ -708,8 +708,6 @@ async def batch_delete_documents(request: BatchDeleteRequest):
         删除结果汇总
     """
     try:
-        registry = DocumentRegistry()
-
         results = {
             "total": len(request.doc_names),
             "success": 0,
@@ -719,19 +717,9 @@ async def batch_delete_documents(request: BatchDeleteRequest):
         }
 
         for doc_name in request.doc_names:
-            doc_info = registry.get_by_name(doc_name)
-
-            if not doc_info:
-                results["failed"] += 1
-                results["details"].append({
-                    "doc_name": doc_name,
-                    "status": "failed",
-                    "reason": "文档不存在"
-                })
-                continue
-
             try:
-                # 删除所有部分
+                # 直接调用 delete_document_parts，不预检查
+                # 这样可以删除孤立文件（Registry 中无记录但文件存在）
                 delete_result = await delete_document_parts(
                     doc_name,
                     DeletePartsRequest(parts=["all"])
@@ -745,7 +733,17 @@ async def batch_delete_documents(request: BatchDeleteRequest):
                     "freed_mb": delete_result["freed_space_mb"]
                 })
 
+            except HTTPException as e:
+                # 处理 HTTP 异常（如 404 - 文档不存在）
+                results["failed"] += 1
+                results["details"].append({
+                    "doc_name": doc_name,
+                    "status": "failed",
+                    "reason": e.detail if hasattr(e, 'detail') else str(e)
+                })
+
             except Exception as e:
+                # 处理其他异常
                 results["failed"] += 1
                 results["details"].append({
                     "doc_name": doc_name,

@@ -178,7 +178,7 @@ class GeminiLLMProvider(LLMProviderBase):
         }
         
         if base_url:
-            config["client_options"] = ClientOptions(api_endpoint=base_url)
+            config["client_options"] = {"api_endpoint": base_url}
         
         return ChatGoogleGenerativeAI(**config)
 
@@ -200,6 +200,6 @@ class GeminiLLMProvider(LLMProviderBase):
         }
         
         if base_url:
-            config["client_options"] = ClientOptions(api_endpoint=base_url)
+            config["client_options"] = {"api_endpoint": base_url}
         
         return GoogleGenerativeAIEmbeddings(**config)

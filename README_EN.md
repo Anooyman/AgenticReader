@@ -42,6 +42,16 @@ AgenticReader is an advanced document analysis and intelligent Q&A tool powered 
 - **Web Interface Mode**:
   - **Dashboard**: Document overview, quick indexing, mode selection
   - **Smart Chat**: WebSocket real-time communication, supports Markdown/LaTeX rendering
+  - **Real-time Progress Visualization**:
+    - 📊 **Node Flow Diagram**: Visual representation of Agent execution flow (Rewrite→Think→Act→Evaluate→Format)
+    - 🔄 **Iteration Progress**: Real-time display of retrieval iteration count and percentage
+    - 🛠️ **Tool Invocation**: Show current retrieval tools and detailed information
+    - 🎨 **Modern Design**: Gradient backgrounds, smooth animations, micro-interactions
+  - **Parallel Retrieval Visualization**:
+    - 📚 **Multi-document Concurrency**: Display all document retrieval progress simultaneously in cross-doc mode
+    - 🔽 **Collapse/Expand**: Independent progress cards for each document, collapsible for detailed flow
+    - ⚡ **Incremental Updates**: Flicker-free real-time updates without interrupting user viewing
+    - 🎯 **Independent Flow**: Each PDF has its own node flow visualization
   - **Session Management**: Three modes with independent session storage, support import/export
   - **Data Management**: Granular data control with partial deletion, batch operations, smart cleanup
   - **Configuration Center**: LLM provider switching, parameter adjustment
@@ -432,69 +442,142 @@ python -c "from src.agents.answer import AnswerAgent; print('OK')"
 <details>
 <summary><b>❓ FAQ (Click to expand)</b></summary>
 
-### 1. PDF file not recognized?
-- Ensure file is placed in `data/pdf/` directory
-- Check filename spelling is correct
-- Supported format: `.pdf`
+### 1. What file formats are supported?
+- ✅ **PDF files**: Fully supported, auto-extract text, images, structure
+- ❌ **URL/Web pages**: Temporarily not supported (Web Reader feature removed)
+- ❌ **Word/PPT**: Not supported yet (planned)
 
-### 2. Indexing failed?
-- Check LLM API configuration is correct
-- Confirm network connection is normal
-- View log output to locate errors
-- Try using `LOGGING_LEVEL=DEBUG` for detailed info
+### 2. What's the difference between the four dialogue modes?
+- **Single (Single Document)**: Deep Q&A for specific document, all retrieval limited to selected document
+- **Cross (Cross-Document Intelligent)**: System auto-selects relevant documents for retrieval and synthesis
+- **Manual (Cross-Document Manual Selection)**: Manually specify multiple documents as background knowledge
+- **General (General Conversation)**: Free conversation without binding to specific documents
 
-### 3. How to manage conversation history?
-- Automatically managed by `LLMBase.message_histories`
-- LLM auto-summarizes history to save context
-- Web interface supports viewing and clearing history
+**Recommended scenarios:**
+- Learning specific document content → Single mode
+- Exploratory research, uncertain which document to use → Cross mode
+- Clearly need to compare multiple documents → Manual mode
+- General questions, chitchat → General mode
 
-### 4. How to view indexed documents?
+### 3. How to index new documents?
+**CLI Mode:**
 ```bash
-# CLI mode
 python main.py
-# Select 'm' to enter document management
-
-# Web mode
-Visit http://localhost:8000/data
+# Select 'i' - Index new document
+# Choose file from data/pdf/ directory
+# Wait for indexing (auto parse, chunk, vectorize)
 ```
 
-### 5. How to delete documents?
+**Web Mode:**
+```
+Visit http://localhost:8000/
+Click "Batch Index" or "Single Index"
+Upload PDF file
+Wait for background processing
+```
+
+### 4. How to view and manage indexed documents?
+**CLI Mode:**
 ```bash
-# CLI mode
-python -m src.core.processing.manage_documents
-
-# Web mode
-Visit http://localhost:8000/data
-# Use granular deletion features
+python main.py
+# Select 'm' - Manage documents
+# View document list and storage usage
+# Can delete specific documents
 ```
 
-### 6. Session data lost, how to recover?
-- Visit `data/sessions/backups/` directory
-- Use web interface import function to restore backups
-- Backup files named by timestamp, keeps max 10
+**Web Mode:**
+```
+Visit http://localhost:8000/data
+View all documents and data types
+Use granular deletion (delete only specific data types)
+Or batch delete multiple documents
+```
+
+### 5. What is "granular deletion"?
+**Traditional deletion**: Deletes all related data when deleting document
+
+**Granular deletion**: Selectively delete specific data types, for example:
+- Delete Images only → Free up most space
+- Delete Vector DB only → Use when rebuilding index
+- Delete Summary only → Use when regenerating summary
+- Keep JSON data → Avoid re-parsing PDF
+
+**Usage scenarios:**
+- Insufficient space but want to keep document → Delete Images
+- Index corrupted, need rebuild → Delete Vector DB
+- Optimize index parameters → Delete Vector DB and Chunks, keep JSON
+
+### 6. How to manage conversation history?
+**Automatic management:**
+- LLM auto-summarizes conversation history (90%+ compression)
+- Maintains context coherence while saving tokens
+
+**Manual clearing:**
+- **CLI**: Enter `clear` command
+- **Web**: Click "Clear History" button
+- Clear operation clears both file and memory, and re-instantiates Agent
+
+**Session persistence:**
+- All conversations auto-saved to `data/sessions/{mode}/` directory
+- Three modes stored independently: single, cross, manual
+- Single mode: One session file per document (doc_name.json)
+- Cross/Manual mode: One file per session (session_id.json)
 
 ### 7. How to switch LLM providers?
+**Method 1: Modify .env file**
 ```bash
-# Modify .env file
-CHAT_API_KEY=your_api_key
-CHAT_MODEL_NAME=your_model
+# Azure OpenAI
+CHAT_API_KEY=your_azure_key
+CHAT_AZURE_ENDPOINT=https://your-endpoint.openai.azure.com/
+CHAT_DEPLOYMENT_NAME=gpt-4
+CHAT_API_VERSION=2024-02-15-preview
 
-# Or switch in web interface configuration page
+# OpenAI
+CHAT_API_KEY=your_openai_key
+CHAT_MODEL_NAME=gpt-4
+OPENAI_BASE_URL=https://api.openai.com/v1/
+
+# Ollama (Local)
+OLLAMA_BASE_URL=http://localhost:11434
+CHAT_MODEL_NAME=llama3
+
+# Gemini
+GEMINI_API_KEY=your_gemini_key
+GEMINI_MODEL_NAME=gemini-1.5-pro
+```
+
+**Method 2: Web Configuration Page**
+```
+Visit http://localhost:8000/config
+Select LLM provider
+Fill in API Key and configuration
+Save and restart
 ```
 
 ### 8. How to clean old data to free space?
-- Visit `http://localhost:8000/data` to enter data management interface
-- Use "Smart Cleanup" to auto-clean data older than 30 days
-- Or manually select documents and delete specific data types (e.g., delete images only)
+**Smart Cleanup (Recommended):**
+```
+Visit http://localhost:8000/data
+Click "Smart Cleanup"
+Set days (default 30 days)
+System auto-cleans old data
+```
 
-### 9. How to recover accidentally deleted data?
-- Session data can be recovered from `data/sessions/backups/`
-- Document data recommended to use "Data Backup" feature regularly
-- Backup files saved in `data/backups/` directory
+**Manual Cleanup:**
+- Select specific document → Granular deletion (delete only Images/Vector DB)
+- Batch select → Delete multiple documents at once
+- Cache management → Clear PDF image cache, JSON cache
 
-### 10. IndexingAgent vs Old Reader?
-- ✅ **IndexingAgent** (New): LangGraph-based state machine workflow, supports caching, incremental processing, stage tracking
-- ❌ **PDFReader/WebReader** (Removed): Old class inheritance architecture, completely removed
+**Most space-consuming data types:**
+1. Images (PDF pictures) - Usually 60-70% of space
+2. Vector DB (Vector index) - Usually 20-30% of space
+3. JSON data - Usually 5-10% of space
+4. Summary - Usually 1-2% of space
+
+### 9. Why was Web Reader feature removed?
+- Focus on deep PDF document parsing and Q&A
+- Web content structure is complex with varying quality
+- Planning to redesign better web content processing in the future
 
 </details>
 

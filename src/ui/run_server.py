@@ -12,7 +12,6 @@ if str(PROJECT_ROOT) not in sys.path:
 if __name__ == "__main__":
     print("🚀 启动 AgenticReader 服务器...")
     print("📁 访问: http://localhost:8000")
-    print("📚 API 文档: http://localhost:8000/docs")
     print()
 
     uvicorn.run(

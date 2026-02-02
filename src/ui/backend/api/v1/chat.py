@@ -47,7 +47,8 @@ async def initialize_chat(request: ChatInitRequest):
                 "selected_docs": result.get("selected_docs"),
                 "title": result.get("title"),
                 "message_count": result.get("message_count"),
-                "messages": result.get("messages", [])
+                "messages": result.get("messages", []),
+                "has_more_messages": result.get("has_more_messages", False)
             }
         else:
             error_msg = result.get("error", "聊天服务初始化失败")
@@ -74,4 +75,37 @@ async def clear_chat():
 
     except Exception as e:
         print(f"❌ 清空聊天历史失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/load-more-messages")
+async def load_more_messages(offset: int = 0, limit: int = 20):
+    """
+    加载更多历史消息（用于分页加载）
+
+    Args:
+        offset: 偏移量（已加载的消息数）
+        limit: 每次加载的消息数（默认20）
+
+    Returns:
+        {
+            "messages": [...],
+            "total": int,
+            "has_more": bool
+        }
+    """
+    try:
+        from ...services.chat_service import chat_service
+
+        result = chat_service.load_more_messages(offset=offset, limit=limit)
+
+        return {
+            "status": "success",
+            "messages": result.get("messages", []),
+            "total": result.get("total", 0),
+            "has_more": result.get("has_more", False)
+        }
+
+    except Exception as e:
+        print(f"❌ 加载更多消息失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))

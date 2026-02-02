@@ -34,11 +34,17 @@ class SessionManager:
         self.manual_dir = self.base_dir / "manual"
         self.metadata_file = self.base_dir / "metadata.json"
 
+        # ✅ 优化: 添加内存缓存 {session_id: (mode, filename)}
+        self._session_cache = {}
+
         # 确保目录存在
         self._ensure_directories()
 
         # 加载元数据
         self.metadata = self._load_metadata()
+
+        # 构建会话缓存
+        self._build_cache()
 
     def _ensure_directories(self):
         """确保所有必要的目录存在"""
@@ -46,6 +52,31 @@ class SessionManager:
         self.single_dir.mkdir(exist_ok=True)
         self.cross_dir.mkdir(exist_ok=True)
         self.manual_dir.mkdir(exist_ok=True)
+
+    def _build_cache(self):
+        """
+        构建会话缓存（启动时执行一次）
+        缓存格式: {session_id: (mode, filename)}
+        """
+        logger.info("🔧 构建会话缓存...")
+        cache_count = 0
+
+        for mode in ["single", "cross", "manual"]:
+            session_dir = self._get_session_dir(mode)
+            for file_path in session_dir.glob("*.json"):
+                try:
+                    session_data = self._load_session_file(file_path)
+                    if session_data:
+                        session_id = session_data.get("session_id")
+                        if session_id:
+                            # 缓存: session_id -> (mode, filename_without_extension)
+                            self._session_cache[session_id] = (mode, file_path.stem)
+                            cache_count += 1
+                except Exception as e:
+                    logger.warning(f"缓存构建失败 {file_path}: {e}")
+                    continue
+
+        logger.info(f"✅ 会话缓存构建完成，共 {cache_count} 个会话")
 
     def _load_metadata(self) -> Dict:
         """加载元数据"""
@@ -142,6 +173,10 @@ class SessionManager:
         }
 
         self._save_session_file(session_path, session_data)
+
+        # ✅ 更新缓存
+        self._session_cache[session_data["session_id"]] = ("single", doc_name)
+
         return session_data
 
     def create_session(
@@ -192,12 +227,15 @@ class SessionManager:
         session_path = self._get_session_path(mode, session_id)
         self._save_session_file(session_path, session_data)
 
+        # ✅ 更新缓存
+        self._session_cache[session_id] = (mode, session_id)
+
         logger.info(f"创建新会话: {mode} - {session_id}")
         return session_data
 
     def load_session(self, session_id: str, mode: str) -> Optional[Dict]:
         """
-        加载指定会话
+        加载指定会话（使用缓存优化）
 
         Args:
             session_id: 会话ID（或 single 模式的 doc_name）
@@ -206,6 +244,17 @@ class SessionManager:
         Returns:
             会话数据，如果不存在返回 None
         """
+        # ✅ 优化: 先查缓存
+        if session_id in self._session_cache:
+            cached_mode, filename = self._session_cache[session_id]
+            if cached_mode == mode:
+                session_path = self._get_session_path(mode, filename)
+                session_data = self._load_session_file(session_path)
+                if session_data:
+                    logger.info(f"✅ 从缓存加载会话: {mode} - {session_id}")
+                    return session_data
+
+        # 缓存未命中，使用原有逻辑
         # 对于 single 模式，需要特殊处理：
         # 文件名是 doc_name.json，但传入的可能是 session_id
         # 需要遍历找到匹配的文件
@@ -216,6 +265,8 @@ class SessionManager:
             session_path = self._get_session_path(mode, session_id)
             session_data = self._load_session_file(session_path)
             if session_data:
+                # 更新缓存
+                self._session_cache[session_data.get("session_id")] = (mode, session_id)
                 logger.info(f"加载会话: {mode} - {session_id}")
                 return session_data
 
@@ -224,6 +275,8 @@ class SessionManager:
                 try:
                     session_data = self._load_session_file(file_path)
                     if session_data and session_data.get("session_id") == session_id:
+                        # 更新缓存
+                        self._session_cache[session_id] = (mode, file_path.stem)
                         logger.info(f"加载会话: {mode} - {session_id} (文件: {file_path.name})")
                         return session_data
                 except Exception as e:
@@ -238,6 +291,8 @@ class SessionManager:
             session_data = self._load_session_file(session_path)
 
             if session_data:
+                # 更新缓存
+                self._session_cache[session_id] = (mode, session_id)
                 logger.info(f"加载会话: {mode} - {session_id}")
             else:
                 logger.warning(f"会话不存在: {mode} - {session_id}")
@@ -309,6 +364,54 @@ class SessionManager:
                 "content": msg["content"]
             })
         return history
+
+    def get_messages_range(
+        self,
+        session_id: str,
+        mode: str,
+        offset: int = 0,
+        limit: int = 20
+    ) -> Dict[str, Any]:
+        """
+        获取指定范围的历史消息（用于分页加载）
+
+        Args:
+            session_id: 会话ID
+            mode: 会话模式
+            offset: 偏移量（从后往前数）
+            limit: 返回的消息数量
+
+        Returns:
+            {
+                "messages": [...],  # 消息列表
+                "total": int,       # 总消息数
+                "has_more": bool    # 是否还有更多消息
+            }
+        """
+        session = self.load_session(session_id, mode)
+        if not session:
+            return {
+                "messages": [],
+                "total": 0,
+                "has_more": False
+            }
+
+        all_messages = session.get("messages", [])
+        total = len(all_messages)
+
+        # 从后往前取消息：offset=0 表示最新的消息
+        # offset=20 表示跳过最新的20条，取更早的消息
+        start_idx = max(0, total - offset - limit)
+        end_idx = total - offset
+
+        messages = all_messages[start_idx:end_idx]
+        has_more = start_idx > 0
+
+        return {
+            "messages": messages,
+            "total": total,
+            "has_more": has_more
+        }
 
     def list_sessions(self, mode: str, limit: Optional[int] = None) -> List[Dict]:
         """
@@ -383,6 +486,9 @@ class SessionManager:
             # 删除找到的文件
             try:
                 session_path.unlink()
+                # ✅ 从缓存中移除
+                if session_id in self._session_cache:
+                    del self._session_cache[session_id]
                 logger.info(f"✅ 删除会话: {mode} - {session_id} (文件: {session_path.name})")
             except Exception as e:
                 logger.error(f"❌ 删除会话失败: {e}")
@@ -394,6 +500,9 @@ class SessionManager:
             if session_path.exists():
                 try:
                     session_path.unlink()
+                    # ✅ 从缓存中移除
+                    if session_id in self._session_cache:
+                        del self._session_cache[session_id]
                     logger.info(f"✅ 删除会话: {mode} - {session_id} ({session_path.name})")
                 except Exception as e:
                     logger.error(f"❌ 删除会话失败: {e}")

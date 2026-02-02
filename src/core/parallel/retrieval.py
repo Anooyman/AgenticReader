@@ -207,8 +207,12 @@ class ParallelRetrievalCoordinator:
         # 获取或创建该文档的RetrievalAgent
         if doc_name not in self.answer_agent.retrieval_agents:
             from src.agents.retrieval import RetrievalAgent
-            self.answer_agent.retrieval_agents[doc_name] = RetrievalAgent(doc_name=doc_name)
-            logger.info(f"✨ [ParallelCoordinator] 为文档 '{doc_name}' 创建新的 Retrieval Agent")
+            # 传递 progress_callback，使得 RetrievalAgent 的进度可以实时上报
+            self.answer_agent.retrieval_agents[doc_name] = RetrievalAgent(
+                doc_name=doc_name,
+                progress_callback=self.answer_agent.progress_callback  # 关键：传递回调
+            )
+            logger.info(f"✨ [ParallelCoordinator] 为文档 '{doc_name}' 创建新的 Retrieval Agent（已绑定进度回调）")
 
         retrieval_agent = self.answer_agent.retrieval_agents[doc_name]
 

@@ -571,10 +571,52 @@
     #detail-modal-content .katex-display > .katex {
         text-align: center;
     }
-</style>
 
-<!-- KaTeX for LaTeX math rendering -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    /* Pagination */
+    .pagination {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 0.5rem;
+        margin: 2rem 0;
+        flex-wrap: wrap;
+    }
+
+    .pagination-btn {
+        padding: 0.5rem 1rem;
+        border: 1px solid var(--border-color);
+        border-radius: 0.375rem;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+
+    .pagination-btn:hover:not(:disabled) {
+        background: var(--bg-secondary);
+        border-color: var(--primary-color);
+        color: var(--primary-color);
+    }
+
+    .pagination-btn.active {
+        background: var(--primary-color);
+        color: white;
+        border-color: var(--primary-color);
+    }
+
+    .pagination-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    .pagination-ellipsis {
+        padding: 0.5rem 0.25rem;
+        color: var(--text-muted);
+        font-size: 0.875rem;
+    }
+</style>
 {% endblock %}
 
 {% block content %}
@@ -678,6 +720,9 @@
             <button class="btn btn-secondary" onclick="dataManager.toggleDocSelectAll()">
                 <span id="doc-select-all-text">☑️ 全选</span>
             </button>
+            <button class="btn btn-primary" onclick="dataManager.startMultiDocChat()" id="doc-batch-chat-btn" style="display: none;">
+                💬 对话 (<span id="doc-chat-count">0</span>)
+            </button>
             <button class="btn btn-danger" onclick="dataManager.batchDeleteDocuments()" id="doc-batch-delete-btn" style="display: none;">
                 🗑️ 删除选中 (<span id="doc-selected-count">0</span>)
             </button>
@@ -691,6 +736,10 @@
             <div>⏳ 加载文档数据中...</div>
         </div>
         <div id="documents-grid" class="documents-grid" style="display: none;"></div>
+
+        <!-- Documents Pagination -->
+        <div id="doc-pagination" class="pagination" style="display: none;"></div>
+
         <div id="documents-empty" class="empty-state" style="display: none;">
             <div class="empty-state-icon">📭</div>
             <h3>暂无文档</h3>
@@ -740,6 +789,10 @@
             <div>⏳ 加载会话数据中...</div>
         </div>
         <div id="sessions-grid" class="sessions-grid" style="display: none;"></div>
+
+        <!-- Sessions Pagination -->
+        <div id="session-pagination" class="pagination" style="display: none;"></div>
+
         <div id="sessions-empty" class="empty-state" style="display: none;">
             <div class="empty-state-icon">💬</div>
             <h3>暂无会话</h3>
@@ -777,10 +830,6 @@
 {% endblock %}
 
 {% block extra_js %}
-<!-- KaTeX for LaTeX math rendering -->
-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
-
 <script src="/static/js/utils.js?v=4"></script>
 <script src="/static/js/api.js?v=4"></script>
 <script src="/static/js/ui-components.js?v=4"></script>

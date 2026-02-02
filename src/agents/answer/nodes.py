@@ -29,6 +29,39 @@ class AnswerNodes:
         """
         self.agent = agent
 
+    async def _send_progress(self, stage: str, stage_name: str, status: str = "processing",
+                            message: str = "", state: AnswerState = None, **kwargs):
+        """
+        发送进度更新（通过progress_callback）
+
+        Args:
+            stage: 阶段标识（analyze_intent/retrieve_single/select_docs/rewrite_queries/retrieve_multi/synthesize/generate）
+            stage_name: 阶段中文名称
+            status: 状态（processing/completed/error）
+            message: 详细消息
+            state: 当前状态（可选，用于提取额外信息）
+            **kwargs: 额外的进度数据（如 tool, iteration 等）
+        """
+        if not self.agent.progress_callback:
+            return
+
+        try:
+            progress_data = {
+                "agent": "answer",
+                "stage": stage,
+                "stage_name": stage_name,
+                "status": status,
+                "message": message,
+                "doc_name": self.agent.current_doc or "MultiDoc"
+            }
+
+            # 添加额外的进度信息（如果提供）
+            progress_data.update(kwargs)
+
+            await self.agent.progress_callback(progress_data)
+        except Exception as e:
+            logger.warning(f"⚠️ 发送进度更新失败: {e}")
+
     def _save_persistent_state(self, state: AnswerState):
         """
         保存状态供下一轮对话使用（内部方法）
@@ -71,6 +104,14 @@ class AnswerNodes:
         user_query = state['user_query']
         current_doc = state.get('current_doc', '无')
         manual_selected_docs = state.get('manual_selected_docs', [])
+
+        # 发送进度更新
+        await self._send_progress(
+            stage="analyze_intent",
+            stage_name="意图分析",
+            status="processing",
+            message=f"正在分析查询: {user_query[:30]}..."
+        )
 
         # ============ 状态持久化：恢复之前的状态 ============
         if self.agent.persistent_state:
@@ -160,6 +201,15 @@ class AnswerNodes:
             # 更新 state 并返回
             state["needs_retrieval"] = needs_retrieval
             state["analysis_reason"] = reason
+
+            # 发送进度完成更新
+            await self._send_progress(
+                stage="analyze_intent",
+                stage_name="意图分析",
+                status="completed",
+                message=f"{'需要检索' if needs_retrieval else '直接回答'}: {reason}"
+            )
+
             return state
 
         except Exception as e:
@@ -204,13 +254,23 @@ class AnswerNodes:
         logger.info(f"   - 用户查询: {user_query}")
         logger.info(f"   - 目标文档: {current_doc if current_doc else '未指定'}")
 
+        # 发送进度更新 - 开始检索
+        await self._send_progress(
+            stage="retrieve_single",
+            stage_name="单文档检索",
+            status="processing",
+            message=f"正在检索文档: {current_doc or 'unknown'}",
+            state=state
+        )
+
         try:
             # 更新当前文档上下文
             self.agent.current_doc = current_doc
 
             logger.info(f"🤖 [Retrieve] 调用 Retrieval Agent 进行检索...")
+            logger.info(f"ℹ️  [Retrieve] Retrieval Agent 的详细进度将实时显示...")
 
-            # 调用工具方法
+            # 调用工具方法（Retrieval Agent 的进度会通过 progress_callback 实时更新）
             context = await self.agent.tools.call_retrieval_impl(user_query)
 
             context_length = len(context) if context else 0
@@ -259,6 +319,15 @@ class AnswerNodes:
             state["final_answer"] = final_answer
             state["is_complete"] = True
 
+            # 发送进度完成更新
+            await self._send_progress(
+                stage="retrieve_single",
+                stage_name="单文档检索",
+                status="completed",
+                message="检索完成",
+                state=state
+            )
+
             logger.info(f"✅ [Retrieve] 直接返回检索结果，跳过 generate_answer 节点")
             return state
 
@@ -275,6 +344,15 @@ class AnswerNodes:
             logger.error(f"   - 将继续执行 generate_answer 节点")
             logger.error("=" * 80)
             logger.error("")
+
+            # 发送进度错误更新
+            await self._send_progress(
+                stage="retrieve_single",
+                stage_name="单文档检索",
+                status="error",
+                message=f"检索失败: {str(e)}",
+                state=state
+            )
 
             # 更新 state 并返回（不设置 final_answer，让 generate_answer 处理）
             state["context"] = ""
@@ -316,6 +394,15 @@ class AnswerNodes:
         if context:
             logger.info(f"   - 上下文长度: {len(context)} 字符")
             logger.info(f"   - 上下文预览: {context[:150]}...")
+
+        # 发送进度更新
+        await self._send_progress(
+            stage="generate",
+            stage_name="生成答案",
+            status="processing",
+            message="正在生成回答...",
+            state=state
+        )
 
         try:
             if context:
@@ -369,6 +456,15 @@ class AnswerNodes:
             state["final_answer"] = formatted_answer
             state["is_complete"] = True
 
+            # 发送进度完成更新
+            await self._send_progress(
+                stage="generate",
+                stage_name="生成答案",
+                status="completed",
+                message="答案生成完成",
+                state=state
+            )
+
             # ============ 状态持久化：保存当前状态供下一轮使用 ============
             self._save_persistent_state(state)
 
@@ -389,6 +485,15 @@ class AnswerNodes:
             logger.error(f"   - 返回错误消息")
             logger.error("=" * 80)
             logger.error("")
+
+            # 发送进度错误更新
+            await self._send_progress(
+                stage="generate",
+                stage_name="生成答案",
+                status="error",
+                message=f"生成失败: {str(e)}",
+                state=state
+            )
 
             # 更新 state 并返回
             state["final_answer"] = error_msg
@@ -472,6 +577,14 @@ class AnswerNodes:
 
         user_query = state["user_query"]
 
+        # 发送进度更新
+        await self._send_progress(
+            stage="select_docs",
+            stage_name="文档选择",
+            status="processing",
+            message="正在自动选择相关文档..."
+        )
+
         try:
             # 初始化DocumentSelector
             selector = DocumentSelector(self.agent.llm, self.agent.registry)
@@ -489,6 +602,15 @@ class AnswerNodes:
             # 更新 state
             state["selected_documents"] = selected_docs
             state["retrieval_mode"] = "cross_doc_auto"  # 设置模式标识
+
+            # 发送进度完成更新
+            await self._send_progress(
+                stage="select_docs",
+                stage_name="文档选择",
+                status="completed",
+                message=f"已选择 {len(selected_docs)} 个相关文档"
+            )
+
             return state
 
         except Exception as e:
@@ -513,6 +635,14 @@ class AnswerNodes:
         logger.info("==" * 40)
 
         user_query = state["user_query"]
+
+        # 发送进度更新
+        await self._send_progress(
+            stage="rewrite_queries",
+            stage_name="查询改写",
+            status="processing",
+            message="正在为各文档改写查询..."
+        )
 
         # 检查是否是手动选择模式
         if "selected_documents" not in state or not state.get("selected_documents"):
@@ -632,6 +762,15 @@ class AnswerNodes:
 
             # 更新 state
             state["doc_specific_queries"] = doc_specific_queries
+
+            # 发送进度完成更新
+            await self._send_progress(
+                stage="rewrite_queries",
+                stage_name="查询改写",
+                status="completed",
+                message=f"已为 {len(doc_specific_queries)} 个文档改写查询"
+            )
+
             return state
 
         except Exception as e:
@@ -666,6 +805,14 @@ class AnswerNodes:
         logger.info(f"📝 [MultiRetrieval] 原始查询: {user_query}")
         logger.info(f"📊 [MultiRetrieval] 已为 {len(doc_specific_queries)} 个文档准备了定制查询")
 
+        # 发送进度更新
+        await self._send_progress(
+            stage="retrieve_multi",
+            stage_name="多文档检索",
+            status="processing",
+            message=f"正在并行检索 {len(selected_docs)} 个文档..."
+        )
+
         try:
             # 初始化协调器
             coordinator = ParallelRetrievalCoordinator(self.agent)
@@ -686,6 +833,15 @@ class AnswerNodes:
 
             # 更新 state
             state["multi_doc_results"] = multi_results
+
+            # 发送进度完成更新
+            await self._send_progress(
+                stage="retrieve_multi",
+                stage_name="多文档检索",
+                status="completed",
+                message=f"已完成 {len(multi_results)} 个文档的检索"
+            )
+
             return state
 
         except Exception as e:
@@ -712,6 +868,14 @@ class AnswerNodes:
 
         user_query = state["user_query"]
         multi_results = state["multi_doc_results"]
+
+        # 发送进度更新
+        await self._send_progress(
+            stage="synthesize",
+            stage_name="综合答案",
+            status="processing",
+            message=f"正在综合 {len(multi_results)} 个文档的检索结果..."
+        )
 
         try:
             # 初始化综合器
@@ -762,6 +926,14 @@ class AnswerNodes:
                     logger.info(f"📝 [Synthesize] 已将答案添加到文档 '{doc_name}' 的 Retrieval Agent rewrite_query session 历史")
 
             logger.info(f"📝 [Synthesize] 已将跨文档综合答案添加到 {len(selected_docs)} 个 Retrieval Agent 的 rewrite_query session")
+
+            # 发送进度完成更新
+            await self._send_progress(
+                stage="synthesize",
+                stage_name="综合答案",
+                status="completed",
+                message="跨文档综合完成"
+            )
 
             return state
 

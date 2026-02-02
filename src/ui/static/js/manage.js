@@ -17,8 +17,86 @@ class DataManager {
         this.taskCheckInterval = null; // 轮询定时器
         this.completedTasks = new Set(); // 已通知完成的任务ID
 
+        // Markdown/LaTeX 库延迟加载
+        this.markdownLibsLoaded = false;
+        this.markdownLibsLoading = false;
+        this.markdownLoadPromise = null;
+
+        // 分页状态
+        this.itemsPerPage = 6;
+        this.currentDocPage = 1;
+        this.currentSessionPage = 1;
+        this.filteredDocuments = null; // 用于存储过滤后的文档列表
+        this.filteredSessions = null; // 用于存储过滤后的会话列表
+
         this.init();
     }
+
+    // ==================== Lazy Load Libraries ====================
+
+    async loadMarkdownLibraries() {
+        /**
+         * 延迟加载 Markdown 和 LaTeX 渲染库
+         * 只在需要时加载（查看文档详情或会话详情时）
+         */
+        if (this.markdownLibsLoaded) {
+            return Promise.resolve();
+        }
+
+        if (this.markdownLibsLoading) {
+            return this.markdownLoadPromise;
+        }
+
+        this.markdownLibsLoading = true;
+
+        this.markdownLoadPromise = new Promise((resolve, reject) => {
+            let loadedCount = 0;
+            const totalLibs = 4; // marked, katex css, katex js, katex auto-render
+
+            const checkAllLoaded = () => {
+                loadedCount++;
+                if (loadedCount === totalLibs) {
+                    this.markdownLibsLoaded = true;
+                    this.markdownLibsLoading = false;
+                    console.log('✅ Markdown/LaTeX libraries loaded');
+                    resolve();
+                }
+            };
+
+            // Load Marked.js
+            const markedScript = document.createElement('script');
+            markedScript.src = 'https://cdn.jsdelivr.net/npm/marked/marked.min.js';
+            markedScript.onload = checkAllLoaded;
+            markedScript.onerror = () => reject(new Error('Failed to load marked.js'));
+            document.head.appendChild(markedScript);
+
+            // Load KaTeX CSS
+            const katexCss = document.createElement('link');
+            katexCss.rel = 'stylesheet';
+            katexCss.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css';
+            katexCss.onload = checkAllLoaded;
+            katexCss.onerror = () => reject(new Error('Failed to load katex.css'));
+            document.head.appendChild(katexCss);
+
+            // Load KaTeX JS
+            const katexScript = document.createElement('script');
+            katexScript.src = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js';
+            katexScript.onload = checkAllLoaded;
+            katexScript.onerror = () => reject(new Error('Failed to load katex.js'));
+            document.head.appendChild(katexScript);
+
+            // Load KaTeX Auto-render
+            const autoRenderScript = document.createElement('script');
+            autoRenderScript.src = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js';
+            autoRenderScript.onload = checkAllLoaded;
+            autoRenderScript.onerror = () => reject(new Error('Failed to load auto-render.js'));
+            document.head.appendChild(autoRenderScript);
+        });
+
+        return this.markdownLoadPromise;
+    }
+
+    // ==================== Initialization ====================
 
     async init() {
         // Tab switching
@@ -139,9 +217,22 @@ class DataManager {
 
     renderDocuments(filteredDocs = null) {
         const gridEl = document.getElementById('documents-grid');
-        const docs = filteredDocs || this.documents;
+        const docs = filteredDocs !== null ? filteredDocs : this.documents;
 
-        gridEl.innerHTML = docs.map(doc => this.createDocumentCard(doc)).join('');
+        // 保存过滤后的文档列表（用于分页）
+        this.filteredDocuments = docs;
+
+        // 计算分页
+        const totalPages = Math.ceil(docs.length / this.itemsPerPage);
+        const startIndex = (this.currentDocPage - 1) * this.itemsPerPage;
+        const endIndex = startIndex + this.itemsPerPage;
+        const paginatedDocs = docs.slice(startIndex, endIndex);
+
+        // 渲染当前页的文档
+        gridEl.innerHTML = paginatedDocs.map(doc => this.createDocumentCard(doc)).join('');
+
+        // 渲染分页控件
+        this.renderDocPagination(totalPages);
 
         // Add event listeners for checkboxes
         document.querySelectorAll('.document-checkbox').forEach(checkbox => {
@@ -233,13 +324,16 @@ class DataManager {
                     </div>
                 </div>
                 <div class="document-actions">
-                    <button class="action-btn" style="background: var(--primary-color); color: white;" onclick="dataManager.showChapterManager('${doc.doc_name}')">
+                    <button class="action-btn" style="background: var(--success-color); color: white;" onclick="event.stopPropagation(); dataManager.startSingleDocChat('${doc.doc_name}')">
+                        💬 开始对话
+                    </button>
+                    <button class="action-btn" style="background: var(--primary-color); color: white;" onclick="event.stopPropagation(); dataManager.showChapterManager('${doc.doc_name}')">
                         📑 章节管理
                     </button>
-                    <button class="action-btn action-btn-partial" onclick="dataManager.showPartialDelete('${doc.doc_name}')">
+                    <button class="action-btn action-btn-partial" onclick="event.stopPropagation(); dataManager.showPartialDelete('${doc.doc_name}')">
                         🗑️ 部分删除
                     </button>
-                    <button class="action-btn action-btn-delete" onclick="dataManager.confirmDeleteDocument('${doc.doc_name}')">
+                    <button class="action-btn action-btn-delete" onclick="event.stopPropagation(); dataManager.confirmDeleteDocument('${doc.doc_name}')">
                         ❌ 完全删除
                     </button>
                 </div>
@@ -249,6 +343,7 @@ class DataManager {
 
     filterDocuments(searchTerm) {
         if (!searchTerm.trim()) {
+            this.currentDocPage = 1; // 重置分页
             this.renderDocuments();
             return;
         }
@@ -266,6 +361,7 @@ class DataManager {
                    keywords.includes(term);
         });
 
+        this.currentDocPage = 1; // 重置分页
         this.renderDocuments(filtered);
     }
 
@@ -341,9 +437,22 @@ class DataManager {
 
     renderSessions(filteredSessions = null) {
         const gridEl = document.getElementById('sessions-grid');
-        const sessions = filteredSessions || this.sessions;
+        const sessions = filteredSessions !== null ? filteredSessions : this.sessions;
 
-        gridEl.innerHTML = sessions.map(session => this.createSessionCard(session)).join('');
+        // 保存过滤后的会话列表（用于分页）
+        this.filteredSessions = sessions;
+
+        // 计算分页
+        const totalPages = Math.ceil(sessions.length / this.itemsPerPage);
+        const startIndex = (this.currentSessionPage - 1) * this.itemsPerPage;
+        const endIndex = startIndex + this.itemsPerPage;
+        const paginatedSessions = sessions.slice(startIndex, endIndex);
+
+        // 渲染当前页的会话
+        gridEl.innerHTML = paginatedSessions.map(session => this.createSessionCard(session)).join('');
+
+        // 渲染分页控件
+        this.renderSessionPagination(totalPages);
 
         // Add event listeners for checkboxes
         document.querySelectorAll('.session-checkbox').forEach(checkbox => {
@@ -421,7 +530,7 @@ class DataManager {
         const updatedAt = new Date(session.updated_at);
 
         return `
-            <div class="session-card" data-session-id="${session.session_id}" data-mode="${session.mode}" style="position: relative; cursor: pointer;" onclick="event.target.tagName !== 'INPUT' && !event.target.classList.contains('session-title') && !event.target.classList.contains('expand-toggle') && dataManager.showSessionDetail('${session.session_id}', '${session.mode}')">
+            <div class="session-card" data-session-id="${session.session_id}" data-mode="${session.mode}" style="position: relative; cursor: pointer;" onclick="event.target.tagName !== 'INPUT' && event.target.tagName !== 'BUTTON' && !event.target.classList.contains('session-title') && !event.target.classList.contains('expand-toggle') && dataManager.showSessionDetail('${session.session_id}', '${session.mode}')">
                 <input type="checkbox" class="session-checkbox" data-session-id="${session.session_id}" data-mode="${session.mode}" onclick="event.stopPropagation()">
                 <div class="session-header">
                     <div class="session-title-wrapper">
@@ -450,12 +559,18 @@ class DataManager {
                         <div class="session-stat-label">文档数</div>
                     </div>
                 </div>
+                <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-light);">
+                    <button class="btn btn-primary" onclick="event.stopPropagation(); dataManager.continueChat('${session.session_id}', '${session.mode}')" style="width: 100%; padding: 0.75rem; font-weight: 600;">
+                        💬 继续对话
+                    </button>
+                </div>
             </div>
         `;
     }
 
     filterSessions(searchTerm) {
         if (!searchTerm.trim()) {
+            this.currentSessionPage = 1; // 重置分页
             this.renderSessions();
             return;
         }
@@ -468,7 +583,167 @@ class DataManager {
             return title.includes(term) || docName.includes(term);
         });
 
+        this.currentSessionPage = 1; // 重置分页
         this.renderSessions(filtered);
+    }
+
+    // ==================== Pagination ====================
+
+    renderDocPagination(totalPages) {
+        const paginationEl = document.getElementById('doc-pagination');
+        if (!paginationEl) return;
+
+        if (totalPages <= 1) {
+            paginationEl.style.display = 'none';
+            return;
+        }
+
+        paginationEl.style.display = 'flex';
+
+        const currentPage = this.currentDocPage;
+        let html = '';
+
+        // 上一页按钮
+        html += `
+            <button class="pagination-btn" ${currentPage === 1 ? 'disabled' : ''}
+                    onclick="dataManager.goToDocPage(${currentPage - 1})">
+                ‹ 上一页
+            </button>
+        `;
+
+        // 页码按钮
+        const maxVisible = 5;
+        let startPage = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+        let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+
+        if (endPage - startPage < maxVisible - 1) {
+            startPage = Math.max(1, endPage - maxVisible + 1);
+        }
+
+        if (startPage > 1) {
+            html += `<button class="pagination-btn" onclick="dataManager.goToDocPage(1)">1</button>`;
+            if (startPage > 2) {
+                html += `<span class="pagination-ellipsis">...</span>`;
+            }
+        }
+
+        for (let i = startPage; i <= endPage; i++) {
+            html += `
+                <button class="pagination-btn ${i === currentPage ? 'active' : ''}"
+                        onclick="dataManager.goToDocPage(${i})">
+                    ${i}
+                </button>
+            `;
+        }
+
+        if (endPage < totalPages) {
+            if (endPage < totalPages - 1) {
+                html += `<span class="pagination-ellipsis">...</span>`;
+            }
+            html += `<button class="pagination-btn" onclick="dataManager.goToDocPage(${totalPages})">${totalPages}</button>`;
+        }
+
+        // 下一页按钮
+        html += `
+            <button class="pagination-btn" ${currentPage === totalPages ? 'disabled' : ''}
+                    onclick="dataManager.goToDocPage(${currentPage + 1})">
+                下一页 ›
+            </button>
+        `;
+
+        paginationEl.innerHTML = html;
+    }
+
+    renderSessionPagination(totalPages) {
+        const paginationEl = document.getElementById('session-pagination');
+        if (!paginationEl) return;
+
+        if (totalPages <= 1) {
+            paginationEl.style.display = 'none';
+            return;
+        }
+
+        paginationEl.style.display = 'flex';
+
+        const currentPage = this.currentSessionPage;
+        let html = '';
+
+        // 上一页按钮
+        html += `
+            <button class="pagination-btn" ${currentPage === 1 ? 'disabled' : ''}
+                    onclick="dataManager.goToSessionPage(${currentPage - 1})">
+                ‹ 上一页
+            </button>
+        `;
+
+        // 页码按钮
+        const maxVisible = 5;
+        let startPage = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+        let endPage = Math.min(totalPages, startPage + maxVisible - 1);
+
+        if (endPage - startPage < maxVisible - 1) {
+            startPage = Math.max(1, endPage - maxVisible + 1);
+        }
+
+        if (startPage > 1) {
+            html += `<button class="pagination-btn" onclick="dataManager.goToSessionPage(1)">1</button>`;
+            if (startPage > 2) {
+                html += `<span class="pagination-ellipsis">...</span>`;
+            }
+        }
+
+        for (let i = startPage; i <= endPage; i++) {
+            html += `
+                <button class="pagination-btn ${i === currentPage ? 'active' : ''}"
+                        onclick="dataManager.goToSessionPage(${i})">
+                    ${i}
+                </button>
+            `;
+        }
+
+        if (endPage < totalPages) {
+            if (endPage < totalPages - 1) {
+                html += `<span class="pagination-ellipsis">...</span>`;
+            }
+            html += `<button class="pagination-btn" onclick="dataManager.goToSessionPage(${totalPages})">${totalPages}</button>`;
+        }
+
+        // 下一页按钮
+        html += `
+            <button class="pagination-btn" ${currentPage === totalPages ? 'disabled' : ''}
+                    onclick="dataManager.goToSessionPage(${currentPage + 1})">
+                下一页 ›
+            </button>
+        `;
+
+        paginationEl.innerHTML = html;
+    }
+
+    goToDocPage(page) {
+        const totalPages = Math.ceil((this.filteredDocuments || this.documents).length / this.itemsPerPage);
+        if (page < 1 || page > totalPages) return;
+
+        this.currentDocPage = page;
+        this.renderDocuments(this.filteredDocuments);
+
+        // 滚动到顶部
+        document.getElementById('documents-grid').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    goToSessionPage(page) {
+        const totalPages = Math.ceil((this.filteredSessions || this.sessions).length / this.itemsPerPage);
+        if (page < 1 || page > totalPages) return;
+
+        this.currentSessionPage = page;
+        this.renderSessions(this.filteredSessions);
+
+        // 滚动到顶部
+        document.getElementById('sessions-grid').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    continueChat(sessionId, mode) {
+        // 跳转到聊天页面，带上session_id参数以加载历史记录
+        window.location.href = `/chat?mode=${mode}&session_id=${encodeURIComponent(sessionId)}`;
     }
 
     startRenameSession(sessionId, mode) {
@@ -721,6 +996,18 @@ class DataManager {
             // 显示modal
             document.getElementById('detail-modal-title').textContent = `📄 ${docName} - 文档摘要`;
 
+            // 延迟加载 Markdown/LaTeX 库
+            try {
+                await this.loadMarkdownLibraries();
+            } catch (error) {
+                console.warn('Failed to load markdown libraries:', error);
+                // 即使加载失败，也显示纯文本
+                document.getElementById('detail-modal-content').innerHTML = `<pre>${summary}</pre>`;
+                document.getElementById('detail-modal').style.display = 'flex';
+                document.addEventListener('keydown', this.handleDetailModalEsc);
+                return;
+            }
+
             // Markdown渲染
             const htmlContent = marked.parse(summary);
 
@@ -776,6 +1063,27 @@ class DataManager {
                     </div>
                 `;
             } else {
+                // 延迟加载 Markdown/LaTeX 库
+                try {
+                    await this.loadMarkdownLibraries();
+                } catch (error) {
+                    console.warn('Failed to load markdown libraries:', error);
+                    // 即使加载失败，也显示纯文本
+                    contentDiv.innerHTML = '';
+                    messages.forEach(msg => {
+                        const div = document.createElement('div');
+                        div.style.marginBottom = '1rem';
+                        div.style.padding = '1rem';
+                        div.style.background = 'var(--bg-secondary)';
+                        div.style.borderRadius = '0.5rem';
+                        div.innerHTML = `<strong>${msg.role}:</strong><br><pre style="white-space: pre-wrap;">${msg.content}</pre>`;
+                        contentDiv.appendChild(div);
+                    });
+                    document.getElementById('detail-modal').style.display = 'flex';
+                    document.addEventListener('keydown', this.handleDetailModalEsc);
+                    return;
+                }
+
                 // 清空内容
                 contentDiv.innerHTML = '';
 
@@ -1023,13 +1331,23 @@ class DataManager {
 
         // Update button visibility and count
         const deleteBtn = document.getElementById('doc-batch-delete-btn');
+        const chatBtn = document.getElementById('doc-batch-chat-btn');
         const countSpan = document.getElementById('doc-selected-count');
+        const chatCountSpan = document.getElementById('doc-chat-count');
 
         if (count > 0) {
             deleteBtn.style.display = 'inline-block';
             countSpan.textContent = count;
+
+            if (chatBtn && chatCountSpan) {
+                chatBtn.style.display = 'inline-block';
+                chatCountSpan.textContent = count;
+            }
         } else {
             deleteBtn.style.display = 'none';
+            if (chatBtn) {
+                chatBtn.style.display = 'none';
+            }
         }
 
         // Update card styling
@@ -1394,6 +1712,28 @@ class DataManager {
     showChapterManager(docName) {
         // 跳转到章节管理页面（structure editor）
         window.location.href = `/structure?doc=${encodeURIComponent(docName)}`;
+    }
+
+    // ==================== Chat Navigation ====================
+
+    startSingleDocChat(docName) {
+        // 跳转到单文档对话模式
+        window.location.href = `/chat?mode=single&doc=${encodeURIComponent(docName)}`;
+    }
+
+    startMultiDocChat() {
+        // 获取选中的文档
+        const checkboxes = document.querySelectorAll('.document-checkbox:checked');
+        const selectedDocs = Array.from(checkboxes).map(cb => cb.dataset.docName);
+
+        if (selectedDocs.length === 0) {
+            this.showError('请先选择要对话的文档');
+            return;
+        }
+
+        // 跳转到手动选择多文档对话模式
+        const docsParam = encodeURIComponent(JSON.stringify(selectedDocs));
+        window.location.href = `/chat?mode=manual&docs=${docsParam}`;
     }
 }
 

@@ -17,13 +17,15 @@ class ChatService:
         self.selected_docs: Optional[list] = None  # For manual mode
         self.session_manager = SessionManager()
         self.current_session: Optional[Dict] = None
+        self.progress_callback = None  # Store progress callback
 
     def initialize(
         self,
         mode: str,
         doc_name: Optional[str] = None,
         selected_docs: Optional[list] = None,
-        session_id: Optional[str] = None
+        session_id: Optional[str] = None,
+        progress_callback=None
     ) -> Dict[str, Any]:
         """
         初始化聊天服务
@@ -33,6 +35,7 @@ class ChatService:
             doc_name: 文档名称（single 模式必需）
             selected_docs: 选中的文档列表（manual 模式必需）
             session_id: 会话ID（可选，用于加载历史会话）
+            progress_callback: 进度回调函数（可选）
 
         Returns:
             包含初始化结果和会话信息的字典
@@ -43,6 +46,7 @@ class ChatService:
             self.mode = mode
             self.doc_name = doc_name
             self.selected_docs = selected_docs
+            self.progress_callback = progress_callback
 
             # 会话管理逻辑
             if session_id:
@@ -84,16 +88,16 @@ class ChatService:
                 if not self.doc_name:
                     print("❌ 单文档模式需要提供 doc_name")
                     return {"success": False, "error": "单文档模式需要提供 doc_name"}
-                self.answer_agent = AnswerAgent(doc_name=self.doc_name, provider=provider)
+                self.answer_agent = AnswerAgent(doc_name=self.doc_name, provider=provider, progress_callback=self.progress_callback)
             elif mode == "cross":
                 # 跨文档智能对话模式（自动选择相关文档）
-                self.answer_agent = AnswerAgent(doc_name=None, provider=provider)
+                self.answer_agent = AnswerAgent(doc_name=None, provider=provider, progress_callback=self.progress_callback)
             elif mode == "manual":
                 # 跨文档手动选择模式（手动指定多个文档）
                 if not self.selected_docs or len(self.selected_docs) == 0:
                     print("❌ 手动选择模式需要提供 selected_docs")
                     return {"success": False, "error": "手动选择模式需要提供 selected_docs"}
-                self.answer_agent = AnswerAgent(doc_name=None, provider=provider)
+                self.answer_agent = AnswerAgent(doc_name=None, provider=provider, progress_callback=self.progress_callback)
                 # Validate selected documents
                 valid_docs, invalid_docs = self.answer_agent.validate_manual_selected_docs(self.selected_docs)
                 if invalid_docs:
@@ -118,7 +122,14 @@ class ChatService:
 
             print(f"✅ 聊天服务初始化成功")
 
-            # 返回完整的会话信息
+            # 返回会话信息（优化：只返回最近20条消息）
+            all_messages = self.current_session.get("messages", [])
+            total_message_count = len(all_messages)
+
+            # ✅ 优化: 初始只返回最近20条消息，减少传输和渲染时间
+            initial_message_limit = 20
+            recent_messages = all_messages[-initial_message_limit:] if total_message_count > initial_message_limit else all_messages
+
             return {
                 "success": True,
                 "session_id": self.current_session["session_id"],
@@ -126,8 +137,9 @@ class ChatService:
                 "doc_name": self.current_session.get("doc_name"),
                 "selected_docs": self.current_session.get("selected_docs"),
                 "title": self.current_session["title"],
-                "message_count": self.current_session["message_count"],
-                "messages": self.current_session.get("messages", [])
+                "message_count": total_message_count,  # 总消息数
+                "messages": recent_messages,  # 最近的N条消息
+                "has_more_messages": total_message_count > initial_message_limit  # 是否还有更多历史消息
             }
 
         except Exception as e:
@@ -136,8 +148,13 @@ class ChatService:
             traceback.print_exc()
             return {"success": False, "error": str(e)}
 
-    async def chat(self, user_query: str) -> Dict[str, Any]:
-        """处理聊天消息"""
+    async def chat(self, user_query: str, progress_callback=None) -> Dict[str, Any]:
+        """处理聊天消息
+
+        Args:
+            user_query: 用户查询
+            progress_callback: 进度回调函数（可选，会更新到AnswerAgent）
+        """
         try:
             if not self.answer_agent:
                 return {
@@ -150,6 +167,12 @@ class ChatService:
                     "answer": "会话未初始化，请先初始化。",
                     "references": []
                 }
+
+            # 更新进度回调（如果提供）
+            if progress_callback:
+                self.progress_callback = progress_callback
+                self.answer_agent.progress_callback = progress_callback
+                print("✅ 已更新 AnswerAgent 的进度回调")
 
             # 保存用户消息
             self.session_manager.save_message(
@@ -281,15 +304,20 @@ class ChatService:
 
         # 3. 重新实例化AnswerAgent（这会重新创建所有retrieval agents）
         from src.agents.answer import AnswerAgent
+        from ..api.v1.config import load_config
+
+        # 获取 provider 配置
+        config = load_config()
+        provider = config.get("provider", "openai")
 
         if self.mode == "single" and self.doc_name:
-            self.answer_agent = AnswerAgent(doc_name=self.doc_name)
+            self.answer_agent = AnswerAgent(doc_name=self.doc_name, provider=provider, progress_callback=self.progress_callback)
             print(f"✅ 重新实例化 AnswerAgent (single模式, 文档: {self.doc_name})")
         elif self.mode == "cross":
-            self.answer_agent = AnswerAgent()
+            self.answer_agent = AnswerAgent(provider=provider, progress_callback=self.progress_callback)
             print(f"✅ 重新实例化 AnswerAgent (cross模式)")
         elif self.mode == "manual" and self.selected_docs:
-            self.answer_agent = AnswerAgent()
+            self.answer_agent = AnswerAgent(provider=provider, progress_callback=self.progress_callback)
             print(f"✅ 重新实例化 AnswerAgent (manual模式, {len(self.selected_docs)}个文档)")
 
         print("✅ 聊天服务已完全重置（包括文件和retrieval agents）")
@@ -312,6 +340,31 @@ class ChatService:
             self.mode = None
             self.doc_name = None
             self.selected_docs = None
+
+    def load_more_messages(self, offset: int = 0, limit: int = 20) -> Dict[str, Any]:
+        """
+        加载更多历史消息（用于分页加载）
+
+        Args:
+            offset: 偏移量（已加载的消息数）
+            limit: 每次加载的消息数
+
+        Returns:
+            包含消息列表和分页信息的字典
+        """
+        if not self.current_session:
+            return {
+                "messages": [],
+                "total": 0,
+                "has_more": False
+            }
+
+        return self.session_manager.get_messages_range(
+            session_id=self.current_session["session_id"],
+            mode=self.mode,
+            offset=offset,
+            limit=limit
+        )
 
 
 # 全局单例

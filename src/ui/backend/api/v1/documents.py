@@ -173,28 +173,3 @@ async def _index_document_task(doc_name: str, provider: str, pdf_preset: str):
         print(f"❌ 索引任务执行失败: {e}")
         import traceback
         traceback.print_exc()
-
-
-@router.delete("/{doc_name}")
-async def delete_document(doc_name: str) -> Dict[str, Any]:
-    """删除文档"""
-    try:
-        registry = DocumentRegistry()
-
-        # 删除所有文件
-        result = registry.delete_all_files(doc_name, delete_source=True)
-
-        if result["success"]:
-            return {
-                "status": "success",
-                "message": f"成功删除 {len(result['deleted_files'])} 个文件"
-            }
-        else:
-            return {
-                "status": "partial_success",
-                "message": f"成功删除 {len(result['deleted_files'])} 个文件，失败 {len(result['failed_files'])} 个"
-            }
-
-    except Exception as e:
-        print(f"❌ 删除文档失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))

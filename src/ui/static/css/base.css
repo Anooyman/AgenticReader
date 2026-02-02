@@ -22,6 +22,10 @@ body {
 
 /* Header */
 .header {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
     height: var(--header-height);
     background: var(--bg-primary);
     border-bottom: 1px solid var(--border-light);
@@ -29,6 +33,8 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    z-index: 1000;
+    box-shadow: var(--shadow-sm);
 }
 
 .header-title {
@@ -64,6 +70,7 @@ body {
 .main-content {
     flex: 1;
     padding: var(--spacing-lg);
+    margin-top: var(--header-height);
 }
 
 /* Footer */
