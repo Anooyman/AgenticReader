@@ -10,6 +10,7 @@ __pycache__/
 .env
 .Python
 env/
+.venv/
 build/
 develop-eggs/
 dist/
@@ -99,6 +100,9 @@ poetry.lock
 
 # VSCode
 .vscode/
+
+# claude code
+.claude/
 
 # Ignore all data files
 data/ 

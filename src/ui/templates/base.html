@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}AgenticReader{% endblock %}</title>
+
+    <!-- CSS -->
+    <link rel="stylesheet" href="/static/css/variables.css">
+    <link rel="stylesheet" href="/static/css/base.css">
+    <link rel="stylesheet" href="/static/css/components.css">
+    <style>
+        /* Badge for pending notifications */
+        .badge {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            background: #dc3545;
+            color: white;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.125rem 0.5rem;
+            border-radius: 1rem;
+            min-width: 20px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.1);
+            }
+        }
+    </style>
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-title">📚 AgenticReader</div>
+            <nav class="header-nav">
+                <a href="/" class="nav-link">主菜单</a>
+                <a href="/data" class="nav-link" style="position: relative;">
+                    🗂️ 数据管理
+                    <span id="pending-badge" class="badge" style="display: none;"></span>
+                </a>
+                <a href="/config" class="nav-link">⚙️ 配置</a>
+            </nav>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            {% block content %}{% endblock %}
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            &copy; Powered by FastAPI & LangGraph
+        </footer>
+    </div>
+
+    {% block extra_js %}{% endblock %}
+
+    <!-- Load pending PDF count for badge -->
+    <script>
+        async function updatePendingBadge() {
+            try {
+                const response = await fetch('/api/v1/data/documents/pending');
+                if (response.ok) {
+                    const pendingPdfs = await response.json();
+                    const count = pendingPdfs.length;
+                    const badge = document.getElementById('pending-badge');
+
+                    if (count > 0) {
+                        badge.textContent = count;
+                        badge.style.display = 'block';
+                    } else {
+                        badge.style.display = 'none';
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to load pending count:', error);
+            }
+        }
+
+        // Update badge on page load
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', updatePendingBadge);
+        } else {
+            updatePendingBadge();
+        }
+    </script>
+</body>
+</html>

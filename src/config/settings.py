@@ -84,6 +84,11 @@ LLM_CONFIG = {
     # Ollama 配置
     "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
     "ollama_model_name": os.getenv("OLLAMA_MODEL_NAME", "llama3"),
+
+    # Gemini 配置
+    "gemini_api_key": os.getenv("GEMINI_API_KEY"),
+    "gemini_model_name": os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-pro"),
+    "gemini_base_url": os.getenv("GEMINI_BASE_URL"),
 }
 
 LLM_EMBEDDING_CONFIG = {
@@ -101,6 +106,11 @@ LLM_EMBEDDING_CONFIG = {
     # Ollama Embedding 配置
     "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
     "ollama_model": os.getenv("OLLAMA_EMBEDDING_MODEL", "llama3"),
+
+    # Gemini Embedding 配置
+    "gemini_api_key": os.getenv("GEMINI_API_KEY"),
+    "gemini_embedding_model": os.getenv("GEMINI_EMBEDDING_MODEL", "text-embedding-004"),
+    "gemini_base_url": os.getenv("GEMINI_BASE_URL"),
 }
 
 # SYSTEM_PROMPT_CONFIG 现在从 prompts 模块导入
@@ -138,4 +148,17 @@ MEMORY_VECTOR_DB_CONFIG = {
   "tag": {
     "file_path": f"{MEMORY_PATH}/tag.json"
   }
+}
+
+# ==================== 文档选择配置（跨文档检索） ====================
+DOCUMENT_SELECTION_CONFIG = {
+    "max_selected_docs": 5,            # 最多选择文档数
+}
+
+# ==================== 跨文档检索配置 ====================
+CROSS_DOC_CONFIG = {
+    "enabled": True,                   # 是否启用跨文档功能
+    "max_parallel_retrievals": 3,      # 最大并行检索数
+    "retrieval_timeout": 1200,          # 单个检索超时（秒）
+    "max_iterations": 10,              # 每个Retrieval Agent的最大迭代次数
 }

@@ -2,41 +2,67 @@
 
 [中文](README.md) | English
 
-AgenticReader is an intelligent document analysis and Q&A tool powered by large language models. It supports PDF and web content parsing with multiple LLM providers (Azure OpenAI, OpenAI, Ollama), automatic content extraction, summary generation, vector database building, and multi-turn intelligent conversations.
+AgenticReader is an advanced document analysis and intelligent Q&A tool powered by large language models (LLM) and Multi-Agent architecture. Built on Agent orchestration patterns, focused on **deep PDF document parsing**, integrates multiple LLM providers (Azure OpenAI, OpenAI, Ollama, Gemini), and automatically extracts content, generates summaries, builds vector databases, and supports multi-turn intelligent conversations. Offers both **CLI command-line** and **Web interface** modes.
 
 ---
 
-## Key Features
+## Key Features | Core Capabilities
 
-### Document Processing
-- **Multi-format Support**: PDF documents and web URL content parsing
-- **Smart Extraction**: PDF to image + OCR, web content via MCP services
-- **Auto Chunking**: Intelligent text splitting based on content length
+### 🤖 Multi-Agent Architecture | Multi-Agent System
+- **IndexingAgent**: Document indexing agent for PDF parsing, structure extraction, chunking, vectorization
+- **AnswerAgent**: Q&A agent for intent analysis, answer generation, dialogue management
+- **RetrievalAgent**: Retrieval agent for semantic search and context assembly
+- **LangGraph Orchestration**: State machine workflow based on LangGraph, supports complex task orchestration
+
+### 📄 Document Processing | Document Processing
+- **Smart Indexing**: PDF to image + OCR content extraction
+- **Structure Analysis**: Auto-detect document structure and chapter organization
+- **Chunking**: Intelligent text splitting with chapter-level organization
 - **Vector Database**: Efficient semantic search based on FAISS
-- **Parallel Processing**: Async parallel processing for chapter summaries and content generation, significantly improving processing speed
+- **Parallel Processing**: Async parallel chapter processing, significantly improved speed
+- **Incremental Caching**: Stage-wise caching to avoid reprocessing
 
-### Intelligent Q&A
-- **Multi-turn Dialogue**: Auto-caching retrieval results for continuous context conversations
-- **Chapter-based Search**: Recommend asking with chapter names for better retrieval
-- **Auto Summary**: Generate brief and detailed summaries
-- **Multi-format Export**: Support Markdown and PDF format exports
+### 💬 Intelligent Q&A | Intelligent Q&A
+- **Four Dialogue Modes**:
+  - Single Document Mode - Deep Q&A for specific documents
+  - Cross-Document Intelligent Mode - Auto-select relevant documents for retrieval
+  - Cross-Document Manual Mode - Manually specify multiple documents as background knowledge
+  - General Mode - Free conversation without binding to specific documents
+- **Intent Recognition**: Auto-determine if document retrieval is needed
+- **Context Management**: Smart caching of retrieval results for multi-turn dialogue
+- **History Compression**: LLM auto-summarizes conversation history, saves context space (90%+ compression rate)
+- **Document Summary**: Auto-generate brief summaries (brief_summary.md)
 
-### Modern Web Interface
-- **FastAPI + WebSocket**: Real-time chat communication
-- **Session Persistence**: Auto-save, backup rotation (keeps latest 10), import/export
-- **Dual Storage Architecture**: Client localStorage + server file storage
-- **PDF Viewer**: Integrated online PDF preview with page navigation
-- **Chapter Management System**: Independent chapter editing interface with CRUD operations and batch rebuild
-- **Data Management System**: Granular data management with partial deletion, batch operations, and smart cleanup
-- **Responsive Design**: Mobile-friendly adaptive interface
+### 🌐 Dual Operation Modes | Dual Operation Modes
+- **CLI Command-line Mode**:
+  - Interactive menu system supporting document indexing, management, and dialogue
+  - Free switching between four dialogue modes
+  - Real-time view of document selection and retrieval process
+  - Suitable for technical users and automation scenarios
+- **Web Interface Mode**:
+  - **Dashboard**: Document overview, quick indexing, mode selection
+  - **Smart Chat**: WebSocket real-time communication, supports Markdown/LaTeX rendering
+  - **Real-time Progress Visualization**:
+    - 📊 **Node Flow Diagram**: Visual representation of Agent execution flow (Rewrite→Think→Act→Evaluate→Format)
+    - 🔄 **Iteration Progress**: Real-time display of retrieval iteration count and percentage
+    - 🛠️ **Tool Invocation**: Show current retrieval tools and detailed information
+    - 🎨 **Modern Design**: Gradient backgrounds, smooth animations, micro-interactions
+  - **Parallel Retrieval Visualization**:
+    - 📚 **Multi-document Concurrency**: Display all document retrieval progress simultaneously in cross-doc mode
+    - 🔽 **Collapse/Expand**: Independent progress cards for each document, collapsible for detailed flow
+    - ⚡ **Incremental Updates**: Flicker-free real-time updates without interrupting user viewing
+    - 🎯 **Independent Flow**: Each PDF has its own node flow visualization
+  - **Session Management**: Three modes with independent session storage, support import/export
+  - **Data Management**: Granular data control with partial deletion, batch operations, smart cleanup
+  - **Configuration Center**: LLM provider switching, parameter adjustment
+  - **Responsive Design**: Mobile-friendly adaptive interface
 
 ---
 
-## Quick Start
+## Quick Start | Quick Start
 
-### Requirements
+### Requirements | Requirements
 - Python 3.12+
-- Node.js (optional, for MCP services)
 - Virtual environment (recommended)
 
 <details>
@@ -45,7 +71,7 @@ AgenticReader is an intelligent document analysis and Q&A tool powered by large 
 ### Installation Steps
 
 ```bash
-# 1. Clone the repository
+# 1. Clone repository
 git clone <repository-url>
 cd AgenticReader
 
@@ -53,7 +79,7 @@ cd AgenticReader
 pip install -r requirements.txt
 
 # 3. Create data directories
-mkdir -p data/pdf data/pdf_image data/json_data data/vector_db data/output data/memory data/sessions data/sessions/backups data/sessions/exports data/config
+mkdir -p data/pdf data/pdf_image data/json_data data/vector_db data/output data/sessions data/sessions/backups data/sessions/exports
 
 # 4. Configure environment variables (create .env file)
 # See "Configuration" section below
@@ -85,117 +111,124 @@ EMBEDDING_MODEL=text-embedding-ada-002
 # OLLAMA_BASE_URL=http://localhost:11434
 # CHAT_MODEL_NAME=llama3
 
+# === Or use Gemini (Google) ===
+# GEMINI_API_KEY=your_gemini_api_key
+# GEMINI_MODEL_NAME=gemini-1.5-pro
+# GEMINI_EMBEDDING_MODEL=text-embedding-004
+# GEMINI_BASE_URL=your_gemini_api_endpoint
+
 # === Optional Configuration ===
 LOGGING_LEVEL=INFO
 ```
 
 </details>
 
-### Running the Application
+### Running the Application | Running the Application
 
 #### Method 1: Web Interface (Recommended)
+
 ```bash
 # Start FastAPI server
 python src/ui/run_server.py
 
-# Access URLs
-# Homepage: http://localhost:8000
-# Chat Interface: http://localhost:8000/chat
-# Configuration: http://localhost:8000/config
-# Data Management: http://localhost:8000/data
-# Chapter Management: http://localhost:8000/chapters
-# Health Check: http://localhost:8000/health
-# API Docs: http://localhost:8000/docs
-# ReDoc: http://localhost:8000/redoc
+# Or use uvicorn (supports auto-reload)
+uvicorn src.ui.backend.app:app --reload --host 0.0.0.0 --port 8000
+
+# Access: http://localhost:8000
 ```
 
-#### Method 2: CLI Mode
-```bash
-# Run main program
-python main.py
+**📊 Dashboard (/) - Main Menu**
+- Document list and overview
+- Quick indexing (batch/single)
+- Mode selection (Single/Cross/Manual)
+- Quick access to chat page
 
-# Follow prompts to:
-# - Enter PDF filename (e.g., paper.pdf)
-# - Enter web URL (e.g., https://example.com/article)
-# - Ask questions for multi-turn dialogue
-# - Enter "exit", "bye", "quit" to exit
-```
+**💬 Chat Page (/chat) - Intelligent Dialogue**
+
+Three chat modes:
+- **Single Mode**: Select specific document for deep Q&A
+- **Cross Mode**: Auto-select relevant documents (intelligent decision)
+- **Manual Mode**: Manually specify multiple documents as background
+
+Features:
+- WebSocket real-time communication
+- Markdown and LaTeX formula rendering
+- Timestamp display (year/month/day hour:minute:second)
+- Session persistence (three modes independently managed)
+- Clear history (clears both file and memory)
+- Display selected documents and similarity scores
+
+**📁 Data Management (/data) - Documents & Sessions**
+
+Document Management:
+- View all indexed documents and storage usage
+- **Granular partial deletion**: Delete specific data types for individual documents
+  - JSON data, Vector DB, Images, Summary
+- Batch operations: Select multiple documents for deletion
+- Smart cleanup: Auto-clean data older than N days (default 30)
+
+Session Management:
+- View all mode sessions (Single/Cross/Manual)
+- Session detail view (Markdown/LaTeX rendering support)
+- Delete specific sessions
+- Import/export session data
+
+**⚙️ Configuration Center (/config) - LLM Settings**
+- Switch LLM providers (Azure OpenAI, OpenAI, Ollama, Gemini)
+- Adjust model parameters
+- API Key management
+
+**🔧 Structure Editor (/structure) - Document Structure**
+- View and edit document chapter structure
+- PDF online preview
+- Rebuild vector database
 
 ---
 
-<details>
-<summary><b>💡 Usage Examples (Click to expand)</b></summary>
+#### Method 2: CLI Command-line Mode
 
-### PDF Document Analysis
 ```bash
-# 1. Place PDF file in data/pdf/ directory
-cp your_paper.pdf data/pdf/
-
-# 2. Run main.py and enter filename
+# Start interactive CLI
 python main.py
-# Input: your_paper.pdf
-
-# 3. System auto-processes and generates summaries
-# Output location: data/output/your_paper/
-#   - brief_summary.md / brief_summary.pdf
-#   - detail_summary.md / detail_summary.pdf
 ```
 
-### Web Content Analysis
-```bash
-# Install MCP service (first time)
-# Option 1: Playwright MCP (recommended)
-npx @playwright/mcp@latest
+**Four Dialogue Modes:**
 
-# Option 2: DuckDuckGo MCP
-uv pip install duckduckgo-mcp-server
+1. **Single Mode** - Select specific document
+   ```
+   [Single (doc.pdf)] 👤 Query: What is this document about?
+   🤖 Assistant: This document discusses...
+   ```
 
-# Run and enter URL
-python main.py
-# Input: https://arxiv.org/abs/1706.03762
-```
+2. **Cross Mode** - Auto-select relevant documents
+   ```
+   [Cross Mode] 👤 Query: Compare the viewpoints
+   📚 Selected Documents (2):
+      - doc1.pdf (similarity: 0.856)
+      - doc2.pdf (similarity: 0.742)
+   🤖 Assistant: Based on retrieval...
+   ```
 
-### Intelligent Q&A
-```bash
-# Question examples (better with chapter names)
-You: Explain the core ideas in the Introduction section
-You: What are the main contributions mentioned in the Abstract?
-You: Compare the content of Method and Conclusion sections
-```
+3. **Manual Mode** - Manually select multiple documents
+   ```
+   Select documents: 1,2 (or 'all')
+   [Manual (2 docs)] 👤 Query: Summarize both
+   🤖 Assistant: Comprehensive summary...
+   ```
 
-### Web Interface Usage
-1. **Upload Document**: Click to upload PDF or enter URL
-2. **View Summary**: Auto-generated document summary and structure
-3. **Smart Chat**: Ask questions in chat box, supports multi-turn dialogue
-4. **Session Management**: Save, export, import chat sessions
-5. **PDF Preview**: View PDF documents online
-6. **Data Management**: View and manage all document data with granular deletion
+4. **General Mode** - Free conversation
+   ```
+   [General Mode] 👤 Query: What is machine learning?
+   🤖 Assistant: Machine learning is...
+   ```
 
-</details>
-
-<details>
-<summary><b>📊 Data Management Features (Click to expand)</b></summary>
-
-Access `http://localhost:8000/data` to enter data management interface:
-
-**Features:**
-- **Storage Overview**: Real-time view of document count, storage size, session statistics
-- **Document Management**: Detailed data classification display (JSON, Vector DB, Images, Summary)
-- **Chapter Information**: View document chapter structure and detailed information
-- **Partial Deletion**: Delete specific data types for individual documents (e.g., delete images only while keeping other data)
-- **Batch Operations**: Multi-select documents for batch deletion
-- **Cache Management**: Independent management of PDF image cache, vector DB cache, JSON data cache
-- **Smart Cleanup**: Auto-cleanup of data older than 30 days
-- **Data Backup**: Create backups of sessions and configurations
-- **Health Check**: `/health` endpoint for monitoring application status
-
-**Use Cases:**
-- Free up disk space: Delete large files (images) while keeping other data
-- Rebuild index: Delete vector database then rebuild
-- Update summary: Delete old summary and regenerate
-- Regular maintenance: Use smart cleanup to auto-clean expired data
-
-</details>
+**Commands:**
+- `i` - Index new document
+- `m` - Manage documents (view/delete)
+- `clear` - Clear conversation history
+- `switch` - Switch mode
+- `main` - Return to main menu
+- `quit`/`exit` - Exit program
 
 ---
 
@@ -204,72 +237,68 @@ Access `http://localhost:8000/data` to enter data management interface:
 
 ```
 AgenticReader/
-├── main.py                    # CLI entry point
-├── requirements.txt           # Python dependencies
-├── CLAUDE.md                  # Claude Code development guide
-├── README.md                  # Project documentation (Chinese)
-├── README_EN.md               # Project documentation (English)
-├── LICENSE                    # Open source license
-│
+├── main.py                        # CLI entry (uses AnswerAgent)
 ├── src/
-│   ├── config/                # Configuration files
-│   │   ├── settings.py        # Main config (LLM, MCP, paths)
-│   │   ├── constants.py       # Constants definition
-│   │   └── prompts/           # Prompt configurations
-│   │
-│   ├── core/                  # Core functionality
-│   │   ├── llm/               # LLM client (multi-provider support)
-│   │   ├── processing/        # Text processing (tokenization, chunking)
-│   │   └── vector_db/         # Vector database (FAISS)
-│   │
-│   ├── readers/               # Document readers
-│   │   ├── base.py            # Base reader class
-│   │   ├── pdf.py             # PDF reader
-│   │   ├── web.py             # Web reader
-│   │   └── parallel_processor.py  # Chapter parallel processor
-│   │
-│   ├── chat/                  # Multi-agent system
-│   │   ├── chat.py            # PlanAgent + ExecutorAgent
-│   │   └── memory_agent.py    # Memory agent
-│   │
-│   ├── services/              # External services
-│   │   └── mcp_client.py      # MCP service client
-│   │
-│   ├── ui/                    # Web interface
-│   │   ├── backend/           # FastAPI backend
-│   │   │   ├── app.py         # Main application
-│   │   │   ├── api/           # API routes
-│   │   │   │   └── v1/        # API v1 version
-│   │   │   │       ├── data.py      # Data management API
-│   │   │   │       ├── chat.py      # Chat API
-│   │   │   │       ├── pdf.py       # PDF processing API
-│   │   │   │       ├── web.py       # Web processing API
-│   │   │   │       ├── chapters.py  # Chapters API
-│   │   │   │       ├── sessions.py  # Sessions API
-│   │   │   │       └── config.py    # Configuration API
-│   │   │   ├── services/      # Business logic
-│   │   │   │   ├── data_service.py  # Data management service
-│   │   │   │   └── session_service.py # Session management service
-│   │   │   └── models/        # Data models
-│   │   ├── templates/         # Jinja2 templates
-│   │   ├── static/            # Static assets (CSS, JS)
-│   │   │   └── js/
-│   │   │       └── data.js    # Data management frontend
-│   │   └── run_server.py      # Server startup script
-│   │
-│   └── utils/                 # Utility functions
-│
-└── data/                      # Data directory (runtime generated)
-    ├── pdf/                   # PDF file storage
-    ├── pdf_image/             # PDF to image cache
-    ├── json_data/             # Extracted content JSON
-    ├── vector_db/             # Vector database files
-    ├── output/                # Generated summary files
-    ├── memory/                # Memory system data
-    └── sessions/              # Web interface session data
-        ├── backups/
-        │   └── chat_sessions_current.json  # Current sessions
-        └── exports/           # Exported sessions
+│   ├── agents/                    # 🤖 Multi-Agent System
+│   │   ├── indexing/              # IndexingAgent - Document indexing
+│   │   │   ├── agent.py           # Indexing agent implementation
+│   │   │   ├── state.py           # Indexing state definition
+│   │   │   └── doc_registry.py    # Document registry
+│   │   ├── answer/                # AnswerAgent - Intelligent Q&A
+│   │   │   ├── agent.py           # Answer agent implementation
+│   │   │   └── state.py           # Answer state definition
+│   │   └── retrieval/             # RetrievalAgent - Document retrieval
+│   │       ├── agent.py           # Retrieval agent implementation
+│   │       └── state.py           # Retrieval state definition
+│   ├── core/                      # Core functionality
+│   │   ├── llm/                   # LLM abstraction layer
+│   │   │   ├── client.py          # Unified LLM client
+│   │   │   ├── providers.py       # Multi-provider support
+│   │   │   └── history.py         # Conversation history management
+│   │   ├── vector_db/             # Vector database
+│   │   │   └── vector_db_client.py
+│   │   └── processing/            # Document processing tools
+│   │       ├── index_document.py  # Document indexing entry
+│   │       ├── manage_documents.py # Document management tools
+│   │       ├── parallel_processor.py # Parallel processor
+│   │       └── text_splitter.py   # Text splitter
+│   ├── config/                    # Configuration management
+│   │   ├── settings.py            # Global configuration
+│   │   ├── prompts/               # Prompt templates
+│   │   └── tools/                 # Agent tool definitions
+│   ├── services/                  # External services
+│   │   └── mcp_client.py          # MCP client (retained)
+│   ├── ui/                        # Web Interface
+│   │   ├── run_server.py          # FastAPI startup script
+│   │   ├── backend/               # Backend API
+│   │   │   ├── app.py             # FastAPI application
+│   │   │   ├── api/v1/            # API endpoints
+│   │   │   │   ├── pdf.py         # PDF processing (uses IndexingAgent)
+│   │   │   │   ├── chapters.py    # Chapter viewing
+│   │   │   │   ├── chat.py        # WebSocket chat
+│   │   │   │   └── data.py        # Data management
+│   │   │   └── services/          # Service layer
+│   │   │       ├── chat_service.py # Chat service (uses AnswerAgent)
+│   │   │       ├── session_service.py # Session management
+│   │   │       └── data_service.py    # Data management
+│   │   ├── templates/             # Jinja2 templates
+│   │   └── static/                # Static resources
+│   └── utils/                     # Utility functions
+├── data/                          # Data directory
+│   ├── pdf/                       # PDF source files
+│   ├── pdf_image/                 # PDF to images
+│   ├── json_data/                 # Document data (organized by doc name)
+│   │   └── {doc_name}/            # Document data folder
+│   │       ├── data.json          # Raw extracted data
+│   │       ├── structure.json     # Document structure
+│   │       └── chunks.json        # Chunked data
+│   ├── vector_db/                 # Vector database
+│   ├── output/                    # Generated summary files
+│   ├── sessions/                  # Session data
+│   │   ├── backups/               # Session backups
+│   │   └── exports/               # Session exports
+│   └── doc_registry.json          # Document registry
+└── requirements.txt               # Python dependencies
 ```
 
 </details>
@@ -281,44 +310,77 @@ AgenticReader/
 
 ### Core Components
 
-1. **Reader System** (src/readers/)
-   - ReaderBase: Abstract base class providing common processing flow
-   - PDFReader: PDF document processing (PyMuPDF + OCR)
-   - WebReader: Web content processing (MCP services)
+1. **Multi-Agent System** (src/agents/)
+   - **IndexingAgent**: Document indexing workflow
+     - Parse PDF → Extract structure → Chunk → Parallel process → Vectorize → Register
+   - **AnswerAgent**: Intelligent Q&A workflow
+     - Analyze intent → Retrieval decision → Generate answer → Evaluate result
+   - **RetrievalAgent**: Document retrieval workflow
+     - Semantic search → Context assembly → Result ranking
 
 2. **LLM Abstraction** (src/core/llm/)
    - Unified interface supporting multiple providers (Azure OpenAI, OpenAI, Ollama)
    - Role-based prompt management
-   - Automatic session context handling
+   - Session context auto-handling
+   - Intelligent conversation history compression
 
 3. **Vector Database** (src/core/vector_db/)
    - FAISS vector storage
    - Semantic similarity search
    - Chapter metadata management
+   - Auto-load existing indexes
 
-4. **Web UI** (src/ui/)
+4. **Document Registry** (src/agents/indexing/doc_registry.py)
+   - Centralized document metadata management
+   - Track processing stage status
+   - Record generated file paths
+   - Support incremental indexing
+
+5. **Web UI** (src/ui/)
    - FastAPI + WebSocket real-time communication
-   - Session persistence (dual storage architecture)
+   - AnswerAgent-based chat service
+   - IndexingAgent-based document processing
    - Data management system (granular control)
-   - Modular API design
 
-### Data Flow
+### Agent Workflows
 
+#### IndexingAgent Workflow
 ```
-Input (PDF/URL)
-  → Content Extraction
-  → Text Chunking
-  → Chapter Detection
-  → Content Summary
-  → Vectorization
-  → Store to FAISS
+PDF File
+  → check_cache (Check stage-wise caching)
+  → parse_document (Parse PDF)
+  → extract_structure (Extract document structure)
+  → chunk_text (Text chunking)
+  → process_chapters (Parallel process chapters)
+  → build_index (Build vector database)
+  → generate_brief_summary (Generate summary)
+  → register_document (Register to DocumentRegistry)
+```
 
+#### AnswerAgent Workflow
+```
 User Query
-  → Chapter Retrieval
-  → Context Assembly
-  → LLM Response Generation
-  → Return to User
+  → analyze_intent (Intent analysis)
+  → retrieve_if_needed (Conditional retrieval)
+  → generate_answer (Generate answer)
+  → evaluate_result (Evaluate completeness)
+  → Return to user
 ```
+
+### Data Storage Architecture
+
+**JSON Data** (organized by document):
+```
+data/json_data/{doc_name}/
+├── data.json           # Raw extracted data
+├── structure.json      # Document structure info
+└── chunks.json         # Chunked data
+```
+
+**Advantages**:
+- 📁 All JSON files centralized in document folder
+- 🗑️ Direct folder deletion when removing, no file omissions
+- 🔍 Easy to find and manage specific document data
 
 </details>
 
@@ -328,20 +390,27 @@ User Query
 <summary><b>🛠️ Development Guide (Click to expand)</b></summary>
 
 ### Adding New LLM Providers
-1. Extend `LLMBase` in `src/core/llm/client.py`
-2. Add configuration to `LLM_CONFIG` in `src/config/settings.py`
+1. Add provider implementation in `src/core/llm/providers.py`
+2. Add configuration in `LLM_CONFIG` in `src/config/settings.py`
 3. Update provider switching logic
 
 ### Adding New Agents
-1. Inherit from `GraphBase` to create agent class
-2. Implement `build_graph()` and core processing methods
-3. Add agent configuration to `AgentCard` in `src/config/settings.py`
-4. Handle new agent type in `ExecutorAgent._create_agent()`
+1. Create new agent directory under `src/agents/`
+2. Create `agent.py` (inherit AgentBase) and `state.py` (define TypedDict)
+3. Implement `build_graph()` method to define workflow
+4. Integrate calls in other Agents
+
+### Extending IndexingAgent
+1. Add new processing nodes in `agent.py`
+2. Connect new nodes in `build_graph()`
+3. Update `IndexingState` to add new fields
+4. Implement cache checking logic
 
 ### Extending Web API
 1. Create new route file in `src/ui/backend/api/v1/`
-2. Register route in `src/ui/backend/app.py`
-3. Follow RESTful conventions and FastAPI best practices
+2. Use Agents instead of directly calling processing logic
+3. Register route in `src/ui/backend/app.py`
+4. Follow RESTful conventions and FastAPI best practices
 
 ### Extending Data Management Features
 1. Add new data types in `DataService.delete_document_data()`
@@ -361,9 +430,9 @@ uvicorn src.ui.backend.app:app --reload --host 0.0.0.0 --port 8000
 # View API documentation
 # http://localhost:8000/docs
 
-# Test specific modules
-python src/chat/memory_agent.py
-python src/chat/chat.py
+# Test Agents
+python -c "from src.agents.indexing import IndexingAgent; print('OK')"
+python -c "from src.agents.answer import AnswerAgent; print('OK')"
 ```
 
 </details>
@@ -373,61 +442,142 @@ python src/chat/chat.py
 <details>
 <summary><b>❓ FAQ (Click to expand)</b></summary>
 
-### 1. PDF file not recognized?
-- Ensure file is placed in `data/pdf/` directory
-- Check filename spelling is correct
-- Supported format: `.pdf`
+### 1. What file formats are supported?
+- ✅ **PDF files**: Fully supported, auto-extract text, images, structure
+- ❌ **URL/Web pages**: Temporarily not supported (Web Reader feature removed)
+- ❌ **Word/PPT**: Not supported yet (planned)
 
-### 2. LLM API errors?
-- Check if API key in `.env` file is correct
-- Verify endpoint and model name configuration
-- Confirm account has sufficient quota
+### 2. What's the difference between the four dialogue modes?
+- **Single (Single Document)**: Deep Q&A for specific document, all retrieval limited to selected document
+- **Cross (Cross-Document Intelligent)**: System auto-selects relevant documents for retrieval and synthesis
+- **Manual (Cross-Document Manual Selection)**: Manually specify multiple documents as background knowledge
+- **General (General Conversation)**: Free conversation without binding to specific documents
 
-### 3. Vector database loading failed?
-- First use auto-creates, no need to worry
-- To rebuild: Delete `data/vector_db/<document_name>` folder then rerun
-- Or use data management interface to delete vector database
+**Recommended scenarios:**
+- Learning specific document content → Single mode
+- Exploratory research, uncertain which document to use → Cross mode
+- Clearly need to compare multiple documents → Manual mode
+- General questions, chitchat → General mode
 
-### 4. Web interface won't start?
+### 3. How to index new documents?
+**CLI Mode:**
 ```bash
-# Check if dependencies are complete
-pip install fastapi uvicorn jinja2 python-multipart websockets
-
-# Check if port is occupied
-lsof -i :8000
-
-# View detailed error logs
-python src/ui/run_server.py
+python main.py
+# Select 'i' - Index new document
+# Choose file from data/pdf/ directory
+# Wait for indexing (auto parse, chunk, vectorize)
 ```
 
-### 5. MCP service connection failed?
-- Confirm Node.js is installed
-- Check if MCP service is correctly installed
-- Review MCP configuration in `src/config/settings.py`
+**Web Mode:**
+```
+Visit http://localhost:8000/
+Click "Batch Index" or "Single Index"
+Upload PDF file
+Wait for background processing
+```
 
-### 6. Session data lost?
-- Check backup files in `data/sessions/backups/` directory
-- Use web interface import function to restore backups
-- Backup files named by timestamp, keeps max 10
+### 4. How to view and manage indexed documents?
+**CLI Mode:**
+```bash
+python main.py
+# Select 'm' - Manage documents
+# View document list and storage usage
+# Can delete specific documents
+```
+
+**Web Mode:**
+```
+Visit http://localhost:8000/data
+View all documents and data types
+Use granular deletion (delete only specific data types)
+Or batch delete multiple documents
+```
+
+### 5. What is "granular deletion"?
+**Traditional deletion**: Deletes all related data when deleting document
+
+**Granular deletion**: Selectively delete specific data types, for example:
+- Delete Images only → Free up most space
+- Delete Vector DB only → Use when rebuilding index
+- Delete Summary only → Use when regenerating summary
+- Keep JSON data → Avoid re-parsing PDF
+
+**Usage scenarios:**
+- Insufficient space but want to keep document → Delete Images
+- Index corrupted, need rebuild → Delete Vector DB
+- Optimize index parameters → Delete Vector DB and Chunks, keep JSON
+
+### 6. How to manage conversation history?
+**Automatic management:**
+- LLM auto-summarizes conversation history (90%+ compression)
+- Maintains context coherence while saving tokens
+
+**Manual clearing:**
+- **CLI**: Enter `clear` command
+- **Web**: Click "Clear History" button
+- Clear operation clears both file and memory, and re-instantiates Agent
+
+**Session persistence:**
+- All conversations auto-saved to `data/sessions/{mode}/` directory
+- Three modes stored independently: single, cross, manual
+- Single mode: One session file per document (doc_name.json)
+- Cross/Manual mode: One file per session (session_id.json)
 
 ### 7. How to switch LLM providers?
-```python
-# Specify in code
-from src.readers.pdf import PDFReader
-pdf_reader = PDFReader(provider="azure")  # or "openai", "ollama"
+**Method 1: Modify .env file**
+```bash
+# Azure OpenAI
+CHAT_API_KEY=your_azure_key
+CHAT_AZURE_ENDPOINT=https://your-endpoint.openai.azure.com/
+CHAT_DEPLOYMENT_NAME=gpt-4
+CHAT_API_VERSION=2024-02-15-preview
 
-# Default uses openai (see src/readers/base.py:35)
+# OpenAI
+CHAT_API_KEY=your_openai_key
+CHAT_MODEL_NAME=gpt-4
+OPENAI_BASE_URL=https://api.openai.com/v1/
+
+# Ollama (Local)
+OLLAMA_BASE_URL=http://localhost:11434
+CHAT_MODEL_NAME=llama3
+
+# Gemini
+GEMINI_API_KEY=your_gemini_key
+GEMINI_MODEL_NAME=gemini-1.5-pro
+```
+
+**Method 2: Web Configuration Page**
+```
+Visit http://localhost:8000/config
+Select LLM provider
+Fill in API Key and configuration
+Save and restart
 ```
 
 ### 8. How to clean old data to free space?
-- Access `http://localhost:8000/data` to enter data management interface
-- Use "Smart Cleanup" to auto-clean data older than 30 days
-- Or manually select documents and delete specific data types (e.g., delete images only)
+**Smart Cleanup (Recommended):**
+```
+Visit http://localhost:8000/data
+Click "Smart Cleanup"
+Set days (default 30 days)
+System auto-cleans old data
+```
 
-### 9. How to recover accidentally deleted data?
-- Session data can be recovered from `data/sessions/backups/`
-- Document data recommended to use "Data Backup" feature regularly
-- Backup files saved in `data/backups/` directory
+**Manual Cleanup:**
+- Select specific document → Granular deletion (delete only Images/Vector DB)
+- Batch select → Delete multiple documents at once
+- Cache management → Clear PDF image cache, JSON cache
+
+**Most space-consuming data types:**
+1. Images (PDF pictures) - Usually 60-70% of space
+2. Vector DB (Vector index) - Usually 20-30% of space
+3. JSON data - Usually 5-10% of space
+4. Summary - Usually 1-2% of space
+
+### 9. Why was Web Reader feature removed?
+- Focus on deep PDF document parsing and Q&A
+- Web content structure is complex with varying quality
+- Planning to redesign better web content processing in the future
 
 </details>
 
@@ -436,101 +586,116 @@ pdf_reader = PDFReader(provider="azure")  # or "openai", "ollama"
 <details>
 <summary><b>📝 Changelog (Click to expand)</b></summary>
 
+### 2026-01-29 - Batch Indexing and Session Management Enhancements
+- 🐛 **Batch Indexing Fixes**
+  - ✅ Fixed concurrent write race condition during batch PDF indexing
+  - ✅ Enhanced DocumentRegistry concurrent safety (reload-before-save pattern)
+  - ✅ Ensured all documents register correctly when indexing multiple PDFs simultaneously
+  - ✅ Added `update_metadata()` method for safe metadata updates
+- 💬 **Session Management Optimization**
+  - ✅ Fixed chat history clearing (clears both file and memory)
+  - ✅ Re-instantiate AnswerAgent and RetrievalAgent when clearing history
+  - ✅ Fixed memory-file synchronization (update `current_session` to prevent stale data)
+  - ✅ Fixed single-mode session detail loading (support session_id lookup)
+- 🎨 **UI Enhancements**
+  - ✅ Added timestamp display to all chat modes (format: year/month/day hour:minute:second)
+  - ✅ Session detail modal supports Markdown and LaTeX rendering
+  - ✅ Historical messages display original timestamps (not current time)
+- 🔧 **Code Improvements**
+  - ✅ Unified AnswerAgent initialization parameters (only uses `doc_name`)
+  - ✅ Enhanced data consistency guarantees in concurrent environments
+
+### 2026-01-17 - Major Architecture Refactor: Migration to Multi-Agent System
+- 🏗️ **Architecture Refactor**
+  - ✅ Completely removed old Reader architecture (PDFReader, WebReader, ReaderBase)
+  - ✅ All functionality migrated to Multi-Agent architecture (IndexingAgent, AnswerAgent, RetrievalAgent)
+  - ✅ LangGraph-based state machine workflow orchestration
+  - ✅ UI backend migrated to use Agents (chat_service.py uses AnswerAgent, pdf.py uses IndexingAgent)
+  - ✅ Deleted `src/readers/` directory, parallel_processor moved to `src/core/processing/`
+  - ✅ Simplified chapters.py, temporarily removed chapter editing features
+- 📁 **Data Storage Optimization**
+  - ✅ JSON files organized by document: `data/json_data/{doc_name}/data.json`
+  - ✅ Unified management of all JSON files for documents (data.json, structure.json, chunks.json)
+  - ✅ Direct folder deletion when removing documents, no file omissions
+- 🔄 **State Management Enhancement**
+  - ✅ IndexingState added `is_complete` field to track completion status
+  - ✅ DocumentRegistry auto-creates temporary records to track processing progress
+  - ✅ Stage-wise cache checking to avoid reprocessing
+- 🗑️ **Code Cleanup**
+  - ❌ Deleted Web-related API and backend code (temporarily, to be redesigned)
+  - ❌ Deleted ~1500+ lines of old Reader code
+  - ✅ Retained MCP client (as requested)
+  - ✅ Cleaner codebase, easier to maintain
+
 ### 2025-11-26 - Parallel Processing Optimization and Chapter Management UI
 - ⚡ **Parallel Processing Optimization**
   - Added `src/utils/async_utils.py` - Generic async parallel processing utilities
-  - Added `src/readers/parallel_processor.py` - Reader-specific parallel processor
+  - Added `src/core/processing/parallel_processor.py` - Specialized parallel processor
   - Chapter summary and content refactoring now execute in parallel, 3-5x speed improvement
   - Detail summary generation parallelized with semaphore-controlled concurrency
 - 📁 **Independent Chapter Management Interface**
-  - New `/chapters` page - Parallel to config management and data management
+  - New `/chapters` page - Parallel to config and data management
   - Integrated PDF preview with left chapter list + right PDF display
   - Support chapter edit, add, delete operations
   - Support batch rebuild of vector database and summaries
   - Processing progress indicators and chapter highlighting
 - 🛠️ **Code Refactoring**
   - Extracted parallel processing logic into independent modules for better reusability
-  - Optimized chapter processing flow in `base.py`
 
 ### 2025-11-19 - Data Management System
 - ✨ **New Data Management Interface**
   - Real-time storage overview dashboard (document count, storage size, session stats)
   - Document detail display (JSON, Vector DB, Images, Summary shown independently)
   - **Granular partial deletion** - Delete specific data types for individual documents
-  - Batch selection and deletion operations
-  - Cache management (PDF images, vector DB, JSON data managed independently)
-  - Smart cleanup (auto-clean data older than N days)
-  - Data backup and full reset functionality
-- 📊 **New Service Layer**
-  - `DataService` - File system operations and data management logic
-  - Session format compatibility handling
-- 🎨 **Frontend Optimization**
+  - Batch operations support - Select multiple documents for deletion
+  - Cache management - View and clear PDF images, vector DB, JSON cache
+  - Smart cleanup - Auto-delete data older than N days
+  - Data backup functionality - Create session, output, config backups
+  - Session statistics - Total sessions, messages, last activity, backup count
 
-### 2025-11-05 - Web Interface Refactor
-- Added FastAPI + WebSocket modern web interface
-- Implemented session persistence management and dual storage architecture
-- Integrated online PDF viewer
-- Added auto-backup and import/export functionality
+### 2025-10-31 - Session System Enhancement
+- 🔄 **Session Persistence Optimization**
+  - Dual storage architecture: Client localStorage + server file storage
+  - Auto-backup rotation mechanism (keeps latest 10 backups)
+  - Session import/export functionality
+  - Storage location migration: `chat_sessions.json` → `sessions/backups/chat_sessions_current.json`
+- 🛠️ **Backend Optimization**
+  - SessionManager refactor with backup management support
+  - Session format compatibility handling (supports dict and list formats)
+  - Auto-migration of old session files
+
+### 2025-09-15 - FastAPI Web Interface
+- 🌐 **New Web Interface**
+  - FastAPI + WebSocket real-time chat
+  - Jinja2 templates + Vanilla JavaScript
+  - Integrated online PDF preview
+  - Responsive design, mobile-friendly
+
+### 2025-08-20 - History Compression Optimization
+- 🧠 **Intelligent History Management**
+  - LLM auto-summarizes conversation history
+  - 90%+ compression rate, significantly saves tokens
+  - Maintains context coherence
 
 ### 2025-07-30 - Web Reader
 - Added Web Reader functionality
-- Support parsing web content via URL
-- Integrated MCP services
-
-### 2025-07-23 - Summary Export
-- Added summary file export functionality
-- Support Markdown and PDF formats
-- Added `save_data_flag` control parameter
+- MCP service integration
 
 </details>
 
 ---
 
-<details>
-<summary><b>🤝 Contributing (Click to expand)</b></summary>
+## License | License
+
+[MIT License](LICENSE)
+
+## Contributing | Contributing
 
 Welcome to submit Issues and Pull Requests!
 
-### Development Process
-1. Fork this repository
-2. Create feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to branch (`git push origin feature/AmazingFeature`)
-5. Create Pull Request
+## Acknowledgements | Acknowledgments
 
-### Code Standards
-- Follow PEP 8 Python code style
-- Add necessary comments and docstrings
-- Ensure all tests pass
-- Update relevant documentation
-
-</details>
-
----
-
-## License
-
-This project is licensed under the MIT License. See [LICENSE](LICENSE) file for details.
-
----
-
-## Acknowledgements
-
-- [LangChain](https://github.com/langchain-ai/langchain) - LLM application development framework
-- [LangGraph](https://github.com/langchain-ai/langgraph) - Multi-agent state graph management
+- [LangChain](https://github.com/langchain-ai/langchain) - Powerful LLM application development framework
+- [LangGraph](https://github.com/langchain-ai/langgraph) - Multi-agent orchestration framework
+- [FAISS](https://github.com/facebookresearch/faiss) - Efficient vector retrieval library
 - [FastAPI](https://fastapi.tiangolo.com/) - Modern web framework
-- [FAISS](https://github.com/facebookresearch/faiss) - Efficient vector retrieval
-- [PyMuPDF](https://pymupdf.readthedocs.io/) - PDF processing
-- [Model Context Protocol](https://modelcontextprotocol.io/) - MCP services
-
----
-
-## Contact
-
-For questions or suggestions, please contact via:
-- Submit GitHub Issue
-- Start a Discussion
-
----
-
-**⭐ If this project helps you, please give it a Star!**

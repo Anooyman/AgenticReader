@@ -6,7 +6,7 @@ from typing import List, Dict, Optional, Any, Callable, Set
 from langchain.docstore.document import Document
 from langchain_community.vectorstores import FAISS
 
-from src.core.llm.client import LLMBase
+# 注意：不再继承 LLMBase，改用组合模式（依赖注入）
 
 logging.basicConfig(
     level=logging.INFO,  # 可根据需要改为 DEBUG
@@ -14,11 +14,29 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class VectorDBClient(LLMBase):
-    """向量数据库客户端基类"""
-    def __init__(self, db_path: str, provider: str = 'openai') -> None:
-        super().__init__(provider)
+class VectorDBClient:
+    """
+    向量数据库客户端（纯数据访问层）
+
+    职责：
+    - FAISS向量数据库的CRUD操作
+    - 元数据过滤检索
+    - 去重机制
+    - 数据持久化
+
+    使用组合模式，通过依赖注入获取 embedding_model
+    """
+    def __init__(self, db_path: str, embedding_model) -> None:
+        """
+        初始化向量数据库客户端
+
+        Args:
+            db_path: 向量数据库存储路径
+            embedding_model: 外部传入的 embedding 模型实例
+                           （通常来自 LLMBase.embedding_model）
+        """
         self.db_path = db_path
+        self.embedding_model = embedding_model  # 组合模式，注入依赖
         self.vector_db: Optional[FAISS] = None
 
         # 用于存储已检索文档的哈希值，防止重复检索

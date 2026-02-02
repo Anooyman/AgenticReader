@@ -1,80 +1,80 @@
-"""配置管理API路由"""
+"""配置管理 API"""
 
 import json
 from pathlib import Path
-from fastapi import APIRouter
-from ...models.chat import ProviderConfig
-from ...config.logging import get_logger
-from ...config.settings import settings
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import Optional, Dict, Any
 
-logger = get_logger(__name__)
+from ...config import DATA_DIR
+
 router = APIRouter()
 
 # 配置文件路径
-CONFIG_FILE = settings.data_dir / "config" / "app_config.json"
+CONFIG_FILE = DATA_DIR / "config" / "app_config.json"
 
-def load_config():
+
+class ProviderConfig(BaseModel):
+    """LLM提供商配置"""
+    provider: str
+    pdf_preset: Optional[str] = "high"
+
+
+class SystemConfig(BaseModel):
+    """系统配置"""
+    auto_save_outputs: bool = True
+    enable_notifications: bool = True
+    log_level: str = "INFO"
+
+
+def load_config() -> Dict[str, Any]:
     """从文件加载配置"""
-    # 默认配置 - 只包含需要持久化的设置
-    persistent_config = {
+    default_config = {
         "provider": "openai",
-        "pdf_preset": "high"
-    }
-
-    # 会话级别的状态 - 每次启动都重置
-    session_state = {
-        "current_doc_name": None,
-        "has_pdf_reader": False,
-        "has_web_reader": False
+        "pdf_preset": "high",
+        "auto_save_outputs": True,
+        "enable_notifications": True,
+        "log_level": "INFO"
     }
 
     try:
         if CONFIG_FILE.exists():
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                 saved_config = json.load(f)
-                # 只保留持久化的设置，忽略文档状态
-                persistent_config["provider"] = saved_config.get("provider", "openai")
-                persistent_config["pdf_preset"] = saved_config.get("pdf_preset", "high")
-                logger.info(f"📖 从文件加载持久配置: {persistent_config}")
+                default_config.update(saved_config)
+                print(f"✅ 从文件加载配置: {CONFIG_FILE}")
         else:
-            logger.info("📄 配置文件不存在，使用默认配置")
+            print("📄 配置文件不存在，使用默认配置")
     except Exception as e:
-        logger.error(f"❌ 加载配置文件失败: {e}")
+        print(f"❌ 加载配置文件失败: {e}")
 
-    # 合并持久配置和会话状态
-    final_config = {**persistent_config, **session_state}
-    logger.info(f"🔄 会话状态已重置: current_doc_name=None, has_pdf_reader=False, has_web_reader=False")
-    return final_config
+    return default_config
 
-def save_config(config):
-    """保存配置到文件 - 只保存持久化设置，不保存文档状态"""
+
+def save_config(config: Dict[str, Any]):
+    """保存配置到文件"""
     try:
-        # 只保存需要持久化的设置
-        persistent_config = {
-            "provider": config.get("provider", "openai"),
-            "pdf_preset": config.get("pdf_preset", "high")
-        }
-
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(persistent_config, f, ensure_ascii=False, indent=2)
-        logger.info(f"💾 持久配置已保存到文件: {persistent_config}")
-        logger.info("🔄 文档状态不会持久化，服务器重启后将重置")
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        print(f"✅ 配置已保存到文件: {CONFIG_FILE}")
     except Exception as e:
-        logger.error(f"❌ 保存配置文件失败: {e}")
+        print(f"❌ 保存配置文件失败: {e}")
+        raise
 
-# 全局配置状态 - 从文件加载
+
+# 全局配置状态
 _current_config = load_config()
 
 
-@router.get("/config")
-async def get_config():
+@router.get("")
+async def get_config() -> Dict[str, Any]:
     """获取当前配置"""
     return _current_config
 
 
-@router.post("/config/provider")
-async def update_provider(config: ProviderConfig):
+@router.post("/provider")
+async def update_provider(config: ProviderConfig) -> Dict[str, Any]:
     """更新LLM提供商配置"""
     try:
         global _current_config
@@ -85,27 +85,68 @@ async def update_provider(config: ProviderConfig):
         # 保存到文件
         save_config(_current_config)
 
-        logger.info(f"更新配置: provider={config.provider}, pdf_preset={config.pdf_preset}")
+        print(f"✅ 更新配置: provider={config.provider}, pdf_preset={config.pdf_preset}")
 
         return {
             "status": "success",
-            "provider": _current_config["provider"],
-            "pdf_preset": _current_config["pdf_preset"]
+            "message": "配置已更新",
+            "config": _current_config
         }
     except Exception as e:
-        logger.error(f"更新配置失败: {e}")
-        return {"status": "error", "message": str(e)}
+        print(f"❌ 更新配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-def update_document_state(doc_name, has_pdf_reader=False, has_web_reader=False):
-    """更新文档状态（供其他模块调用）"""
-    global _current_config
-    _current_config["current_doc_name"] = doc_name
-    _current_config["has_pdf_reader"] = has_pdf_reader
-    _current_config["has_web_reader"] = has_web_reader
 
-    # 保存到文件
-    save_config(_current_config)
-    logger.info(f"📄 文档状态已更新: {_current_config}")
+@router.post("/system")
+async def update_system_config(config: SystemConfig) -> Dict[str, Any]:
+    """更新系统配置"""
+    try:
+        global _current_config
+        _current_config["auto_save_outputs"] = config.auto_save_outputs
+        _current_config["enable_notifications"] = config.enable_notifications
+        _current_config["log_level"] = config.log_level
+
+        # 保存到文件
+        save_config(_current_config)
+
+        print(f"✅ 更新系统配置: {config.dict()}")
+
+        return {
+            "status": "success",
+            "message": "系统配置已更新",
+            "config": _current_config
+        }
+    except Exception as e:
+        print(f"❌ 更新系统配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/reset")
+async def reset_config() -> Dict[str, Any]:
+    """重置配置为默认值"""
+    try:
+        global _current_config
+        _current_config = {
+            "provider": "openai",
+            "pdf_preset": "high",
+            "auto_save_outputs": True,
+            "enable_notifications": True,
+            "log_level": "INFO"
+        }
+
+        # 保存到文件
+        save_config(_current_config)
+
+        print("✅ 配置已重置为默认值")
+
+        return {
+            "status": "success",
+            "message": "配置已重置为默认值",
+            "config": _current_config
+        }
+    except Exception as e:
+        print(f"❌ 重置配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def get_current_provider() -> str:
@@ -116,28 +157,3 @@ def get_current_provider() -> str:
 def get_current_pdf_preset() -> str:
     """获取当前配置的 PDF preset（供其他模块调用）"""
     return _current_config.get("pdf_preset", "high")
-
-
-def clear_document_state():
-    """清除文档状态（供其他模块调用）"""
-    global _current_config
-    _current_config["current_doc_name"] = None
-    _current_config["has_pdf_reader"] = False
-    _current_config["has_web_reader"] = False
-
-    # 注意：不保存到文件，因为文档状态不应该持久化
-    logger.info(f"🗑️ 文档状态已清除（仅内存）: {_current_config}")
-
-@router.post("/config/clear")
-async def clear_config():
-    """清除文档状态API端点"""
-    try:
-        clear_document_state()
-        return {
-            "status": "success",
-            "message": "文档状态已清除",
-            "config": _current_config
-        }
-    except Exception as e:
-        logger.error(f"清除文档状态失败: {e}")
-        return {"status": "error", "message": str(e)}

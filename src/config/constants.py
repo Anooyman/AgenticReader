@@ -13,13 +13,21 @@ class ProcessingLimits:
 
     # Token相关限制
     MAX_TOKEN_COUNT = 3000  # Web内容最大Token数
-    DEFAULT_MAX_MESSAGES = 20  # 聊天历史默认最大消息数
-    DEFAULT_MAX_TOKENS = 65536 # 聊天历史默认最大Token数
 
     # 重试和超时
     MAX_MCP_ATTEMPTS = 10  # MCP服务最大调用尝试次数
     DEFAULT_SEARCH_K = 10  # 默认检索结果数量
     DEFAULT_RECURSION_LIMIT = 50  # 图执行递归限制
+
+    # Retrieval Agent 迭代次数配置
+    MAX_RETRIEVAL_ITERATIONS = 10  # Retrieval Agent 最大迭代次数（ReAct循环）
+
+    # Retrieval Agent 持久化历史长度控制
+    MAX_PERSISTENT_HISTORY_LENGTH = 10  # 持久化历史的最大长度（thoughts, actions, observations, retrieved_content）
+    # 只保留最近的 N 条记录，避免上下文无限增长
+    # 建议值：5-20，根据 LLM 上下文窗口大小调整
+
+    # 注意：会话历史相关配置（max_messages, max_tokens）已移至 SessionHistoryConfig
 
 
 # === 文件和路径常量 ===
@@ -80,6 +88,71 @@ class LLMConstants:
     DEFAULT_TEMPERATURE = 0.7
     DEFAULT_MAX_RETRIES = 5
     DEFAULT_ENCODING = "o200k_base"
+
+
+# === 会话历史管理常量 ===
+class SessionHistoryConfig:
+    """会话历史管理配置
+
+    定义不同类型会话的消息历史管理参数。
+    每种会话类型包含以下配置：
+    - max_messages: 最大消息数量（兜底值，当LLM总结失败时使用）
+    - max_tokens: 最大Token数量限制（超过则触发截断）
+    - summary_threshold: 触发LLM总结的对话轮数阈值
+    - use_llm_summary: 是否启用LLM智能总结（默认True）
+
+    Note:
+        - 对话轮数 = 消息数量 / 2（一轮对话包含1个问题和1个回答）
+        - summary_threshold=3 表示第4轮对话时触发总结（即超过3轮）
+        - max_messages 应设置为远大于 summary_threshold*2 的值，作为总结失败的兜底
+        - max_tokens 用于控制总Token数，防止超过LLM上下文窗口限制
+    """
+
+    # Web Chat Session 配置（session_id="chat"）
+    # 用于 UI 的 Web 内容对话，使用较宽松的限制
+    WEB_CHAT = {
+        "max_messages": 10,           # 兜底值：总结失败时的硬上限
+        "max_tokens": 65536,           # 最大Token数（Claude 3.5 Sonnet上下文窗口）
+        "summary_threshold": 10,        # 10轮对话后触发总结（20条消息）
+        "use_llm_summary": True,       # 启用LLM智能总结
+    }
+
+    # PDF Chat Session 配置（session_id="answer"等）
+    # 用于 PDF 文档对话（CLI 和 UI），使用较严格的限制
+    PDF_CHAT = {
+        "max_messages": 10,            # 兜底值：总结失败时的硬上限
+        "max_tokens": 65536,           # 最大Token数（Claude 3.5 Sonnet上下文窗口）
+        "summary_threshold": 10,        # 10轮对话后触发总结（20条消息）
+        "use_llm_summary": True,       # 启用LLM智能总结
+    }
+
+    # 默认 Session 配置
+    # 用于其他未明确分类的会话
+    DEFAULT = {
+        "max_messages": 30,            # 兜底值：总结失败时的硬上限
+        "max_tokens": 65536,           # 最大Token数（Claude 3.5 Sonnet上下文窗口）
+        "summary_threshold": 10,        # 10轮对话后触发总结（20条消息）
+        "use_llm_summary": True,       # 启用LLM智能总结
+    }
+
+    # Session ID 到配置的映射
+    SESSION_TYPE_MAP = {
+        "chat": WEB_CHAT,              # Web Chat UI
+        "answer": PDF_CHAT,            # PDF Chat (UI & CLI)
+    }
+
+    @classmethod
+    def get_config(cls, session_id: str) -> dict:
+        """
+        根据 session_id 获取对应的配置
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            配置字典，包含 max_messages, summary_threshold, use_llm_summary
+        """
+        return cls.SESSION_TYPE_MAP.get(session_id, cls.DEFAULT)
 
 
 # === Reader处理常量 ===

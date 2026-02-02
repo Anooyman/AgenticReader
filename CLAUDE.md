@@ -72,31 +72,83 @@ uvicorn src.ui.backend.app:app --reload --host 0.0.0.0 --port 8000
 export LOGGING_LEVEL=DEBUG
 python main.py
 
-# Test specific reader components
-python -c "from src.readers.pdf import PDFReader; reader = PDFReader(); print('PDF Reader initialized')"
-python -c "from src.readers.web import WebReader; reader = WebReader(); print('Web Reader initialized')"
+# Test agent components
+python tests/test_indexing_agent.py     # Test IndexingAgent
+python tests/test_answer_agent.py       # Test AnswerAgent
+python tests/test_retrieval_agent.py    # Test RetrievalAgent
 
 # Test LLM providers
-python -c "from src.core.llm.client import LLMBase; client = LLMBase(provider='azure'); print('LLM client initialized')"
+python tests/test_llm_client.py         # Test LLM client
+python tests/test_llm_providers.py      # Test provider implementations
+```
+
+## Architecture Overview
+
+### Modular Agent-Centric Design
+
+The codebase follows a **fully modularized, agent-centric architecture** where each agent is a self-contained module with all its configuration colocated:
+
+```
+src/agents/
+├── common/           # Shared utilities across agents
+│   └── prompts.py    # Common prompts (CommonRole)
+├── indexing/         # Self-contained IndexingAgent
+│   ├── prompts.py    # Indexing-specific prompts
+│   └── agent.py, nodes.py, tools.py, utils.py, state.py
+├── answer/           # Self-contained AnswerAgent
+│   ├── prompts.py    # Answer-specific prompts
+│   ├── tools_config.py
+│   └── agent.py, nodes.py, tools.py, utils.py, state.py
+└── retrieval/        # Self-contained RetrievalAgent
+    ├── prompts.py    # Retrieval-specific prompts
+    ├── tools_config.py
+    └── agent.py, nodes.py, tools.py, utils.py, state.py
+```
+
+**Key Principles:**
+- **Modularity**: Each agent owns its prompts, tools, and logic
+- **Cohesion**: All agent-related code is in one directory
+- **Clarity**: Easy to find and modify agent-specific configurations
+- **Scalability**: New agents can be added without touching global configs
+
+**Import Examples:**
+```python
+# Agent-specific imports
+from src.agents.common.prompts import CommonRole
+from src.agents.indexing.prompts import IndexingRole
+from src.agents.answer.prompts import AnswerRole
+from src.agents.answer.tools_config import ANSWER_TOOLS_CONFIG
+from src.agents.retrieval.prompts import RetrievalRole
+from src.agents.retrieval.tools_config import RETRIEVAL_TOOLS_CONFIG
+
+# Multi-agent coordination (config level)
+from src.config.prompts.agent_prompts import AgentType
 ```
 
 ## High-Level Architecture
 
 ### Core Architecture Patterns
 
-**1. Multi-Agent System (src/chat/)**
-- **PlanAgent**: Top-level coordinator that analyzes queries, creates execution plans, and evaluates results
-- **ExecutorAgent**: Mid-level executor that manages sub-agents and coordinates plan execution
-- **MemoryAgent**: Specialized agent for intelligent memory management with semantic search
+**1. Multi-Agent System (src/agents/)** - Fully Modularized Architecture
+- **IndexingAgent**: Document indexing agent responsible for PDF parsing, structure extraction, chunking, and vectorization
+- **AnswerAgent**: User-facing Q&A agent that handles intent analysis, retrieval decision-making, and answer generation
+- **RetrievalAgent**: Document retrieval agent for semantic search and context assembly
+- **AgentBase**: Base class providing LLM instance management and LangGraph workflow building
+- **CommonModule**: Shared prompts and utilities used across multiple agents
 - Built on **LangGraph** framework with asynchronous state graph processing
-- Uses typed state classes (PlanState, ExecutorState) and Command objects for control flow
-- All agent communications are async using `astream()` pattern
+- Uses typed state dictionaries (IndexingState, AnswerState, RetrievalState) defined with TypedDict
+- All agent workflows compiled as StateGraph objects with nodes, edges, and conditional routing
+- **Self-Contained Modules**: Each agent is fully self-contained with its own:
+  - `prompts.py`: Agent-specific system prompts and role definitions
+  - `tools_config.py`: Tool configurations with descriptions and parameters
+  - `agent.py`, `nodes.py`, `tools.py`, `utils.py`, `state.py`: Core agent logic
+  - This modular design allows for easy agent management, testing, and extension
 
-**2. Reader-Based Processing (src/readers/)**
-- **ReaderBase**: Abstract base class providing common functionality (content extraction, summarization, vector DB interaction)
-- **PDFReader**: Handles PDF documents with image extraction and OCR capabilities
-- **WebReader**: Processes web content via MCP services with automatic text chunking
-- All readers support caching, vector database building, and automatic summary generation
+**2. Document Registry System (src/agents/indexing/doc_registry.py)**
+- **DocumentRegistry**: Centralized metadata management for all indexed documents
+- Tracks processing stages, output files, and document status
+- Supports incremental indexing and cache validation
+- JSON-based storage in `data/doc_registry.json`
 
 **3. LLM Abstraction Layer (src/core/llm/)**
 - **LLMBase**: Unified interface supporting multiple providers (Azure OpenAI, OpenAI, Ollama)
@@ -132,21 +184,43 @@ python -c "from src.core.llm.client import LLMBase; client = LLMBase(provider='a
 
 ### Multi-Agent Workflow
 
+**IndexingAgent Workflow:**
 ```
-User Query → PlanAgent (analyze & plan) → ExecutorAgent (coordinate execution)
-    ↓
-Sub-Agents (MemoryAgent, etc.) → Results Collection → PlanAgent (evaluate)
-    ↓
-Final Answer Generation → Response to User
+PDF File → check_cache → parse_document → extract_structure → chunk_text
+   → process_chapters (parallel) → build_index → generate_brief_summary → register_document
+```
+
+**AnswerAgent Workflow:**
+```
+User Query → analyze_intent (需要检索?) → retrieve (RetrievalAgent) → generate_answer → Response
+              ↓ (直接回答)              ↓
+              └──────────────────────────┘
+```
+
+**RetrievalAgent Workflow:**
+```
+Query + Doc → semantic_search (vector DB) → assemble_context → ranked results
 ```
 
 ## Configuration Architecture
 
 ### Settings Structure (src/config/settings.py)
 - **LLM_CONFIG**: Azure OpenAI, OpenAI, and Ollama configuration via environment variables
-- **SYSTEM_PROMPT_CONFIG**: Role-based prompts for different processing stages
+- **LLM_EMBEDDING_CONFIG**: Embedding model configuration for vector generation
+- **Prompt System**: Role-based prompts organized by agent modularity
+  - Agent-specific prompts are located in their respective agent directories:
+    - `src/agents/common/prompts.py`: Shared prompts used across multiple agents
+    - `src/agents/indexing/prompts.py`: IndexingAgent prompts for document parsing and extraction
+    - `src/agents/answer/prompts.py`: AnswerAgent prompts for intent analysis and Q&A
+    - `src/agents/retrieval/prompts.py`: RetrievalAgent prompts for intelligent retrieval
+  - Multi-agent coordination prompts remain in `src/config/prompts/`:
+    - `agent_prompts.py`: Prompts for PlanAgent, ExecutorAgent, MemoryAgent coordination
+- **Tools Configuration**: Agent-specific tool configs moved to agent directories
+  - `src/agents/answer/tools_config.py`: AnswerAgent tool configurations
+  - `src/agents/retrieval/tools_config.py`: RetrievalAgent tool configurations
 - **MCP_CONFIG**: External service configurations for web fetching and memory services
 - **Data Paths**: Configurable storage locations for all generated content
+- **Constants**: Centralized in `src/config/constants.py` with organized classes
 
 ### Key Environment Variables
 **LLM Service Configuration:**
@@ -165,21 +239,40 @@ Final Answer Generation → Response to User
 - Ollama: Requires local installation and running service
 
 **Default Provider Note**:
-- Code default is `openai` (see `src/readers/base.py:33` and `src/readers/pdf.py:37`)
-- Can be changed by passing `provider` parameter: `PDFReader(provider="azure")`
+- Code default is `openai` (see `src/agents/base.py` and agent implementations)
+- Can be changed by passing `provider` parameter: `IndexingAgent(provider="azure")`
 
 ## Key Data Structures
 
-### Processing Pipeline State
-- **raw_data_dict**: Original extracted content organized by chapters
-- **agenda_dict**: Document structure with chapter titles and page numbers
-- **total_summary**: Chapter-wise summaries for Q&A context
-- **retrieval_data_dict**: Cached retrieval results for conversation continuity
+### Agent State Structures (TypedDict-based)
 
-### Multi-Agent State Management
-- **PlanState**: Top-level state with question, plan, execution_results, and final_answer
-- **ExecutorState**: Execution-level state with plan tracking and results collection
-- **Memory Integration**: Semantic search with metadata organization (time, location, person, tags)
+**IndexingState** (src/agents/indexing/state.py):
+- `pdf_name`: Document name being indexed
+- `pdf_path`: Full path to PDF file
+- `data`: Parsed document data organized by chapters
+- `structure`: Document structure (agenda) with chapter titles and page ranges
+- `chunks`: Text chunks for vector DB
+- `summaries`: Chapter-wise summaries
+- `index_path`: Path to built vector database
+- `brief_summary`: Short summary for document registry
+- `is_complete`: Processing completion flag
+- `error`: Error message if processing fails
+
+**AnswerState** (src/agents/answer/state.py):
+- `user_query`: User's question
+- `current_doc`: Document name context
+- `needs_retrieval`: Boolean flag for retrieval decision
+- `analysis_reason`: Reason for retrieval decision
+- `retrieved_context`: Context from RetrievalAgent
+- `final_answer`: Generated answer
+- `is_complete`: Completion flag
+
+**RetrievalState** (src/agents/retrieval/state.py):
+- `query`: Search query
+- `doc_name`: Document to search
+- `k`: Number of results to return
+- `retrieved_chunks`: List of relevant text chunks
+- `context`: Formatted context string
 
 ### UI Session Management
 - **SessionManager State**: Comprehensive JSON file-based storage with backup rotation and import/export
@@ -192,8 +285,24 @@ Final Answer Generation → Response to User
 ### Document Processing Stages
 1. **Content Extraction**: PDF-to-image conversion → OCR → Raw text extraction
 2. **Structure Analysis**: Basic info extraction → Chapter/agenda detection → Content chunking
-3. **Intelligent Processing**: Chapter-wise summarization → Content refactoring → Vector embedding
+3. **Intelligent Processing**: Chapter-wise summarization → Content refactoring → Vector embedding (parallel processing)
 4. **Storage & Export**: Vector DB building → Summary file generation (MD/PDF) → Cache management
+5. **Registration**: Document metadata stored in DocumentRegistry
+
+### Data Storage Organization (IMPORTANT)
+JSON files are now organized by document for easier management:
+```
+data/json_data/{doc_name}/
+├── data.json           # Original extracted content
+├── structure.json      # Document structure (agenda)
+└── chunks.json         # Text chunks for vector DB
+```
+
+**Benefits:**
+- All JSON files for a document in one folder
+- Easy deletion: remove entire folder without missing files
+- Clear organization for finding specific document data
+- Aligns with vector DB and output directory structure
 
 ### Memory System Integration
 - **Intent Recognition**: Automatic classification of storage vs. retrieval requests
@@ -304,16 +413,23 @@ GET    /health                                   - Application health status mon
 ## Development Patterns
 
 ### Adding New Agents
-1. Create agent class inheriting from GraphBase
-2. Implement build_graph() and core processing methods
-3. Add agent configuration to AgentCard in settings.py
-4. Update ExecutorAgent._create_agent() to handle the new agent type
+1. Create agent directory under `src/agents/new_agent/`
+2. Create `state.py` with TypedDict definition for agent state
+3. Create `prompts.py` with agent-specific system prompts and role constants
+4. Create `tools_config.py` if the agent uses tools (define tool configurations)
+5. Create `agent.py` inheriting from AgentBase, implement `build_graph()` method
+6. Create `nodes.py` with node function implementations
+7. Create `tools.py` and `utils.py` as needed
+8. Create `__init__.py` to export agent class and state
+9. Follow dependency injection pattern: tools/utils take agent instance in constructor
+10. Import prompts from local `prompts.py` using `from .prompts import YourRole`
 
-### Extending Reader Functionality
-1. Inherit from ReaderBase for common functionality
-2. Implement provider-specific content extraction
-3. Override get_data_from_json_dict() if needed for custom processing
-4. Add to main.py routing logic
+### Extending Document Processing
+1. Modify IndexingAgent workflow by adding new nodes in `src/agents/indexing/nodes.py`
+2. Update IndexingState in `state.py` if new fields are needed
+3. Add new tools in `tools.py` following existing patterns
+4. Update DocumentRegistry schema if new metadata is tracked
+5. Add corresponding tests in `tests/test_indexing_agent.py`
 
 ### LLM Provider Integration
 1. Extend LLMBase with provider-specific client initialization
@@ -373,10 +489,13 @@ python main.py
 ```
 
 ### Input Routing Logic
-- **PDF Processing**: Input ending with `.pdf` → PDFReader with sync processing
-- **URL Processing**: Any other input → WebReader with async processing (`asyncio.run()`)
-- **File Detection**: Lists available PDF files from `data/pdf/` directory
-- **Auto-save**: PDF processing includes `save_data_flag=True` by default
+- **PDF Processing**: User selects from available PDFs → IndexingAgent (if not indexed) → AnswerAgent
+- **Document Selection**: Lists indexed documents from DocumentRegistry
+- **Interactive Options**:
+  - `i` - Index new document
+  - `m` - Manage documents (view/delete)
+  - `0` - General chat mode (no document context)
+- **Chat Commands**: 'clear' to reset history, 'quit'/'exit' to end session
 
 ## Testing and Debugging
 
@@ -384,16 +503,22 @@ The codebase includes comprehensive logging with module-level loggers. Set `LOGG
 
 **Standalone Testing:**
 ```bash
-# Memory agent testing
-python src/chat/memory_agent.py
+# Agent testing
+python tests/test_indexing_agent.py     # Test PDF indexing workflow
+python tests/test_answer_agent.py       # Test Q&A workflow
+python tests/test_retrieval_agent.py    # Test retrieval workflow
 
-# Multi-agent system testing
-python src/chat/chat.py
+# LLM testing
+python tests/test_llm_client.py         # Test LLM client
+python tests/test_llm_providers.py      # Test provider switching
+python tests/test_history_compression.py # Test conversation history compression
 
-# Individual reader testing (via import and initialization)
-python -c "from src.readers.pdf import PDFReader; PDFReader()"
-python -c "from src.readers.web import WebReader; WebReader()"
+# Vector DB testing
+python tests/test_vector_db_content.py  # Test FAISS vector database
 
+# Individual agent initialization
+python -c "from src.agents.indexing import IndexingAgent; agent = IndexingAgent(); print('OK')"
+python -c "from src.agents.answer import AnswerAgent; agent = AnswerAgent(); print('OK')"
 ```
 
 **UI Testing:**
@@ -448,30 +573,73 @@ grep -A 10 "MCP_CONFIG" src/config/settings.py
 ## Code Organization Principles
 
 ### Module Hierarchy
-- **src/config/**: Configuration management (settings.py, constants.py, app_settings.py)
-- **src/core/**: Core functionality (llm/, processing/, vector_db/)
-- **src/readers/**: Document processing (base.py, pdf.py, web.py)
-- **src/chat/**: Multi-agent system (chat.py, memory_agent.py)
-- **src/services/**: External service integration (mcp_client.py)
-- **src/utils/**: Utility functions (helpers.py, validators.py, error_handler.py)
-- **src/ui/**: FastAPI web system (backend/, templates/, static/)
+- **src/config/**: Configuration management
+  - `settings.py`: Main settings and LLM config
+  - `constants.py`: Organized constants classes (MCPConstants, ProcessingLimits, PathConstants, etc.)
+  - `prompts/`: Multi-agent coordination prompts only
+    - `agent_prompts.py`: Prompts for PlanAgent, ExecutorAgent, MemoryAgent
+  - `tools/`: Empty directory (legacy, kept for reference)
+- **src/agents/**: Multi-agent system (fully modularized)
+  - `base.py`: AgentBase class with LLM management
+  - `common/`: Shared utilities and prompts
+    - `prompts.py`: Common prompts used across multiple agents
+  - `indexing/`: IndexingAgent (self-contained module)
+    - `prompts.py`: IndexingAgent-specific prompts
+    - `agent.py`, `nodes.py`, `tools.py`, `utils.py`, `state.py`, `doc_registry.py`
+  - `answer/`: AnswerAgent (self-contained module)
+    - `prompts.py`: AnswerAgent-specific prompts
+    - `tools_config.py`: AnswerAgent tool configurations
+    - `agent.py`, `nodes.py`, `tools.py`, `utils.py`, `state.py`
+  - `retrieval/`: RetrievalAgent (self-contained module)
+    - `prompts.py`: RetrievalAgent-specific prompts
+    - `tools_config.py`: RetrievalAgent tool configurations
+    - `agent.py`, `nodes.py`, `tools.py`, `utils.py`, `state.py`
+- **src/core/**: Core functionality
+  - `llm/`: LLM abstraction (client.py, providers.py, history.py)
+  - `processing/`: Document processing utilities (index_document.py, manage_documents.py, parallel_processor.py, text_splitter.py)
+  - `vector_db/`: FAISS vector database client
+- **src/ui/**: FastAPI web system
+  - `backend/app.py`: FastAPI application
+  - `backend/api/v1/`: API endpoints (pdf.py, chat.py, data.py, chapters.py, structure.py)
+  - `backend/services/`: Service layer (chat_service.py, data_service.py, session_service.py)
+  - `templates/`: Jinja2 HTML templates
+  - `static/`: CSS and JavaScript files
+- **src/services/**: External services (MCP client)
+- **src/utils/**: Utility functions
+- **tests/**: Comprehensive test suite
 
 ### Key Files to Understand
-- **main.py**: CLI entry point with PDF/URL routing logic
-- **src/readers/base.py**: ReaderBase class with common document processing
-- **src/chat/chat.py**: Multi-agent system with PlanAgent/ExecutorAgent
-- **src/config/settings.py**: Configuration hub with LLM_CONFIG, SYSTEM_PROMPT_CONFIG, MCP_CONFIG
-- **src/ui/backend/app.py**: FastAPI application setup and routing
-- **src/ui/backend/api/v1/chapters.py**: Chapter information API endpoint
-- **src/ui/backend/services/data_service.py**: Data management service layer
+- **main.py**: CLI entry point using AnswerAgent
+- **src/agents/base.py**: AgentBase class providing LLM instances and graph building
+- **src/agents/indexing/agent.py**: IndexingAgent with full document processing workflow
+- **src/agents/answer/agent.py**: AnswerAgent with intent analysis and retrieval coordination
+- **src/agents/indexing/doc_registry.py**: DocumentRegistry for metadata management
+- **src/config/settings.py**: Configuration hub with LLM_CONFIG, MCP_CONFIG
+- **src/core/llm/client.py**: LLMBase with provider management and history
+- **src/core/processing/index_document.py**: Document indexing entry point
+- **src/ui/backend/app.py**: FastAPI application setup
+- **src/ui/backend/services/chat_service.py**: Chat service using AnswerAgent
+- **src/ui/backend/services/data_service.py**: Data management service
 
 ### State Management Pattern
-The multi-agent system uses LangGraph's StateGraph with typed state classes:
-- PlanState (PlanAgent level): question, plan, execution_results, is_complete, final_answer
-- ExecutorState (ExecutorAgent level): plan, current_plan_index, results, formatted_inputs
-- State flows through graph nodes with Command objects controlling routing
+The agent system uses LangGraph's StateGraph with TypedDict state definitions:
+- Each agent has its own state TypedDict (IndexingState, AnswerState, RetrievalState)
+- States flow through graph nodes defined in `nodes.py` modules
+- Conditional routing based on state fields (e.g., `needs_retrieval` in AnswerAgent)
+- Tools and utilities injected into agents via dependency injection pattern
+
+### Agent Architecture Pattern
+Each agent follows a consistent, self-contained structure:
+- `agent.py`: Main agent class inheriting from AgentBase, builds LangGraph workflow
+- `state.py`: TypedDict definition for agent state
+- `nodes.py`: Graph node implementations (entry points for workflow steps)
+- `tools.py`: Tool functions that agents can use (if applicable)
+- `utils.py`: Helper utilities for the agent
+- `prompts.py`: Agent-specific system prompts and role definitions
+- `tools_config.py`: Tool configurations with descriptions and parameters (for agents with tools)
 
 ### Async Patterns
 - All LLM calls are async: use `await` or `asyncio.run()` when calling from sync context
-- Graph execution: `async for event in self.graph.astream(...)` pattern
-- Reader main methods: PDFReader.main() is sync, WebReader.main() is async
+- Graph execution: `await self.graph.ainvoke(state)` or `async for event in self.graph.astream(state)`
+- Main entry point (main.py) uses `asyncio.run(main_async())` for async support
+- UI backend uses async/await throughout (FastAPI is async-native)
