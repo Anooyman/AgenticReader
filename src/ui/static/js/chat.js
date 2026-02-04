@@ -31,7 +31,10 @@ class ChatApp {
         this.isRendering = false;  // 是否正在渲染
         this.initialRenderCount = 1;  // 初始渲染页数（仅1页加快加载）
         this.renderBuffer = 2;  // 可见区域前后缓冲页数
-        
+
+        // 新内容计数
+        this.newContentCount = 0;  // 用户不在底部时的新内容数量
+
         this.init();
     }
 
@@ -56,6 +59,97 @@ class ChatApp {
                 console.error('Failed to parse docs parameter:', e);
                 this.selectedDocs = null;
             }
+        }
+    }
+
+    /**
+     * 检查消息容器是否在底部附近
+     * @returns {boolean} 如果距离底部小于阈值，返回 true
+     */
+    isNearBottom() {
+        const container = document.getElementById('messages');
+        if (!container) return true;
+
+        const threshold = 100; // 距离底部100px以内视为"在底部"
+        const scrollBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+        return scrollBottom < threshold;
+    }
+
+    /**
+     * 智能滚动到底部（仅在用户已经在底部时滚动）
+     */
+    smartScrollToBottom() {
+        if (this.isNearBottom()) {
+            const container = document.getElementById('messages');
+            if (container) {
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+        // 更新按钮状态
+        this.updateScrollToBottomButton();
+    }
+
+    /**
+     * 更新导航按钮的显示状态
+     */
+    updateScrollToBottomButton() {
+        const container = document.getElementById('scroll-buttons-container');
+        const btn = document.getElementById('scroll-to-bottom-btn');
+        const badge = document.getElementById('new-message-badge');
+        const btnText = btn ? btn.querySelector('.btn-text') : null;
+
+        if (!container || !btn) return;
+
+        // 如果用户不在底部，显示按钮；否则隐藏
+        if (!this.isNearBottom()) {
+            container.style.display = 'flex';
+
+            // 根据是否有新内容更新显示
+            if (this.newContentCount > 0) {
+                // 有新内容：显示提醒文本和徽章
+                if (btnText) btnText.textContent = '有新内容，点击查看';
+                if (badge) {
+                    badge.textContent = this.newContentCount;
+                    badge.style.display = 'flex';
+                }
+            } else {
+                // 无新内容：显示默认文本
+                if (btnText) btnText.textContent = '查看最新内容';
+                if (badge) badge.style.display = 'none';
+            }
+        } else {
+            container.style.display = 'none';
+            // 用户回到底部，重置计数和动画
+            this.newContentCount = 0;
+            btn.classList.remove('has-new-content');
+            if (btnText) btnText.textContent = '查看最新内容';
+            if (badge) badge.style.display = 'none';
+        }
+    }
+
+    /**
+     * 触发新内容提醒（当用户不在底部且有新内容时）
+     */
+    notifyNewContent() {
+        if (!this.isNearBottom()) {
+            this.newContentCount++;
+
+            const btn = document.getElementById('scroll-to-bottom-btn');
+            const badge = document.getElementById('new-message-badge');
+
+            if (btn) {
+                // 添加脉冲动画类
+                btn.classList.add('has-new-content');
+
+                // 更新徽章
+                if (badge) {
+                    badge.textContent = this.newContentCount;
+                    badge.style.display = 'flex';
+                }
+            }
+
+            // 确保按钮可见
+            this.updateScrollToBottomButton();
         }
     }
 
@@ -119,6 +213,71 @@ class ChatApp {
 
         // Resizer拖动功能
         this.setupResizer();
+
+        // 滚动到顶部按钮
+        const scrollToTopBtn = document.getElementById('scroll-to-top-btn');
+        if (scrollToTopBtn) {
+            scrollToTopBtn.addEventListener('click', () => {
+                const messagesDiv = document.getElementById('messages');
+                if (messagesDiv) {
+                    messagesDiv.scrollTo({
+                        top: 0,
+                        behavior: 'smooth'
+                    });
+                }
+            });
+        }
+
+        // 回到底部按钮（跳转到最新助手回复）
+        const scrollToBottomBtn = document.getElementById('scroll-to-bottom-btn');
+        if (scrollToBottomBtn) {
+            scrollToBottomBtn.addEventListener('click', () => {
+                const messagesDiv = document.getElementById('messages');
+                if (messagesDiv) {
+                    // 重置新内容计数
+                    this.newContentCount = 0;
+
+                    // 找到最后一条助手消息
+                    const assistantMessages = messagesDiv.querySelectorAll('.message-assistant');
+                    const lastAssistantMessage = assistantMessages[assistantMessages.length - 1];
+
+                    if (lastAssistantMessage) {
+                        // 滚动到最后一条助手消息的顶部
+                        lastAssistantMessage.scrollIntoView({
+                            behavior: 'smooth',
+                            block: 'start'  // 将消息顶部对齐到容器顶部
+                        });
+                    } else {
+                        // 如果没有助手消息，滚动到底部
+                        messagesDiv.scrollTo({
+                            top: messagesDiv.scrollHeight,
+                            behavior: 'smooth'
+                        });
+                    }
+
+                    // 移除提醒动画
+                    scrollToBottomBtn.classList.remove('has-new-content');
+
+                    // 重置文本
+                    const btnText = scrollToBottomBtn.querySelector('.btn-text');
+                    if (btnText) btnText.textContent = '查看最新内容';
+
+                    // 隐藏徽章
+                    const badge = document.getElementById('new-message-badge');
+                    if (badge) {
+                        badge.style.display = 'none';
+                    }
+                }
+            });
+        }
+
+        // 监听消息容器滚动，显示/隐藏导航按钮
+        const messagesDiv = document.getElementById('messages');
+        if (messagesDiv) {
+            messagesDiv.addEventListener('scroll', () => {
+                this.updateScrollToBottomButton();
+            });
+        }
     }
 
     setupResizer() {
@@ -397,7 +556,14 @@ class ChatApp {
         // 创建并添加消息元素
         const messageElement = this.createMessageElement(role, content, references, messageTimestamp);
         messagesDiv.appendChild(messageElement);
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+        // 如果是助手消息且用户不在底部，触发新内容提醒
+        if (role === 'assistant') {
+            this.notifyNewContent();
+        }
+
+        // 智能滚动到底部（仅在用户已经在底部时滚动）
+        this.smartScrollToBottom();
     }
 
     processPageReferences(html) {
@@ -812,7 +978,9 @@ class ChatApp {
 
         messageDiv.appendChild(bubble);
         messagesDiv.appendChild(messageDiv);
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+        // 智能滚动到底部（仅在用户已经在底部时滚动）
+        this.smartScrollToBottom();
 
         this.loadingMessageId = 'loading-indicator';
         this.parallelDocsState = {};  // 用于跟踪并行文档的状态
@@ -962,9 +1130,8 @@ class ChatApp {
         // 对于单文档检索（agent=retrieval），也显示节点流程
         this.updateNodeFlow(progressData, agent, stageConfig);
 
-        // Auto-scroll to bottom
-        const messagesContainer = document.getElementById('messages');
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        // 智能滚动到底部（仅在用户已经在底部时滚动）
+        this.smartScrollToBottom();
     }
 
     updateNodeFlow(progressData, agent, stageConfig) {
@@ -1060,9 +1227,8 @@ class ChatApp {
         // 重置状态
         this.parallelDocsState = {};
 
-        // 滚动到底部
-        const messagesContainer = document.getElementById('messages');
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        // 智能滚动到底部（仅在用户已经在底部时滚动）
+        this.smartScrollToBottom();
     }
 
     updateParallelDocsProgress(progressData) {
@@ -1262,12 +1428,8 @@ class ChatApp {
             `;
         });
 
-        // 只在第一次创建时滚动到底部，避免频繁滚动打断用户查看
-        if (!this._hasScrolledToParallel) {
-            const messagesContainer = document.getElementById('messages');
-            messagesContainer.scrollTop = messagesContainer.scrollHeight;
-            this._hasScrolledToParallel = true;
-        }
+        // 智能滚动到底部（仅在用户已经在底部时滚动）
+        this.smartScrollToBottom();
     }
 
     renderRetrievalNodeFlow(progressData, workflow, stageConfig) {
@@ -1355,12 +1517,8 @@ class ChatApp {
             `;
         }
 
-        // 重置滚动标记
-        this._hasScrolledToParallel = false;
-
-        // 滚动到底部
-        const messagesContainer = document.getElementById('messages');
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        // 智能滚动到底部（仅在用户已经在底部时滚动）
+        this.smartScrollToBottom();
     }
 
     removeLoadingIndicator() {

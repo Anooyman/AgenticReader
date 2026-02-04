@@ -438,14 +438,21 @@ async def _index_pdf_background(task_id: str, filename: str, pdf_path: Path):
     """
     try:
         from src.agents.indexing import IndexingAgent
+        from .config import load_config
 
         doc_name_base = filename.replace('.pdf', '') if filename.endswith('.pdf') else filename
 
         # 更新任务进度
         task_manager.update_task(task_id, progress=10, status="running")
 
+        # 从配置加载 provider 和 pdf_preset
+        config = load_config()
+        provider = config.get("provider", "openai")
+        pdf_preset = config.get("pdf_preset", "high")
+        print(f"📌 使用配置: provider={provider}, pdf_preset={pdf_preset}")
+
         # 创建索引agent
-        indexing_agent = IndexingAgent()
+        indexing_agent = IndexingAgent(provider=provider, pdf_preset=pdf_preset)
         task_manager.update_task(task_id, progress=20)
 
         print(f"🔄 后台索引任务开始: {filename} (task_id: {task_id})")

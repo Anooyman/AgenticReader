@@ -1,12 +1,13 @@
 """文档结构管理 API"""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from typing import Dict, Any, List
 from pydantic import BaseModel
 import json
 from pathlib import Path
 
 from ...config import JSON_DATA_DIR, PDF_DIR
+from ...services.task_service import task_manager
 
 router = APIRouter()
 
@@ -159,12 +160,65 @@ async def update_structure(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _rebuild_background(task_id: str, doc_name: str, pdf_path: Path):
+    """
+    后台重建任务
+
+    Args:
+        task_id: 任务ID
+        doc_name: 文档名称（不带.pdf后缀）
+        pdf_path: PDF文件路径
+    """
+    try:
+        from src.agents.indexing import IndexingAgent
+        from .config import load_config
+
+        # 更新任务进度
+        task_manager.update_task(task_id, progress=10, status="running")
+
+        # 从配置加载 provider 和 pdf_preset
+        config = load_config()
+        provider = config.get("provider", "openai")
+        pdf_preset = config.get("pdf_preset", "high")
+        print(f"📌 使用配置: provider={provider}, pdf_preset={pdf_preset}")
+
+        # 创建索引agent
+        indexing_agent = IndexingAgent(provider=provider, pdf_preset=pdf_preset)
+        task_manager.update_task(task_id, progress=20)
+
+        print(f"🔄 后台重建任务开始: {doc_name} (task_id: {task_id})")
+
+        # 执行重建
+        result = await indexing_agent.rebuild_from_structure(
+            doc_name=doc_name,
+            doc_path=str(pdf_path)
+        )
+
+        task_manager.update_task(task_id, progress=90)
+
+        if result.get("success"):
+            task_manager.complete_task(task_id, success=True)
+            print(f"✅ 后台重建任务完成: {doc_name}")
+        else:
+            error_msg = result.get("error", "未知错误")
+            task_manager.complete_task(task_id, success=False, error=error_msg)
+            print(f"❌ 后台重建任务失败: {doc_name}, 错误: {error_msg}")
+
+    except Exception as e:
+        error_msg = str(e)
+        task_manager.complete_task(task_id, success=False, error=error_msg)
+        print(f"❌ 后台重建任务异常: {doc_name}, 错误: {error_msg}")
+        import traceback
+        traceback.print_exc()
+
+
 @router.post("/{doc_name}/rebuild")
 async def rebuild_from_structure(
-    doc_name: str
+    doc_name: str,
+    background_tasks: BackgroundTasks
 ) -> Dict[str, Any]:
     """
-    基于更新后的 structure 全面重建文档数据
+    基于更新后的 structure 启动后台重建任务
 
     保持不变的文件：
     - structure.json: 手动编辑的结构
@@ -179,13 +233,12 @@ async def rebuild_from_structure(
 
     Args:
         doc_name: 文档名称
+        background_tasks: FastAPI后台任务
 
     Returns:
-        重建结果
+        任务信息
     """
     try:
-        from src.agents.indexing import IndexingAgent
-
         # Strip .pdf extension if present to get base name for folder lookup
         doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
 
@@ -205,38 +258,30 @@ async def rebuild_from_structure(
                 detail=f"PDF 文件不存在: {doc_name}.pdf"
             )
 
-        print(f"🔄 开始全面重建文档数据: {doc_name}")
-        print(f"   重建内容: chunks + summaries + vectordb + brief_summary")
-
-        # 初始化 IndexingAgent
-        indexing_agent = IndexingAgent()
-
-        # 调用重建方法（全面重建）
-        result = await indexing_agent.rebuild_from_structure(
-            doc_name=doc_name_base,
-            doc_path=str(pdf_path)
+        # 创建后台任务
+        task_id = task_manager.create_task(
+            task_type="structure_rebuild",
+            filename=f"{doc_name_base}.pdf",
+            doc_name=doc_name_base
         )
 
-        if result.get("success"):
-            print(f"✅ 重建完成: {doc_name}")
-            return {
-                "success": True,
-                "message": "文档数据重建完成",
-                "doc_name": doc_name,
-                "details": result
-            }
-        else:
-            error_msg = result.get("error", "未知错误")
-            print(f"❌ 重建失败: {error_msg}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"重建失败: {error_msg}"
-            )
+        # 添加后台任务
+        background_tasks.add_task(_rebuild_background, task_id, doc_name_base, pdf_path)
+
+        print(f"📋 重建任务已创建: {doc_name} (task_id: {task_id})")
+
+        return {
+            "success": True,
+            "status": "started",
+            "task_id": task_id,
+            "doc_name": doc_name,
+            "message": f"重建任务已启动，将在后台执行"
+        }
 
     except HTTPException:
         raise
     except Exception as e:
-        print(f"❌ 重建失败: {e}")
+        print(f"❌ 创建重建任务失败: {e}")
         import traceback
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))

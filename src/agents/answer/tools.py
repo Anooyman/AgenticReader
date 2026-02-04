@@ -47,9 +47,10 @@ class AnswerTools:
                 from ..retrieval import RetrievalAgent
                 self.agent.retrieval_agents[doc_name] = RetrievalAgent(
                     doc_name=doc_name,
+                    provider=self.agent.llm.provider,  # 从 AnswerAgent 继承 provider
                     progress_callback=self.agent.progress_callback  # 传递进度回调
                 )
-                logger.info(f"✅ [Tool:call_retrieval] 为文档 '{doc_name}' 创建新的 Retrieval Agent")
+                logger.info(f"✅ [Tool:call_retrieval] 为文档 '{doc_name}' 创建新的 Retrieval Agent (provider={self.agent.llm.provider})")
                 logger.info(f"📊 [Tool:call_retrieval] 当前管理的文档数: {len(self.agent.retrieval_agents)}")
             else:
                 logger.info(f"♻️  [Tool:call_retrieval] 复用文档 '{doc_name}' 的 Retrieval Agent")

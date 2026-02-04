@@ -129,6 +129,30 @@ class RetrievalTools:
             # 返回标准格式
             return create_content_response("search_by_context", context_data)
 
+        except ValueError as e:
+            # Embedding维度不匹配等配置错误
+            error_msg = str(e)
+            if "Embedding维度不匹配" in error_msg or "维度" in error_msg:
+                logger.error(f"❌ [Tool:search_by_context] {error_msg}")
+                # 向用户返回友好的错误提示
+                error_info = [{
+                    "content": (
+                        "⚠️ 检索失败：Embedding模型配置不匹配\n\n"
+                        "问题：当前使用的embedding模型与索引时使用的模型不同，导致向量维度不匹配。\n\n"
+                        "解决方案：\n"
+                        "1. 检查并恢复索引时使用的embedding模型配置\n"
+                        "2. 或者删除旧的向量数据库并重新索引文档\n\n"
+                        f"详细错误信息：\n{error_msg}"
+                    ),
+                    "title": "系统错误",
+                    "pages": [],
+                    "raw_data": {}
+                }]
+                return create_content_response("search_by_context", error_info)
+            else:
+                logger.error(f"❌ [Tool:search_by_context] 配置错误: {e}", exc_info=True)
+                return create_content_response("search_by_context", [])
+
         except Exception as e:
             logger.error(f"❌ [Tool:search_by_context] 通过上下文检索数据时出错: {e}", exc_info=True)
             # 错误时返回空结果的标准格式

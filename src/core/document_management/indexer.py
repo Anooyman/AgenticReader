@@ -104,7 +104,9 @@ def check_already_indexed(doc_name: str) -> bool:
 
 async def index_pdf_document(
     pdf_name: str,
-    force_reindex: bool = False
+    force_reindex: bool = False,
+    provider: str = 'openai',
+    pdf_preset: str = 'high'
 ) -> bool:
     """
     索引 PDF 文档
@@ -112,6 +114,8 @@ async def index_pdf_document(
     Args:
         pdf_name: PDF 文件名（包含 .pdf 扩展名）
         force_reindex: 是否强制重新索引
+        provider: LLM 提供商 ('azure', 'openai', 'ollama', 'gemini')
+        pdf_preset: PDF 转图片质量预设 ('fast', 'balanced', 'high', 'ultra')
 
     Returns:
         bool: 是否成功
@@ -147,7 +151,9 @@ async def index_pdf_document(
     try:
         # 初始化 IndexingAgent
         logger.info("\n🔧 初始化 IndexingAgent...")
-        indexing_agent = IndexingAgent()
+        logger.info(f"   Provider: {provider}")
+        logger.info(f"   PDF Preset: {pdf_preset}")
+        indexing_agent = IndexingAgent(provider=provider, pdf_preset=pdf_preset)
         logger.info("✅ IndexingAgent 初始化完成")
 
         # 调用 graph 进行索引
