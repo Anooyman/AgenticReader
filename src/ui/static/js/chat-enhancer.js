@@ -9,7 +9,8 @@ class ChatUIEnhancer {
     }
 
     init() {
-        this.addScrollToTopButton();
+        // 禁用滚动到顶部按钮（已移至主界面）
+        // this.addScrollToTopButton();
         this.enhanceCodeBlocks();
         this.addMessageHoverEffects();
     }

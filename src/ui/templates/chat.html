@@ -705,6 +705,129 @@
         color: var(--border-light);
         font-size: 1.25rem;
     }
+
+    /* 快捷导航按钮容器 */
+    .scroll-buttons-container {
+        margin-top: 0.75rem;
+        display: flex;
+        justify-content: center;
+        gap: 0.75rem;
+        animation: slideDown 0.3s ease;
+    }
+
+    /* 导航按钮基础样式 */
+    .scroll-nav-btn {
+        position: relative;
+        padding: 0.625rem 1rem;
+        border-radius: 2rem;
+        border: none;
+        color: white;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.875rem;
+        font-weight: 600;
+    }
+
+    /* 回到顶部按钮样式 */
+    .scroll-to-top {
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+    }
+
+    .scroll-to-top:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(99, 102, 241, 0.5);
+    }
+
+    /* 回到底部按钮样式 */
+    .scroll-to-bottom {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+
+    .scroll-to-bottom:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 16px rgba(102, 126, 234, 0.5);
+    }
+
+    .scroll-nav-btn:active {
+        transform: translateY(0);
+    }
+
+    .scroll-nav-btn .btn-icon {
+        font-size: 1rem;
+    }
+
+    .scroll-nav-btn .btn-text {
+        line-height: 1;
+    }
+
+    /* 新消息徽章 */
+    .new-message-badge {
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        min-width: 20px;
+        height: 20px;
+        padding: 0 6px;
+        border-radius: 10px;
+        background: #ef4444;
+        color: white;
+        font-size: 0.75rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
+        animation: pulseBadge 1.5s infinite;
+    }
+
+    /* 新内容提醒动画 */
+    .scroll-to-bottom.has-new-content {
+        animation: pulseButton 1.5s infinite;
+    }
+
+    /* 有新内容时箭头弹跳 */
+    .scroll-to-bottom.has-new-content .btn-icon {
+        animation: bounceIcon 2s infinite;
+    }
+
+    @keyframes bounceIcon {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-3px); }
+    }
+
+    @keyframes slideDown {
+        from {
+            opacity: 0;
+            transform: translateY(-10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @keyframes pulseButton {
+        0%, 100% {
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        50% {
+            box-shadow: 0 4px 20px rgba(102, 126, 234, 0.8), 0 0 30px rgba(102, 126, 234, 0.4);
+        }
+    }
+
+    @keyframes pulseBadge {
+        0%, 100% {
+            transform: scale(1);
+        }
+        50% {
+            transform: scale(1.1);
+        }
+    }
 </style>
 {% endblock %}
 
@@ -736,6 +859,20 @@
                 <textarea id="message-input" class="form-control" placeholder="请输入问题... (Ctrl+Enter 发送)" disabled></textarea>
                 <button id="send-btn" class="btn btn-primary" disabled>📤</button>
             </div>
+
+            <!-- 快捷导航按钮 -->
+            <div id="scroll-buttons-container" class="scroll-buttons-container" style="display: none;">
+                <button id="scroll-to-top-btn" class="scroll-nav-btn scroll-to-top" title="回到最早消息">
+                    <span class="btn-icon">⬆</span>
+                    <span class="btn-text">最早消息</span>
+                </button>
+                <button id="scroll-to-bottom-btn" class="scroll-nav-btn scroll-to-bottom" title="回到最新内容">
+                    <span class="btn-icon">⬇</span>
+                    <span class="btn-text">查看最新内容</span>
+                    <span id="new-message-badge" class="new-message-badge" style="display: none;">1</span>
+                </button>
+            </div>
+
             <div style="margin-top: 0.5rem; font-size: 0.875rem; color: var(--text-muted);">
                 <span id="status">未连接</span>
             </div>

@@ -75,7 +75,41 @@ class VectorDBClient:
             FAISS: 加载的向量数据库对象。
         """
         logger.info(f"加载本地向量数据库: {self.db_path}")
-        self.vector_db = FAISS.load_local(self.db_path, self.embedding_model, allow_dangerous_deserialization=True)
+        try:
+            self.vector_db = FAISS.load_local(self.db_path, self.embedding_model, allow_dangerous_deserialization=True)
+
+            # 验证embedding维度是否匹配
+            if hasattr(self.vector_db, 'index') and hasattr(self.vector_db.index, 'd'):
+                stored_dim = self.vector_db.index.d
+                # 获取当前embedding模型的维度
+                test_embedding = self.embedding_model.embed_query("test")
+                current_dim = len(test_embedding)
+
+                if stored_dim != current_dim:
+                    error_msg = (
+                        f"❌ Embedding维度不匹配！\n"
+                        f"向量数据库维度: {stored_dim}\n"
+                        f"当前Embedding模型维度: {current_dim}\n"
+                        f"数据库路径: {self.db_path}\n\n"
+                        f"可能原因：\n"
+                        f"1. 索引时使用的embedding模型与当前配置的模型不同\n"
+                        f"2. embedding模型配置已更改\n\n"
+                        f"解决方案：\n"
+                        f"1. 使用与索引时相同的embedding模型配置\n"
+                        f"2. 删除旧的向量数据库并重新索引文档\n"
+                        f"   删除路径: {self.db_path}\n"
+                        f"   重新运行索引命令"
+                    )
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+
+                logger.info(f"✅ Embedding维度验证通过: {current_dim}")
+        except ValueError:
+            # 重新抛出维度不匹配错误
+            raise
+        except Exception as e:
+            logger.error(f"❌ 加载向量数据库失败: {e}")
+            raise
 
     def add_data(self, vector_db, data_docs):
         """
@@ -290,11 +324,52 @@ class VectorDBClient:
             logger.info(f"过滤检索完成，返回 {len(results)} 个结果")
             return results
 
+        except AssertionError as e:
+            # FAISS 维度不匹配错误
+            if hasattr(self.vector_db, 'index') and hasattr(self.vector_db.index, 'd'):
+                stored_dim = self.vector_db.index.d
+                test_embedding = self.embedding_model.embed_query("test")
+                current_dim = len(test_embedding)
+
+                error_msg = (
+                    f"❌ Embedding维度不匹配！\n"
+                    f"向量数据库维度: {stored_dim}\n"
+                    f"当前Embedding模型维度: {current_dim}\n"
+                    f"数据库路径: {self.db_path}\n\n"
+                    f"请删除旧的向量数据库并重新索引文档，或使用与索引时相同的embedding模型。"
+                )
+                logger.error(error_msg)
+                raise ValueError(error_msg) from e
+            else:
+                raise
+
         except Exception as e:
             logger.error(f"元数据过滤检索失败: {e}")
-            # 失败时执行普通检索作为备选
+            # 如果是维度不匹配等严重错误，直接抛出
+            if isinstance(e, (ValueError, AssertionError)):
+                raise
+            # 其他错误时执行普通检索作为备选
             logger.info("执行备选普通检索")
-            return self.vector_db.similarity_search_with_score(query, k=k)
+            try:
+                return self.vector_db.similarity_search_with_score(query, k=k)
+            except AssertionError as ae:
+                # 备选检索也失败，说明是维度问题
+                if hasattr(self.vector_db, 'index') and hasattr(self.vector_db.index, 'd'):
+                    stored_dim = self.vector_db.index.d
+                    test_embedding = self.embedding_model.embed_query("test")
+                    current_dim = len(test_embedding)
+
+                    error_msg = (
+                        f"❌ Embedding维度不匹配！\n"
+                        f"向量数据库维度: {stored_dim}\n"
+                        f"当前Embedding模型维度: {current_dim}\n"
+                        f"数据库路径: {self.db_path}\n\n"
+                        f"请删除旧的向量数据库并重新索引文档，或使用与索引时相同的embedding模型。"
+                    )
+                    logger.error(error_msg)
+                    raise ValueError(error_msg) from ae
+                else:
+                    raise
 
     def search_by_pdf_name(
         self,

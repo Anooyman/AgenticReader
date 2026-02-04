@@ -210,9 +210,10 @@ class ParallelRetrievalCoordinator:
             # 传递 progress_callback，使得 RetrievalAgent 的进度可以实时上报
             self.answer_agent.retrieval_agents[doc_name] = RetrievalAgent(
                 doc_name=doc_name,
+                provider=self.answer_agent.llm.provider,  # 从 AnswerAgent 继承 provider
                 progress_callback=self.answer_agent.progress_callback  # 关键：传递回调
             )
-            logger.info(f"✨ [ParallelCoordinator] 为文档 '{doc_name}' 创建新的 Retrieval Agent（已绑定进度回调）")
+            logger.info(f"✨ [ParallelCoordinator] 为文档 '{doc_name}' 创建新的 Retrieval Agent (provider={self.answer_agent.llm.provider}，已绑定进度回调）")
 
         retrieval_agent = self.answer_agent.retrieval_agents[doc_name]
 

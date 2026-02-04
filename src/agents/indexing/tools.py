@@ -550,6 +550,126 @@ class IndexingTools:
 
         return results
 
+    async def _prepare_rebuild_state(
+        self,
+        doc_name: str,
+        doc_path: str
+    ) -> Dict[str, Any]:
+        """
+        准备重建的初始状态
+
+        1. 加载 data.json 和 structure.json
+        2. 删除旧的生成文件（chunks, summaries, vector_db）
+        3. 清理 DocumentRegistry 中的旧记录
+        4. 构建初始状态字典
+
+        Args:
+            doc_name: 文档名称
+            doc_path: 文档路径
+
+        Returns:
+            初始化的 IndexingState
+        """
+        logger.info(f"🔄 [Rebuild] ========== 准备重建环境 ==========")
+
+        # 1. 验证文件存在
+        doc_json_folder = os.path.join(self.agent.json_data_path, doc_name)
+        structure_path = os.path.join(doc_json_folder, "structure.json")
+        data_path = os.path.join(doc_json_folder, "data.json")
+
+        if not os.path.exists(structure_path):
+            raise FileNotFoundError(f"结构文件不存在: {structure_path}")
+
+        if not os.path.exists(data_path):
+            raise FileNotFoundError(f"数据文件不存在: {data_path}")
+
+        # 2. 加载 structure
+        logger.info(f"📥 [Rebuild] 加载 structure.json...")
+        with open(structure_path, 'r', encoding='utf-8') as f:
+            structure_data = json.load(f)
+
+        if "agenda_dict" in structure_data:
+            agenda_dict = structure_data["agenda_dict"]
+            has_toc = structure_data.get("has_toc", False)
+        else:
+            agenda_dict = structure_data
+            has_toc = True
+
+        logger.info(f"   ✅ 加载完成: {len(agenda_dict)} 个章节")
+
+        # 3. 加载 PDF 数据
+        logger.info(f"📥 [Rebuild] 加载 data.json...")
+        with open(data_path, 'r', encoding='utf-8') as f:
+            pdf_data_list = json.load(f)
+
+        json_data_dict = {
+            str(item.get("page", i+1)): item.get("data", "")
+            for i, item in enumerate(pdf_data_list)
+        }
+
+        raw_data = "\n\n".join([
+            f"[Page {item.get('page', i+1)}]\n{item.get('data', '')}"
+            for i, item in enumerate(pdf_data_list)
+        ])
+
+        logger.info(f"   ✅ 加载完成: {len(pdf_data_list)} 页")
+
+        # 4. 删除旧的生成文件
+        logger.info(f"🗑️  [Rebuild] 删除旧的生成文件...")
+        chunks_path = os.path.join(doc_json_folder, "chunks.json")
+        if os.path.exists(chunks_path):
+            os.remove(chunks_path)
+            logger.info(f"   ✅ 删除 chunks.json")
+
+        # 删除旧的摘要文件
+        from src.config.constants import PathConstants
+        output_folder = os.path.join(PathConstants.OUTPUT_DIR, doc_name)
+        if os.path.exists(output_folder):
+            import shutil
+            shutil.rmtree(output_folder)
+            logger.info(f"   ✅ 删除输出文件夹: {output_folder}")
+
+        # 删除旧的向量数据库
+        vector_db_folder = os.path.join(PathConstants.VECTOR_DB_DIR, doc_name)
+        if os.path.exists(vector_db_folder):
+            import shutil
+            shutil.rmtree(vector_db_folder)
+            logger.info(f"   ✅ 删除向量数据库: {vector_db_folder}")
+
+        # 5. 清理 DocumentRegistry 中的旧记录
+        logger.info(f"🗑️  [Rebuild] 清理文档注册信息...")
+        old_doc = self.agent.doc_registry.get_by_name(doc_name)
+        if old_doc:
+            # 保存基本信息，但清除所有生成文件的路径
+            logger.info(f"   ℹ️  旧记录: {old_doc.get('status', 'unknown')} 状态")
+            # 不删除整个记录，让 register 节点更新
+        logger.info(f"   ✅ Registry 准备就绪")
+
+        # 6. 构建初始状态
+        state = {
+            "doc_name": doc_name,
+            "doc_path": doc_path,
+            "doc_type": "pdf",
+            "pdf_data_list": pdf_data_list,
+            "json_data_dict": json_data_dict,
+            "raw_data": raw_data,
+            "agenda_dict": agenda_dict,
+            "has_toc": has_toc,
+            "status": "loaded",
+            "is_complete": False,
+            "generated_files": {
+                "images": [],  # 保留已有的图片
+                "json_data": data_path,
+                "vector_db": "",
+                "summaries": []
+            },
+            "stage_status": {},  # 不设置跳过标志，强制重建所有内容
+            "agenda_data_list": []  # 初始化为空，强制重建
+        }
+
+        logger.info(f"✅ [Rebuild] 初始状态准备完成")
+        return state
+
     async def rebuild_from_structure(
         self,
         doc_name: str,
@@ -557,6 +677,8 @@ class IndexingTools:
     ) -> Dict[str, Any]:
         """
         基于已有的 structure.json 重建文档数据
+
+        使用专门的重建子图执行重建流程
 
         保持不变的文件：
         - structure.json: 手动编辑的结构
@@ -568,6 +690,7 @@ class IndexingTools:
         - 章节摘要: 重新生成所有章节的摘要和重构内容
         - 向量数据库: 完全重建 FAISS 索引
         - 简要摘要: 重新生成整体文档摘要
+        - DocumentRegistry: 更新文档注册信息
 
         Args:
             doc_name: 文档名称
@@ -578,85 +701,38 @@ class IndexingTools:
         """
         logger.info(f"🔄 [Rebuild] ========== 开始从 structure 全面重建 ==========")
         logger.info(f"🔄 [Rebuild] 文档: {doc_name}")
-        logger.info(f"🔄 [Rebuild] 重建内容: chunks + summaries + vectordb + brief_summary")
+        logger.info(f"🔄 [Rebuild] 使用重建子图执行流程")
 
         try:
-            # 1. 加载已有数据
+            # 1. 准备初始状态（加载文件、删除旧数据、清理registry）
+            state = await self._prepare_rebuild_state(doc_name, doc_path)
+
+            # 2. 使用重建子图执行
+            logger.info(f"🔄 [Rebuild] 开始执行重建子图...")
+            result_state = await self.agent.rebuild_graph.ainvoke(state)
+
+            # 3. 验证重建结果
             doc_json_folder = os.path.join(self.agent.json_data_path, doc_name)
-            structure_path = os.path.join(doc_json_folder, "structure.json")
-            data_path = os.path.join(doc_json_folder, "data.json")
-
-            if not os.path.exists(structure_path):
-                raise FileNotFoundError(f"结构文件不存在: {structure_path}")
-
-            if not os.path.exists(data_path):
-                raise FileNotFoundError(f"数据文件不存在: {data_path}")
-
-            # 加载 structure
-            logger.info(f"📥 [Rebuild] 加载 structure.json...")
-            with open(structure_path, 'r', encoding='utf-8') as f:
-                structure_data = json.load(f)
-
-            if "agenda_dict" in structure_data:
-                agenda_dict = structure_data["agenda_dict"]
-                has_toc = structure_data.get("has_toc", False)
-            else:
-                agenda_dict = structure_data
-                has_toc = True
-
-            logger.info(f"   ✅ 加载完成: {len(agenda_dict)} 个章节")
-
-            # 加载 PDF 数据
-            logger.info(f"📥 [Rebuild] 加载 data.json...")
-            with open(data_path, 'r', encoding='utf-8') as f:
-                pdf_data_list = json.load(f)
-
-            json_data_dict = {
-                str(item.get("page", i+1)): item.get("data", "")
-                for i, item in enumerate(pdf_data_list)
-            }
-
-            raw_data = "\n\n".join([
-                f"[Page {item.get('page', i+1)}]\n{item.get('data', '')}"
-                for i, item in enumerate(pdf_data_list)
-            ])
-
-            logger.info(f"   ✅ 加载完成: {len(pdf_data_list)} 页")
-
-            # 2. 构建初始状态
-            state = {
-                "doc_name": doc_name,
-                "doc_path": doc_path,
-                "doc_type": "pdf",
-                "pdf_data_list": pdf_data_list,
-                "json_data_dict": json_data_dict,
-                "raw_data": raw_data,
-                "agenda_dict": agenda_dict,
-                "has_toc": has_toc,
-                "status": "loaded",
-                "is_complete": False,
-                "generated_files": {
-                    "images": [],
-                    "json_data": data_path,
-                    "vector_db": "",
-                    "summaries": []
-                },
-                "stage_status": {}
-            }
-
-            # 3-7. 重建各阶段（通过调用 nodes 模块）
-            # 这些调用将在 nodes.py 中实现
-            logger.info(f"🔄 [Rebuild] 步骤1: 重建章节数据...")
-            # 注意：这里需要访问 nodes，但 nodes 还未创建
-            # 临时方案：在 agent.py 中实现 rebuild，或者将 rebuild 移到 agent.py
+            chunks_path = os.path.join(doc_json_folder, "chunks.json")
 
             logger.info(f"✅ [Rebuild] 重建完成！")
+            logger.info(f"   📊 章节数: {len(result_state.get('agenda_data_list', []))}")
+            logger.info(f"   📁 生成文件: {len(result_state.get('generated_files', {}).get('summaries', []))} 个摘要")
+            logger.info(f"   🔍 向量库: {result_state.get('generated_files', {}).get('vector_db', 'N/A')}")
 
             return {
                 "success": True,
                 "doc_name": doc_name,
-                "total_chapters": len(agenda_dict),
+                "total_chapters": len(result_state.get("agenda_data_list", [])),
                 "status": "completed",
+                "generated_files": result_state.get("generated_files", {}),
+                "rebuilt": {
+                    "chunks": os.path.exists(chunks_path),
+                    "summaries": len(result_state.get("generated_files", {}).get("summaries", [])) > 0,
+                    "vector_db": bool(result_state.get("generated_files", {}).get("vector_db")),
+                    "brief_summary": result_state.get("brief_summary") is not None,
+                    "registry": self.agent.doc_registry.get_by_name(doc_name) is not None
+                }
             }
 
         except Exception as e:

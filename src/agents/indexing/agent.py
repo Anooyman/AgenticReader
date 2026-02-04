@@ -57,6 +57,7 @@ class IndexingAgent(AgentBase):
 
         # 构建workflow
         self.graph = self.build_graph()
+        self.rebuild_graph = self.build_rebuild_graph()
 
     def _setup_pdf_config(self, pdf_preset: str):
         """
@@ -139,6 +140,46 @@ class IndexingAgent(AgentBase):
 
         # 设置入口
         workflow.set_entry_point("check_cache")
+
+        return workflow.compile()
+
+    def build_rebuild_graph(self) -> StateGraph:
+        """
+        构建重建专用工作流
+
+        假设条件：
+        - data.json 已存在（PDF 原始数据）
+        - structure.json 已存在（手动编辑的结构）
+        - 旧的生成文件已被删除
+
+        执行流程：
+        1. chunk_text - 基于新 structure 重建章节数据
+        2. process_chapters - 重新处理所有章节（摘要+重构）
+        3. build_index - 重建向量数据库
+        4. generate_brief_summary - 重新生成文档摘要
+        5. register_document - 更新文档注册信息
+
+        Returns:
+            编译后的 StateGraph
+        """
+        workflow = StateGraph(IndexingState)
+
+        # 只添加重建需要的节点
+        workflow.add_node("chunk", self.nodes.chunk_text)
+        workflow.add_node("process_chapters", self.nodes.process_chapters)
+        workflow.add_node("build_index", self.nodes.build_index)
+        workflow.add_node("generate_brief_summary", self.nodes.generate_brief_summary)
+        workflow.add_node("register", self.nodes.register_document)
+
+        # 线性流程
+        workflow.add_edge("chunk", "process_chapters")
+        workflow.add_edge("process_chapters", "build_index")
+        workflow.add_edge("build_index", "generate_brief_summary")
+        workflow.add_edge("generate_brief_summary", "register")
+        workflow.add_edge("register", END)
+
+        # 从 chunk 开始
+        workflow.set_entry_point("chunk")
 
         return workflow.compile()
 

@@ -10,35 +10,25 @@
     <link rel="stylesheet" href="/static/css/base.css">
     <link rel="stylesheet" href="/static/css/components.css">
     <link rel="stylesheet" href="/static/css/structure_editor.css">
+
+    <!-- PDF.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    </script>
 </head>
 <body>
     <!-- 结构编辑器页面容器 -->
     <div class="app-container">
         <!-- 顶部导航栏 -->
-        <header class="header">
-            <div class="header-content">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <h1 class="header-title">📝 LLMReader 文档结构编辑器</h1>
-                        <p class="header-subtitle">手动编辑文档章节结构，自动重建索引和摘要</p>
-                    </div>
-                    <div>
-                        <a href="/" class="btn btn-secondary" style="color: white; text-decoration: none; margin-right: 10px;">
-                            🏠 首页
-                        </a>
-                        <a href="/config" class="btn btn-secondary" style="color: white; text-decoration: none; margin-right: 10px;">
-                            ⚙️ 配置管理
-                        </a>
-                        <a href="/chapters" class="btn btn-secondary" style="color: white; text-decoration: none; margin-right: 10px;">
-                            📖 章节管理
-                        </a>
-                        <a href="/data" class="btn btn-secondary" style="color: white; text-decoration: none; margin-right: 10px;">
-                            📁 数据管理
-                        </a>
-                        <a href="/chat" class="btn btn-secondary" style="color: white; text-decoration: none;">
-                            💬 聊天模式
-                        </a>
-                    </div>
+        <header class="header structure-header">
+            <div class="header-content structure-header-content">
+                <div class="structure-header-left">
+                    <h1 class="header-title structure-header-title">章节管理</h1>
+                    <p class="header-subtitle structure-header-subtitle">编辑文档章节结构，保存后可重建索引和摘要</p>
+                </div>
+                <div class="structure-header-actions">
+                    <a href="/data" class="btn structure-back-btn">返回数据管理</a>
                 </div>
             </div>
         </header>
@@ -64,13 +54,27 @@
                 <!-- 左侧：章节编辑器 -->
                 <div class="editor-panel">
                     <div class="panel-header">
-                        <h3>📑 章节列表</h3>
-                        <button class="btn btn-primary btn-sm" id="add-chapter-btn">
-                            ➕ 添加章节
-                        </button>
+                        <h3>章节列表</h3>
+                        <div style="display: flex; gap: 5px;">
+                            <button class="btn btn-primary btn-sm" id="add-chapter-btn">
+                                ➕ 添加章节
+                            </button>
+                            <button class="btn btn-danger btn-sm" id="batch-delete-btn" style="display: none;">
+                                🗑️ 批量删除
+                            </button>
+                            <button class="btn btn-secondary btn-sm" id="cancel-batch-btn" style="display: none;">
+                                ❌ 取消
+                            </button>
+                        </div>
                     </div>
 
                     <div class="panel-content">
+                        <!-- 批量操作提示 -->
+                        <div id="batch-mode-hint" class="batch-mode-hint" style="display: none;">
+                            <input type="checkbox" id="select-all-chapters"> 全选
+                            <span id="selected-count" style="margin-left: 10px;">已选择 0 个章节</span>
+                        </div>
+
                         <!-- 章节列表 -->
                         <div id="chapters-list" class="chapters-list">
                             <!-- 章节项将通过 JS 动态生成 -->
@@ -78,31 +82,33 @@
                     </div>
 
                     <div class="panel-footer">
-                        <button class="btn btn-success" id="save-structure-btn">
-                            💾 保存结构
-                        </button>
-                        <button class="btn btn-warning" id="rebuild-btn" style="display: none;">
-                            🔄 重建数据
+                        <button class="btn btn-warning" id="rebuild-btn" style="width: 100%;">
+                            🔄 重建索引和摘要
                         </button>
                     </div>
                 </div>
 
+                <div class="panel-resizer" id="panel-resizer" title="拖动调整宽度"></div>
+
                 <!-- 右侧：PDF 预览 -->
                 <div class="preview-panel">
                     <div class="panel-header">
-                        <h3>📄 PDF 预览</h3>
+                        <h3>PDF 预览</h3>
                         <div class="preview-controls">
-                            <button class="btn btn-sm" id="prev-page-btn" disabled>◀ 上一页</button>
                             <span id="page-info">页码: - / -</span>
-                            <button class="btn btn-sm" id="next-page-btn" disabled>下一页 ▶</button>
-                            <input type="number" id="page-jump-input" placeholder="跳转" min="1" style="width: 60px; margin-left: 10px;">
-                            <button class="btn btn-sm" id="page-jump-btn">跳转</button>
+                            <div class="page-jump">
+                                <input type="number" id="page-jump-input" min="1" placeholder="跳页">
+                                <button class="btn btn-sm btn-secondary" id="page-jump-btn">跳转</button>
+                            </div>
+                            <button class="btn btn-sm btn-secondary" id="zoom-out-btn">🔍-</button>
+                            <span id="zoom-level">100%</span>
+                            <button class="btn btn-sm btn-secondary" id="zoom-in-btn">🔍+</button>
                         </div>
                     </div>
 
-                    <div class="panel-content pdf-preview-container">
-                        <div id="pdf-preview" class="pdf-preview">
-                            <p class="placeholder-text">请在左侧编辑器中点击章节查看对应页面</p>
+                    <div class="panel-content pdf-preview-container" style="overflow-y: auto;">
+                        <div id="pdf-viewer" class="pdf-viewer">
+                            <div id="pdf-pages-container"></div>
                         </div>
                     </div>
                 </div>

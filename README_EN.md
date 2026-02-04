@@ -154,6 +154,11 @@ Features:
 - WebSocket real-time communication
 - Markdown and LaTeX formula rendering
 - Timestamp display (year/month/day hour:minute:second)
+- **Smart Scrolling & Navigation**:
+  - 🎯 Smart Scroll: Auto-scroll only when user is at bottom, never interrupts history browsing
+  - ⬆⬇ Quick Navigation Buttons: Jump to earliest message or latest reply
+  - 💡 New Content Notification: Animated alerts with unread badge when viewing history
+  - 📍 Precise Positioning: "View Latest" jumps to top of latest assistant reply (not bottom)
 - Session persistence (three modes independently managed)
 - Clear history (clears both file and memory)
 - Display selected documents and similarity scores
