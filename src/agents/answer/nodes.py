@@ -60,6 +60,222 @@ class AnswerNodes:
         "good morning", "good afternoon", "good evening",
     }
 
+    # ==================== Node 0: rewrite_query ====================
+
+    async def rewrite_query(self, state: AnswerState) -> AnswerState:
+        """
+        上下文查询改写节点
+
+        根据对话历史和文档简介，将用户的简略查询改写为完整、明确的查询。
+        处理省略、指代、上下文依赖等情况。
+
+        改写依据：
+        1. 对话历史：补全省略的主语、动作、话题延续
+        2. 文档简介：结合文档主题，使查询更贴合文档内容
+
+        例如：
+        - 历史："南京天气怎么样？" → 当前："北京和成都呢？"
+          改写后："北京和成都的天气怎么样？"
+        - 文档："Transformer论文" → 当前："有哪些优点？"
+          改写后："Transformer模型有哪些优点？"
+        """
+        from .prompts import AnswerRole
+        from langchain_core.messages import HumanMessage
+
+        logger.info("=" * 80)
+        logger.info("✏️  [RewriteQuery] ========== 上下文查询改写 ==========")
+        logger.info("=" * 80)
+
+        user_query = state["user_query"]
+        logger.info(f"📝 [RewriteQuery] 原始查询: {user_query}")
+
+        await self._send_progress(
+            stage="rewrite_query",
+            stage_name="查询改写",
+            status="processing",
+            message="正在根据上下文改写查询..."
+        )
+
+        try:
+            # 获取对话历史
+            history_obj = self.agent.llm.get_message_history("tool_planning", enable_llm_summary=True)
+            history = history_obj.messages if history_obj else []
+
+            # 获取选中的文档信息
+            selected_docs = state.get("selected_docs", [])
+            doc_context = ""
+
+            if selected_docs:
+                # 从 DocumentRegistry 获取文档简介
+                doc_summaries = []
+                for doc_name in selected_docs:
+                    doc_info = self.agent.registry.get_by_name(doc_name)
+                    if doc_info:
+                        brief_summary = doc_info.get("brief_summary", "")
+                        if brief_summary:
+                            doc_summaries.append(f"- **{doc_name}**: {brief_summary}")
+                        else:
+                            doc_summaries.append(f"- **{doc_name}**: (无简介)")
+
+                if doc_summaries:
+                    doc_context = f"""
+
+选中的文档信息：
+{chr(10).join(doc_summaries)}"""
+                    logger.info(f"📚 [RewriteQuery] 已加载 {len(doc_summaries)} 个文档的简介")
+
+            # 快速路径：如果没有历史记录且没有文档上下文，直接使用原始查询
+            if (not history or len(history) == 0) and not doc_context:
+                logger.info(f"💡 [RewriteQuery] 无历史记录和文档上下文，使用原始查询")
+                state["rewritten_query"] = user_query
+                await self._send_progress(
+                    stage="rewrite_query",
+                    stage_name="查询改写",
+                    status="completed",
+                    message="无需改写"
+                )
+                return state
+
+            # 智能判断：对于完整查询，跳过 LLM 调用以提升性能
+            if self._is_query_complete(user_query, history, doc_context):
+                logger.info(f"💡 [RewriteQuery] 查询已完整，跳过 LLM 调用")
+                state["rewritten_query"] = user_query
+                await self._send_progress(
+                    stage="rewrite_query",
+                    stage_name="查询改写",
+                    status="completed",
+                    message="查询完整，无需改写"
+                )
+                return state
+
+            # 构造改写提示
+            # 格式化历史记录（只取最近5轮）
+            history_text = ""
+            if history and len(history) > 0:
+                recent_history = history[-10:] if len(history) > 10 else history
+                for msg in recent_history:
+                    if hasattr(msg, 'type'):
+                        if msg.type == "human":
+                            history_text += f"用户: {msg.content}\n"
+                        elif msg.type == "ai":
+                            history_text += f"助手: {msg.content[:200]}...\n"  # 截断长回复
+                history_text = f"""对话历史：
+{history_text}"""
+            else:
+                history_text = ""
+
+            prompt = f"""{history_text}{doc_context}
+
+当前用户查询：
+{user_query}
+
+请根据{'对话历史和' if history_text else ''}文档信息改写当前查询，使其完整、明确、更贴合文档主题。如果当前查询已经完整，则直接返回原查询。
+
+改写后的查询："""
+
+            # 调用 LLM
+            rewritten = await self.agent.llm.async_call_llm_chain(
+                role=AnswerRole.CONTEXT_QUERY_REWRITER,
+                input_prompt=prompt,
+                session_id="rewrite_query_session"
+            )
+
+            # 清理结果
+            rewritten = rewritten.strip()
+
+            # 如果改写结果为空或过短，使用原始查询
+            if not rewritten or len(rewritten) < 2:
+                logger.warning(f"⚠️  [RewriteQuery] 改写结果无效，使用原始查询")
+                rewritten = user_query
+
+            state["rewritten_query"] = rewritten
+
+            if rewritten != user_query:
+                logger.info(f"✅ [RewriteQuery] 查询已改写")
+                logger.info(f"   原始: {user_query}")
+                logger.info(f"   改写: {rewritten}")
+            else:
+                logger.info(f"💡 [RewriteQuery] 查询无需改写")
+
+            await self._send_progress(
+                stage="rewrite_query",
+                stage_name="查询改写",
+                status="completed",
+                message=f"改写完成" if rewritten != user_query else "无需改写"
+            )
+
+            return state
+
+        except Exception as e:
+            logger.error(f"❌ [RewriteQuery] 改写失败: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+
+            # 失败时使用原始查询
+            state["rewritten_query"] = user_query
+
+            await self._send_progress(
+                stage="rewrite_query",
+                stage_name="查询改写",
+                status="error",
+                message=f"改写失败，使用原始查询: {str(e)}"
+            )
+
+            return state
+
+    def _is_query_complete(self, query: str, history, doc_context: str) -> bool:
+        """
+        判断查询是否已经完整，无需改写
+
+        完整查询的特征：
+        1. 长度足够（>= 5个字符）
+        2. 不包含明显的省略标记（呢、它、这个、那个等）
+        3. 不是纯粹的追问（什么、哪些、怎么样等单独出现）
+
+        优化目标：跳过不必要的 LLM 调用，提升首次查询速度
+        """
+        # 移除空格和标点符号后的查询
+        clean_query = query.strip().rstrip("!！?？.。~")
+
+        # 1. 寒暄直接跳过
+        if self._is_greeting(query):
+            return True
+
+        # 2. 查询过短，可能需要补全
+        if len(clean_query) < 5:
+            return False
+
+        # 3. 包含明显的省略标记
+        ellipsis_markers = ["呢", "它", "这个", "那个", "那", "哪"]
+        if any(marker in clean_query for marker in ellipsis_markers):
+            return False
+
+        # 4. 只是简单的疑问词（什么、为什么、怎么等单独出现）
+        simple_questions = ["什么", "为什么", "怎么", "如何", "哪些", "哪个"]
+        if clean_query in simple_questions:
+            return False
+
+        # 5. 如果有历史记录，更倾向于调用 LLM（可能是追问）
+        if history and len(history) > 0:
+            # 但如果查询很长且完整（>= 15字），即使有历史也可能不需要改写
+            if len(clean_query) >= 15:
+                return True
+            # 查询较短且有历史，可能需要改写
+            return False
+
+        # 6. 首次查询且有文档上下文
+        if doc_context:
+            # 如果查询已经包含文档相关的关键词，可能不需要改写
+            # 但保守起见，对于首次查询 + 有文档的情况，让 LLM 判断
+            # 除非查询非常完整（>= 10字）
+            if len(clean_query) >= 10:
+                return True
+
+        # 默认：首次查询且查询足够长，认为是完整的
+        return len(clean_query) >= 8
+
+    # ==================== Node 1: plan ====================
+
     async def plan(self, state: AnswerState) -> AnswerState:
         """
         ReAct循环 - Plan节点（确定性逻辑）
@@ -158,7 +374,8 @@ class AnswerNodes:
 
     def _build_tool_calls_from_user_selection(self, state: AnswerState) -> List[Dict[str, Any]]:
         """按用户的 enabled_tools 和 selected_docs 构造工具调用"""
-        user_query = state["user_query"]
+        # 优先使用改写后的查询，如果没有则使用原始查询
+        query = state.get("rewritten_query") or state["user_query"]
         enabled_tools = state.get("enabled_tools", [])
         selected_docs = state.get("selected_docs")
 
@@ -166,13 +383,13 @@ class AnswerNodes:
 
         for tool_name in enabled_tools:
             if tool_name == "retrieve_documents":
-                args = {"query": user_query}
+                args = {"query": query}
                 if selected_docs:
                     args["doc_names"] = selected_docs
                 calls.append({"tool": "retrieve_documents", "args": args})
 
             elif tool_name == "search_web":
-                calls.append({"tool": "search_web", "args": {"query": user_query}})
+                calls.append({"tool": "search_web", "args": {"query": query}})
 
         return calls
 

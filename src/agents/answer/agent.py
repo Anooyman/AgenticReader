@@ -2,6 +2,7 @@
 Answer Agent - 用户对话接口Agent（工具调用架构）
 
 工作流程（ReAct循环）：
+0. rewrite_query - 根据对话历史改写查询，补全上下文
 1. plan - LLM决定调用哪些工具
 2. execute - 执行工具调用
 3. evaluate - 评估是否有足够信息
@@ -9,7 +10,7 @@ Answer Agent - 用户对话接口Agent（工具调用架构）
 
 工具：
 - retrieve_documents: 统一文档检索（单文档/多文档/自动选择）
-- search_web: 网络搜索（预留接口）
+- search_web: 网络搜索（使用 SearchAgent）
 """
 
 from langgraph.graph import StateGraph, END
@@ -30,9 +31,10 @@ class AnswerAgent(AgentBase):
     对话Agent（工具调用架构）
 
     工作流程：
-    plan → execute_tools → evaluate → (循环或结束) → generate → END
+    rewrite_query → plan → execute_tools → evaluate → (循环或结束) → generate → END
 
     特点：
+    - 上下文查询改写：根据历史对话补全省略、指代
     - LLM动态决策调用哪些工具
     - 新工具通过注册即可接入
     - current_doc/manual_selected_docs 作为上下文提示传给LLM
@@ -74,8 +76,9 @@ class AnswerAgent(AgentBase):
         """
         构建ReAct循环工作流
 
-        plan → execute → evaluate → (循环或结束) → generate → END
+        rewrite_query → plan → execute → evaluate → (循环或结束) → generate → END
 
+        - rewrite_query: 根据对话历史改写查询，补全上下文
         - plan: LLM决定调用哪些工具（或不调用）
         - execute: 并行执行工具调用
         - evaluate: 评估是否有足够信息
@@ -84,13 +87,17 @@ class AnswerAgent(AgentBase):
         workflow = StateGraph(AnswerState)
 
         # 添加节点
+        workflow.add_node("rewrite_query", self.nodes.rewrite_query)
         workflow.add_node("plan", self.nodes.plan)
         workflow.add_node("execute", self.nodes.execute_tools)
         workflow.add_node("evaluate", self.nodes.evaluate)
         workflow.add_node("generate", self.nodes.generate_answer)
 
         # 设置入口
-        workflow.set_entry_point("plan")
+        workflow.set_entry_point("rewrite_query")
+
+        # rewrite_query → plan
+        workflow.add_edge("rewrite_query", "plan")
 
         # plan → execute（有工具调用）或 generate（无需工具）
         workflow.add_conditional_edges(

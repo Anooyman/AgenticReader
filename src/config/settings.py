@@ -54,7 +54,7 @@ MCP_CONFIG = {
     "type": "stdio",
     "command": "python",
     "args": ["-m", "scraper.mcp_server.server"],
-    "env": {"PYTHONPATH": "src/services/web_scraper"}
+    "env": {"PYTHONPATH": "src/services"}
   },
     #"fetch": {
     #  "command": "python",

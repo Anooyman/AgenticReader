@@ -1,7 +1,7 @@
 """
 Answer Agent状态定义
 
-工具调用架构：plan → execute → evaluate → (循环或结束) → generate
+工具调用架构：rewrite_query → plan → execute → evaluate → (循环或结束) → generate
 用户通过 enabled_tools 和 selected_docs 控制工具使用。
 """
 
@@ -13,16 +13,18 @@ class AnswerState(TypedDict, total=False):
     Answer Agent的状态（工具调用架构）
 
     工作流程：
-    plan → execute_tools → evaluate → (continue → plan / finish → generate) → END
+    rewrite_query → plan → execute_tools → evaluate → (continue → plan / finish → generate) → END
 
     工具选择由用户控制：
     - enabled_tools: 用户启用的工具列表（空=纯对话）
     - selected_docs: 用户选择的文档列表（PDF检索时使用）
-    plan节点根据用户选择确定性地构造工具调用，仅做寒暄过滤。
+    - rewrite_query节点根据历史对话重写用户查询（补全上下文）
+    - plan节点根据用户选择确定性地构造工具调用，仅做寒暄过滤
     """
 
     # ============ 输入 ============
-    user_query: str  # 用户查询
+    user_query: str  # 用户原始查询
+    rewritten_query: str  # LLM改写后的查询（补全上下文）
     enabled_tools: List[str]  # 用户启用的工具 ["retrieve_documents", "search_web"]
     selected_docs: Optional[List[str]]  # 用户选择的文档列表（PDF检索时）
 
