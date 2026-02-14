@@ -42,6 +42,8 @@ class PathConstants:
     VECTOR_DB_DIR = "vector_db"
     OUTPUT_DIR = "output"
     MEMORY_DIR = "memory"
+    SEARCH_CACHE_DIR = "search_cache"  # SearchAgent 搜索结果缓存
+    WEB_CONTENT_DIR = "web_content"  # Use Case 2 URL 内容原始文件
 
 
 # === PDF处理常量 ===

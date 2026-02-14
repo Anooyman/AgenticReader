@@ -10,8 +10,9 @@ AgenticReader is an advanced document analysis and intelligent Q&A tool powered 
 
 ### 🤖 Multi-Agent Architecture | Multi-Agent System
 - **IndexingAgent**: Document indexing agent for PDF parsing, structure extraction, chunking, vectorization
-- **AnswerAgent**: Q&A agent for intent analysis, answer generation, dialogue management
+- **AnswerAgent**: Q&A agent for intent analysis, answer generation, dialogue management, tool invocation
 - **RetrievalAgent**: Retrieval agent for semantic search and context assembly
+- **SearchAgent**: Web search agent for search engine retrieval and URL content analysis
 - **LangGraph Orchestration**: State machine workflow based on LangGraph, supports complex task orchestration
 
 ### 📄 Document Processing | Document Processing
@@ -28,6 +29,11 @@ AgenticReader is an advanced document analysis and intelligent Q&A tool powered 
   - Cross-Document Intelligent Mode - Auto-select relevant documents for retrieval
   - Cross-Document Manual Mode - Manually specify multiple documents as background knowledge
   - General Mode - Free conversation without binding to specific documents
+- **Smart Tool System**:
+  - 📎 Document Retrieval Tool (retrieve_documents) - Retrieve relevant content from indexed documents
+  - 🌐 Web Search Tool (search_web) - Search the internet for latest information or analyze specified URLs
+  - Users can enable/disable tools via UI buttons
+  - Support tool combination (document retrieval + web search simultaneously)
 - **Intent Recognition**: Auto-determine if document retrieval is needed
 - **Context Management**: Smart caching of retrieval results for multi-turn dialogue
 - **History Compression**: LLM auto-summarizes conversation history, saves context space (90%+ compression rate)
@@ -251,10 +257,18 @@ AgenticReader/
 │   │   │   └── doc_registry.py    # Document registry
 │   │   ├── answer/                # AnswerAgent - Intelligent Q&A
 │   │   │   ├── agent.py           # Answer agent implementation
+│   │   │   ├── tools.py           # Answer tools
+│   │   │   ├── tools_config.py    # Tool configuration
 │   │   │   └── state.py           # Answer state definition
-│   │   └── retrieval/             # RetrievalAgent - Document retrieval
-│   │       ├── agent.py           # Retrieval agent implementation
-│   │       └── state.py           # Retrieval state definition
+│   │   ├── retrieval/             # RetrievalAgent - Document retrieval
+│   │   │   ├── agent.py           # Retrieval agent implementation
+│   │   │   └── state.py           # Retrieval state definition
+│   │   └── search/                # SearchAgent - Web search agent
+│   │       ├── agent.py           # Search agent implementation
+│   │       ├── tools.py           # Search and scraping tools
+│   │       ├── utils.py           # MCP client and utilities
+│   │       ├── README.md          # SearchAgent documentation
+│   │       └── state.py           # Search state definition
 │   ├── core/                      # Core functionality
 │   │   ├── llm/                   # LLM abstraction layer
 │   │   │   ├── client.py          # Unified LLM client
@@ -318,10 +332,14 @@ AgenticReader/
 1. **Multi-Agent System** (src/agents/)
    - **IndexingAgent**: Document indexing workflow
      - Parse PDF → Extract structure → Chunk → Parallel process → Vectorize → Register
-   - **AnswerAgent**: Intelligent Q&A workflow
-     - Analyze intent → Retrieval decision → Generate answer → Evaluate result
+   - **AnswerAgent**: Intelligent Q&A workflow (ReAct Architecture)
+     - Tool planning (plan) → Tool execution (execute) → Result evaluation (evaluate) → Answer generation (generate)
+     - Supported tools: Document retrieval (retrieve_documents), Web search (search_web)
    - **RetrievalAgent**: Document retrieval workflow
      - Semantic search → Context assembly → Result ranking
+   - **SearchAgent**: Web search workflow
+     - Search engine retrieval (search) → URL selection → Content scraping → Info extraction → Answer generation
+     - URL content analysis (url_analysis) → Content scraping → Size evaluation → Direct chat/Indexing processing
 
 2. **LLM Abstraction** (src/core/llm/)
    - Unified interface supporting multiple providers (Azure OpenAI, OpenAI, Ollama)
@@ -362,14 +380,29 @@ PDF File
   → register_document (Register to DocumentRegistry)
 ```
 
-#### AnswerAgent Workflow
+#### AnswerAgent Workflow (ReAct Loop)
 ```
-User Query
-  → analyze_intent (Intent analysis)
-  → retrieve_if_needed (Conditional retrieval)
-  → generate_answer (Generate answer)
-  → evaluate_result (Evaluate completeness)
+User Query + enabled_tools
+  → plan (Tool planning - Construct calls based on user-enabled tools)
+  → execute_tools (Execute tool calls in parallel)
+      ├─ retrieve_documents (Document retrieval)
+      └─ search_web (Web search)
+  → evaluate (Evaluate if sufficient information)
+  → generate_answer (Generate final answer)
   → Return to user
+```
+
+#### SearchAgent Workflow
+```
+Search Mode (search):
+  Query → web_search (Search engine) → select_urls (Select relevant URLs)
+      → scrape_content (Scrape content) → extract_info (Extract info)
+      → format_answer (Generate answer)
+
+URL Analysis Mode (url_analysis):
+  URL list → scrape_content (Scrape content) → evaluate_size (Evaluate content size)
+      ├─ Small content → direct_chat (Direct chat)
+      └─ Large content → index_then_chat (Index then chat)
 ```
 
 ### Data Storage Architecture
@@ -590,6 +623,40 @@ System auto-cleans old data
 
 <details>
 <summary><b>📝 Changelog (Click to expand)</b></summary>
+
+### 2026-02-14 - SearchAgent Integration into AnswerAgent
+- 🌐 **Web Search Tool Launch**
+  - ✅ Integrated SearchAgent into AnswerAgent's tool system
+  - ✅ Enabled `search_web` tool in `tools_config.py`
+  - ✅ Implemented `AnswerTools.search_web()` method, calling SearchAgent
+  - ✅ Added `search_agent` instance to AnswerAgent (lazy initialization)
+  - ✅ Support two search modes: search engine retrieval and URL content analysis
+- 🔧 **Tool Invocation Architecture**
+  - ✅ AnswerAgent adopts ReAct loop: plan → execute → evaluate → generate
+  - ✅ Users enable/disable web search tool via UI button (🌐)
+  - ✅ Support tool combination: document retrieval + web search simultaneously
+  - ✅ Progress callback integration for real-time UI updates
+
+### 2026-02-04 - Chat Interface UX Optimization
+- 🎨 **Smart Scrolling System**
+  - ✅ Progress updates auto-scroll only when user is at bottom, avoiding interruption of history browsing
+  - ✅ Added `isNearBottom()` logic (100px threshold from bottom)
+  - ✅ All scroll operations changed to smart scroll (`smartScrollToBottom()`)
+- 🧭 **Quick Navigation Buttons**
+  - ✅ Added "⬆ Earliest Message" button: Jump to conversation top
+  - ✅ Added "⬇ View Latest Content" button: Jump to top of latest assistant reply (not bottom)
+  - ✅ Buttons below input box, universal for three chat modes
+  - ✅ Show only when user not at bottom, auto-hide/show
+- 💬 **New Content Notification System**
+  - ✅ Visual alerts when viewing history and new reply arrives
+  - ✅ Dynamic button text: "View Latest Content" → "New Content, Click to View"
+  - ✅ Pulse glow animation + arrow bounce animation + red unread count badge
+  - ✅ Unread count auto-increments, resets when clicking button or scrolling back to bottom
+- 🎭 **Visual & Interaction Optimization**
+  - ✅ Two buttons with different gradient colors (purple vs blue-purple)
+  - ✅ Smooth animation effects (slideDown, pulseButton, pulseBadge, bounceIcon)
+  - ✅ Button hover float effect, click feedback animation
+  - ✅ Removed duplicate scroll button in chat-enhancer.js to avoid conflicts
 
 ### 2026-01-29 - Batch Indexing and Session Management Enhancements
 - 🐛 **Batch Indexing Fixes**

@@ -375,29 +375,13 @@ class DataManager {
         emptyEl.style.display = 'none';
 
         try {
-            // Load sessions from all modes
-            const [singleResp, crossResp, manualResp] = await Promise.all([
-                fetch('/api/v1/sessions/list/single'),
-                fetch('/api/v1/sessions/list/cross'),
-                fetch('/api/v1/sessions/list/manual')
-            ]);
-
-            if (!singleResp.ok || !crossResp.ok || !manualResp.ok) {
+            // Load all sessions from unified API
+            const resp = await fetch('/api/v1/sessions/list');
+            if (!resp.ok) {
                 throw new Error('Failed to fetch sessions');
             }
-
-            const [single, cross, manual] = await Promise.all([
-                singleResp.json(),
-                crossResp.json(),
-                manualResp.json()
-            ]);
-
-            // Combine and add mode info
-            this.sessions = [
-                ...single.sessions.map(s => ({...s, mode: 'single'})),
-                ...cross.sessions.map(s => ({...s, mode: 'cross'})),
-                ...manual.sessions.map(s => ({...s, mode: 'manual'}))
-            ];
+            const result = await resp.json();
+            this.sessions = result.sessions || [];
 
             loadingEl.style.display = 'none';
 
@@ -530,17 +514,17 @@ class DataManager {
         const updatedAt = new Date(session.updated_at);
 
         return `
-            <div class="session-card" data-session-id="${session.session_id}" data-mode="${session.mode}" style="position: relative; cursor: pointer;" onclick="event.target.tagName !== 'INPUT' && event.target.tagName !== 'BUTTON' && !event.target.classList.contains('session-title') && !event.target.classList.contains('expand-toggle') && dataManager.showSessionDetail('${session.session_id}', '${session.mode}')">
-                <input type="checkbox" class="session-checkbox" data-session-id="${session.session_id}" data-mode="${session.mode}" onclick="event.stopPropagation()">
+            <div class="session-card" data-session-id="${session.session_id}" data-mode="${session.mode}" style="position: relative; cursor: pointer;" onclick="event.target.tagName !== 'INPUT' && event.target.tagName !== 'BUTTON' && !event.target.classList.contains('session-title') && !event.target.classList.contains('expand-toggle') && dataManager.showSessionDetail('${session.session_id}')">
+                <input type="checkbox" class="session-checkbox" data-session-id="${session.session_id}" onclick="event.stopPropagation()">
                 <div class="session-header">
                     <div class="session-title-wrapper">
                         <div class="session-title"
                              data-original-title="${session.title}"
-                             onclick="event.stopPropagation(); dataManager.startRenameSession('${session.session_id}', '${session.mode}')">
+                             onclick="event.stopPropagation(); dataManager.startRenameSession('${session.session_id}')">
                             ${session.title}
                         </div>
                     </div>
-                    <span class="session-mode">${modeLabels[session.mode]}</span>
+                    <span class="session-mode">${modeLabels[session.mode] || '对话'}</span>
                 </div>
                 ${this.renderSessionDocInfo(session)}
                 <div class="session-info">
@@ -555,12 +539,12 @@ class DataManager {
                         <div class="session-stat-label">消息数</div>
                     </div>
                     <div class="session-stat">
-                        <div class="session-stat-value">${session.mode === 'manual' && session.selected_docs ? session.selected_docs.length : '-'}</div>
+                        <div class="session-stat-value">${session.selected_docs ? session.selected_docs.length : '-'}</div>
                         <div class="session-stat-label">文档数</div>
                     </div>
                 </div>
                 <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-light);">
-                    <button class="btn btn-primary" onclick="event.stopPropagation(); dataManager.continueChat('${session.session_id}', '${session.mode}')" style="width: 100%; padding: 0.75rem; font-weight: 600;">
+                    <button class="btn btn-primary" onclick="event.stopPropagation(); dataManager.continueChat('${session.session_id}')" style="width: 100%; padding: 0.75rem; font-weight: 600;">
                         💬 继续对话
                     </button>
                 </div>
@@ -741,12 +725,11 @@ class DataManager {
         document.getElementById('sessions-grid').scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
-    continueChat(sessionId, mode) {
-        // 跳转到聊天页面，带上session_id参数以加载历史记录
-        window.location.href = `/chat?mode=${mode}&session_id=${encodeURIComponent(sessionId)}`;
+    continueChat(sessionId) {
+        window.location.href = `/chat?session_id=${encodeURIComponent(sessionId)}`;
     }
 
-    startRenameSession(sessionId, mode) {
+    startRenameSession(sessionId) {
         const card = document.querySelector(`[data-session-id="${sessionId}"]`);
         const titleEl = card.querySelector('.session-title');
         const originalTitle = titleEl.dataset.originalTitle;
@@ -767,7 +750,7 @@ class DataManager {
 
             if (newTitle && newTitle !== originalTitle) {
                 try {
-                    const response = await fetch(`/api/v1/sessions/${mode}/${sessionId}/rename`, {
+                    const response = await fetch(`/api/v1/sessions/${sessionId}/rename`, {
                         method: 'PATCH',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({new_title: newTitle})
@@ -788,7 +771,7 @@ class DataManager {
                     newTitleEl.className = 'session-title';
                     newTitleEl.dataset.originalTitle = newTitle;
                     newTitleEl.textContent = newTitle;
-                    newTitleEl.onclick = () => this.startRenameSession(sessionId, mode);
+                    newTitleEl.onclick = () => this.startRenameSession(sessionId);
                     input.replaceWith(newTitleEl);
 
                     this.showSuccess('会话已重命名');
@@ -801,7 +784,7 @@ class DataManager {
                     titleEl.className = 'session-title';
                     titleEl.dataset.originalTitle = originalTitle;
                     titleEl.textContent = originalTitle;
-                    titleEl.onclick = () => this.startRenameSession(sessionId, mode);
+                    titleEl.onclick = () => this.startRenameSession(sessionId);
                     input.replaceWith(titleEl);
                 }
             } else {
@@ -810,7 +793,7 @@ class DataManager {
                 titleEl.className = 'session-title';
                 titleEl.dataset.originalTitle = originalTitle;
                 titleEl.textContent = originalTitle;
-                titleEl.onclick = () => this.startRenameSession(sessionId, mode);
+                titleEl.onclick = () => this.startRenameSession(sessionId);
                 input.replaceWith(titleEl);
             }
         };
@@ -1039,10 +1022,10 @@ class DataManager {
         }
     }
 
-    async showSessionDetail(sessionId, mode) {
+    async showSessionDetail(sessionId) {
         try {
             // 从session API获取会话历史
-            const response = await fetch(`/api/v1/sessions/${mode}/${sessionId}`);
+            const response = await fetch(`/api/v1/sessions/${sessionId}`);
 
             if (!response.ok) {
                 throw new Error('Failed to fetch session detail');
@@ -1275,25 +1258,22 @@ class DataManager {
 
     async batchDeleteSessions() {
         const checkboxes = document.querySelectorAll('.session-checkbox:checked');
-        const sessions = Array.from(checkboxes).map(cb => ({
-            session_id: cb.dataset.sessionId,
-            mode: cb.dataset.mode
-        }));
+        const sessionIds = Array.from(checkboxes).map(cb => cb.dataset.sessionId);
 
-        if (sessions.length === 0) {
+        if (sessionIds.length === 0) {
             this.showError('请先选择要删除的会话');
             return;
         }
 
-        const confirm = window.confirm(`确定要删除 ${sessions.length} 个会话吗？此操作不可恢复！`);
+        const confirm = window.confirm(`确定要删除 ${sessionIds.length} 个会话吗？此操作不可恢复！`);
         if (!confirm) return;
 
         let successCount = 0;
         let failCount = 0;
 
-        for (const session of sessions) {
+        for (const sessionId of sessionIds) {
             try {
-                const response = await fetch(`/api/v1/sessions/${session.mode}/${session.session_id}`, {
+                const response = await fetch(`/api/v1/sessions/${sessionId}`, {
                     method: 'DELETE'
                 });
 
@@ -1717,12 +1697,10 @@ class DataManager {
     // ==================== Chat Navigation ====================
 
     startSingleDocChat(docName) {
-        // 跳转到单文档对话模式
-        window.location.href = `/chat?mode=single&doc=${encodeURIComponent(docName)}`;
+        window.location.href = `/chat?doc=${encodeURIComponent(docName)}`;
     }
 
     startMultiDocChat() {
-        // 获取选中的文档
         const checkboxes = document.querySelectorAll('.document-checkbox:checked');
         const selectedDocs = Array.from(checkboxes).map(cb => cb.dataset.docName);
 
@@ -1731,9 +1709,8 @@ class DataManager {
             return;
         }
 
-        // 跳转到手动选择多文档对话模式
         const docsParam = encodeURIComponent(JSON.stringify(selectedDocs));
-        window.location.href = `/chat?mode=manual&docs=${docsParam}`;
+        window.location.href = `/chat?docs=${docsParam}`;
     }
 }
 

@@ -5,15 +5,14 @@
 {% block extra_css %}
 <style>
     .dashboard {
-        max-width: 1400px;
+        max-width: 800px;
         margin: 0 auto;
+        padding: 2rem;
     }
 
-    /* 欢迎区 */
     .welcome {
         text-align: center;
-        padding: 2rem 0;
-        margin-bottom: 2rem;
+        padding: 3rem 0 2rem;
     }
 
     .welcome h1 {
@@ -22,7 +21,6 @@
         margin-bottom: 0.5rem;
     }
 
-    /* 快速启动 */
     .quick-start {
         margin-bottom: 3rem;
     }
@@ -31,359 +29,36 @@
         font-size: 1.5rem;
         font-weight: 600;
         margin-bottom: 1.5rem;
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-    }
-
-    .mode-cards {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-        gap: 1.5rem;
+        text-align: center;
     }
 
     .mode-card {
         background: var(--bg-primary);
-        border-radius: 0.5rem;
-        padding: 2rem;
-        box-shadow: var(--shadow-md);
+        border-radius: 0.75rem;
+        padding: 2.5rem;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
         border: 2px solid var(--border-light);
         transition: all 0.2s;
         cursor: pointer;
-        user-select: none;
+        text-align: center;
     }
 
     .mode-card:hover {
         border-color: var(--primary-color);
-        box-shadow: var(--shadow-lg);
+        box-shadow: 0 8px 30px rgba(102, 126, 234, 0.15);
         transform: translateY(-4px);
     }
 
-    .mode-card.disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-        pointer-events: none;
-    }
-
-    .mode-card:active:not(.disabled) {
-        transform: translateY(-2px);
-        box-shadow: var(--shadow-md);
-    }
-
-    .mode-icon {
-        font-size: 3rem;
-        margin-bottom: 1rem;
-    }
-
-    .mode-title {
-        font-size: 1.25rem;
-        font-weight: 600;
-        margin-bottom: 0.5rem;
-    }
-
-    .mode-desc {
-        color: var(--text-secondary);
-        margin-bottom: 1rem;
-    }
-
+    .mode-icon { font-size: 3.5rem; margin-bottom: 1rem; }
+    .mode-title { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.75rem; }
+    .mode-desc { color: var(--text-secondary); margin-bottom: 1rem; line-height: 1.6; }
     .mode-requirement {
         font-size: 0.875rem;
         color: var(--text-muted);
         background: var(--bg-secondary);
-        padding: 0.5rem;
-        border-radius: 0.375rem;
-        margin-bottom: 1rem;
-    }
-
-    /* 文档管理 */
-    .doc-management {
-        background: var(--bg-primary);
+        padding: 0.5rem 1rem;
         border-radius: 0.5rem;
-        padding: 2rem;
-        box-shadow: var(--shadow-sm);
-    }
-
-    .stats {
-        display: flex;
-        gap: 1.5rem;
-        margin-bottom: 1.5rem;
-        padding: 1.5rem;
-        background: var(--bg-secondary);
-        border-radius: 0.375rem;
-    }
-
-    .stat {
-        flex: 1;
-        text-align: center;
-    }
-
-    .stat-value {
-        font-size: 2rem;
-        font-weight: 700;
-        color: var(--primary-color);
-    }
-
-    .stat-label {
-        font-size: 0.875rem;
-        color: var(--text-secondary);
-        margin-top: 0.25rem;
-    }
-
-    /* Tabs */
-    .tabs {
-        display: flex;
-        gap: 0.5rem;
-        margin-bottom: 1.5rem;
-        border-bottom: 2px solid var(--border-light);
-    }
-
-    .tab {
-        padding: 0.75rem 1.5rem;
-        background: transparent;
-        border: none;
-        border-bottom: 3px solid transparent;
-        cursor: pointer;
-        font-size: 1rem;
-        font-weight: 500;
-        color: var(--text-secondary);
-        transition: all 0.2s;
-    }
-
-    .tab.active {
-        color: var(--primary-color);
-        border-bottom-color: var(--primary-color);
-    }
-
-    .tab-content {
-        display: none;
-    }
-
-    .tab-content.active {
-        display: block;
-    }
-
-    /* 文档表格 */
-    .doc-table {
-        width: 100%;
-        border-collapse: collapse;
-    }
-
-    .doc-table th {
-        text-align: left;
-        padding: 1rem;
-        background: var(--bg-secondary);
-        font-weight: 600;
-        border-bottom: 2px solid var(--border-light);
-    }
-
-    .doc-table td {
-        padding: 1rem;
-        border-bottom: 1px solid var(--border-light);
-    }
-
-    .doc-table tr:hover {
-        background: var(--bg-secondary);
-    }
-
-    .doc-actions {
-        display: flex;
-        gap: 0.5rem;
-    }
-
-    .empty-state {
-        text-align: center;
-        padding: 3rem;
-        color: var(--text-muted);
-    }
-
-    .empty-icon {
-        font-size: 4rem;
-        margin-bottom: 1rem;
-    }
-
-    /* 上传区 */
-    .upload-zone {
-        margin-top: 1.5rem;
-        padding: 2rem;
-        border: 2px dashed var(--border-color);
-        border-radius: 0.375rem;
-        text-align: center;
-        cursor: pointer;
-        transition: all 0.2s;
-    }
-
-    .upload-zone:hover {
-        border-color: var(--primary-color);
-        background: var(--bg-secondary);
-    }
-
-    .upload-zone.dragging {
-        border-color: var(--primary-color);
-        background: var(--primary-color);
-        color: var(--text-white);
-    }
-
-    /* 章节管理 */
-    .chapter-item {
-        padding: 1rem;
-        border: 1px solid var(--border-light);
-        border-radius: 0.375rem;
-        margin-bottom: 0.75rem;
-        background: var(--bg-primary);
-        transition: all 0.2s;
-    }
-
-    .chapter-item:hover {
-        background: var(--bg-secondary);
-        border-color: var(--primary-color);
-    }
-
-    .chapter-item.selected {
-        background: var(--bg-secondary);
-        border-color: var(--primary-color);
-    }
-
-    .chapter-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 0.5rem;
-    }
-
-    .chapter-title {
-        font-weight: 600;
-        color: var(--text-primary);
-    }
-
-    .chapter-actions {
-        display: flex;
-        gap: 0.5rem;
-    }
-
-    .chapter-pages {
-        font-size: 0.875rem;
-        color: var(--text-secondary);
-    }
-
-    .form-group {
-        margin-bottom: 1rem;
-    }
-
-    .form-group label {
-        display: block;
-        margin-bottom: 0.5rem;
-        font-weight: 500;
-        color: var(--text-primary);
-    }
-
-    .form-control {
-        width: 100%;
-        padding: 0.5rem 0.75rem;
-        border: 1px solid var(--border-color);
-        border-radius: 0.375rem;
-        font-size: 1rem;
-        background: var(--bg-primary);
-        color: var(--text-primary);
-    }
-
-    .form-control:focus {
-        outline: none;
-        border-color: var(--primary-color);
-    }
-
-    .modal {
-        display: none;
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0, 0, 0, 0.5);
-        z-index: 1000;
-        justify-content: center;
-        align-items: center;
-    }
-
-    .modal-content {
-        background: var(--bg-primary);
-        border-radius: 0.5rem;
-        box-shadow: var(--shadow-xl);
-        max-width: 600px;
-        width: 90%;
-        max-height: 90vh;
-        display: flex;
-        flex-direction: column;
-    }
-
-    .modal-header {
-        padding: 1.5rem;
-        border-bottom: 1px solid var(--border-light);
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-
-    .modal-header h3 {
-        margin: 0;
-        color: var(--text-primary);
-    }
-
-    .close-btn {
-        background: none;
-        border: none;
-        font-size: 1.5rem;
-        cursor: pointer;
-        color: var(--text-secondary);
-        padding: 0;
-        width: 2rem;
-        height: 2rem;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 0.25rem;
-        transition: all 0.2s;
-    }
-
-    .close-btn:hover {
-        background: var(--bg-secondary);
-        color: var(--text-primary);
-    }
-
-    .modal-body {
-        padding: 1.5rem;
-        overflow-y: auto;
-        flex: 1;
-        min-height: 0;
-    }
-
-    .modal-footer {
-        padding: 1rem 1.5rem;
-        border-top: 1px solid var(--border-light);
-        display: flex;
-        justify-content: flex-end;
-        gap: 0.5rem;
-        flex-shrink: 0;
-    }
-
-    /* PDF页面样式 */
-    #pdf-pages-container {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        padding: 1rem;
-    }
-
-    .pdf-page {
-        margin-bottom: 20px;
-    }
-
-    @media (max-width: 768px) {
-        .mode-cards {
-            grid-template-columns: 1fr;
-        }
-        .stats {
-            flex-direction: column;
-        }
+        display: inline-block;
     }
 </style>
 {% endblock %}
@@ -399,29 +74,15 @@
     <!-- 快速启动 -->
     <section class="quick-start">
         <h2 class="section-title">🚀 快速启动</h2>
-        <div class="mode-cards">
-            <!-- 单文档模式 -->
-            <div class="mode-card" id="single-mode-card" data-mode="single">
-                <div class="mode-icon">📄</div>
-                <div class="mode-title">单文档深度对话</div>
-                <div class="mode-desc">选择一个文档进行深入分析，系统会智能检索文档内容，提供精准的问答服务</div>
-                <div class="mode-requirement">📋 需要：至少1个已索引文档</div>
-            </div>
-
-            <!-- 跨文档智能模式 -->
-            <div class="mode-card" id="cross-mode-card" data-mode="cross">
-                <div class="mode-icon">🌐</div>
-                <div class="mode-title">跨文档智能检索</div>
-                <div class="mode-desc">从所有已索引文档中自动选择最相关的内容，实现跨文档的智能问答</div>
-                <div class="mode-requirement">📋 建议：至少2个已索引文档</div>
-            </div>
-
-            <!-- 跨文档手动选择模式 -->
-            <div class="mode-card" id="manual-mode-card" data-mode="manual">
-                <div class="mode-icon">📚</div>
-                <div class="mode-title">跨文档手动选择</div>
-                <div class="mode-desc">手动选择多个文档作为背景知识，系统将从选定的文档中检索相关内容进行问答</div>
-                <div class="mode-requirement">📋 需要：至少1个已索引文档</div>
+        <div class="mode-cards" style="max-width: 500px; margin: 0 auto;">
+            <!-- 开始对话 -->
+            <div class="mode-card" id="start-chat-card" role="button" tabindex="0"
+                 onclick="event.preventDefault(); event.stopPropagation(); event.stopImmediatePropagation(); window.location.href='/chat'; return false;"
+                 onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();event.stopImmediatePropagation();window.location.href='/chat';return false;}">
+                <div class="mode-icon">💬</div>
+                <div class="mode-title">开始对话</div>
+                <div class="mode-desc">直接开始对话，或在对话中选择 📎 文档和 🌐 搜索工具来增强回答能力</div>
+                <div class="mode-requirement">💡 支持：纯对话 / 单文档 / 多文档 / 网络搜索</div>
             </div>
         </div>
     </section>
@@ -429,13 +90,32 @@
 {% endblock %}
 
 {% block extra_js %}
-<!-- PDF.js -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    // 备用方案：如果内联事件处理器被扩展阻止，使用此备份
+    // 内联 onclick 有最高优先级，应该能绕过大多数扩展
+    function initDashboard() {
+        const startChatCard = document.getElementById('start-chat-card');
+        if (startChatCard) {
+            console.log('✅ 开始对话按钮已就绪（使用内联事件处理器 + 备用监听器）');
+
+            // 备用监听器（如果内联事件失败才会执行）
+            startChatCard.addEventListener('click', function(e) {
+                console.log('⚠️  备用监听器被触发（内联事件可能被阻止）');
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                window.location.href = '/chat';
+            }, true);
+        } else {
+            console.error('❌ 未找到 start-chat-card 元素');
+        }
+    }
+
+    // 确保 DOM 加载完成后执行
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initDashboard);
+    } else {
+        initDashboard();
+    }
 </script>
-<script src="/static/js/utils.js?v=3"></script>
-<script src="/static/js/api.js?v=3"></script>
-<script src="/static/js/ui-components.js?v=3"></script>
-<script src="/static/js/dashboard.js?v=3"></script>
 {% endblock %}

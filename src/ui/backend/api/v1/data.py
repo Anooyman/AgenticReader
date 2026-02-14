@@ -175,7 +175,7 @@ def get_document_data_sizes(doc_name: str, doc_info: Dict) -> Dict[str, float]:
 
 def count_sessions() -> Dict[str, Any]:
     """
-    统计会话信息
+    统计会话信息（扫描平级目录）
 
     Returns:
         会话统计字典
@@ -199,27 +199,28 @@ def count_sessions() -> Dict[str, Any]:
 
     last_update = None
 
-    for mode in ["single", "cross", "manual"]:
-        mode_dir = sessions_dir / mode
-        if mode_dir.exists():
-            session_files = list(mode_dir.glob("*.json"))
-            stats["by_mode"][mode] = len(session_files)
-            stats["total"] += len(session_files)
+    for session_file in sessions_dir.glob("*.json"):
+        if session_file.name == "metadata.json":
+            continue
+        try:
+            with open(session_file, 'r', encoding='utf-8') as f:
+                session_data = json.load(f)
+                stats["total"] += 1
 
-            # Count messages and track last activity
-            for session_file in session_files:
-                try:
-                    with open(session_file, 'r', encoding='utf-8') as f:
-                        session_data = json.load(f)
-                        messages = session_data.get("messages", [])
-                        stats["total_messages"] += len(messages)
+                # 按 mode 字段统计
+                mode = session_data.get("mode", "cross")
+                if mode in stats["by_mode"]:
+                    stats["by_mode"][mode] += 1
 
-                        updated_at = session_data.get("updated_at")
-                        if updated_at:
-                            if last_update is None or updated_at > last_update:
-                                last_update = updated_at
-                except Exception:
-                    continue
+                messages = session_data.get("messages", [])
+                stats["total_messages"] += len(messages)
+
+                updated_at = session_data.get("updated_at")
+                if updated_at:
+                    if last_update is None or updated_at > last_update:
+                        last_update = updated_at
+        except Exception:
+            continue
 
     stats["last_activity"] = last_update
     return stats
@@ -662,14 +663,20 @@ async def delete_document_parts(doc_name: str, request: DeletePartsRequest):
 
                 # 1. 先从 MetadataVectorDB 中删除元数据（在 Registry 删除之前）
                 # 这样 MetadataDB.delete_document() 可以从 Registry 中获取 doc_name 用于日志
+                # 仅在元数据索引文件存在时尝试加载和删除
                 try:
-                    from src.core.vector_db.metadata_db import MetadataVectorDB
-                    metadata_db = MetadataVectorDB()
-                    if metadata_db.delete_document(doc_id):
-                        deleted_items.append("元数据向量数据库记录")
-                        print(f"✓ 已从 MetadataVectorDB 中删除元数据: {doc_name}")
+                    metadata_index_file = DATA_DIR / "vector_db" / "_metadata" / "index.faiss"
+
+                    if metadata_index_file.exists():
+                        from src.core.vector_db.metadata_db import MetadataVectorDB
+                        metadata_db = MetadataVectorDB()
+                        if metadata_db.delete_document(doc_id):
+                            deleted_items.append("元数据向量数据库记录")
+                            print(f"✓ 已从 MetadataVectorDB 中删除元数据: {doc_name}")
+                        else:
+                            failed_items.append("元数据向量数据库: 删除未完全成功")
                     else:
-                        failed_items.append("元数据向量数据库: 删除未完全成功")
+                        print(f"ℹ️  元数据向量数据库未初始化，跳过删除")
                 except Exception as meta_e:
                     failed_items.append(f"元数据向量数据库: {meta_e}")
                     print(f"⚠️ 从 MetadataVectorDB 删除失败: {meta_e}")

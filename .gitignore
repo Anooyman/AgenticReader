@@ -106,3 +106,4 @@ poetry.lock
 
 # Ignore all data files
 data/ 
+scraped_data/

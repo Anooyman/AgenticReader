@@ -52,6 +52,9 @@ mcp-server-fetch
 beautifulsoup4==4.12.3
 lxml==5.3.0
 
+# Playwright (for web_scraper MCP)
+playwright==1.49.1
+
 # ==================== HTTP & Networking ====================
 
 httpx==0.28.1

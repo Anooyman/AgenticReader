@@ -69,16 +69,14 @@ const API = {
 
     // 聊天
     chat: {
-        async initialize(mode, docName = null, selectedDocs = null, sessionId = null) {
+        async initialize(enabledTools = null, selectedDocs = null, sessionId = null) {
             const res = await fetch('/api/v1/chat/initialize', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    mode: mode,
-                    doc_name: docName,
+                    enabled_tools: enabledTools,
                     selected_docs: selectedDocs,
-                    session_id: sessionId,
-                    doc_type: 'pdf'
+                    session_id: sessionId
                 })
             });
 
@@ -101,13 +99,24 @@ const API = {
             }
 
             return await res.json();
+        },
+
+        async loadMoreMessages(offset = 0, limit = 20) {
+            const res = await fetch(`/api/v1/chat/load-more-messages?offset=${offset}&limit=${limit}`);
+
+            if (!res.ok) {
+                const error = await res.json();
+                throw new Error(error.detail || '加载历史消息失败');
+            }
+
+            return await res.json();
         }
     },
 
     // 会话管理
     sessions: {
-        async list(mode, limit = null) {
-            let url = `/api/v1/sessions/list/${mode}`;
+        async list(limit = null) {
+            let url = '/api/v1/sessions/list';
             if (limit) {
                 url += `?limit=${limit}`;
             }
@@ -121,8 +130,8 @@ const API = {
             return await res.json();
         },
 
-        async get(mode, sessionId) {
-            const res = await fetch(`/api/v1/sessions/${mode}/${sessionId}`);
+        async get(sessionId) {
+            const res = await fetch(`/api/v1/sessions/${sessionId}`);
             if (!res.ok) {
                 const error = await res.json();
                 throw new Error(error.detail || '获取会话失败');
@@ -131,8 +140,8 @@ const API = {
             return await res.json();
         },
 
-        async delete(mode, sessionId) {
-            const res = await fetch(`/api/v1/sessions/${mode}/${sessionId}`, {
+        async delete(sessionId) {
+            const res = await fetch(`/api/v1/sessions/${sessionId}`, {
                 method: 'DELETE'
             });
 

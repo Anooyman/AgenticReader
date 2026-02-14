@@ -336,11 +336,124 @@
         padding: 1rem 1.5rem;
         background: var(--bg-secondary);
         box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+        position: relative;
+    }
+
+    /* 芯片栏 */
+    .chips-bar {
+        padding: 0.4rem 0;
+        margin-bottom: 0.5rem;
+    }
+    .chips-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+    }
+    .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        padding: 0.25rem 0.6rem;
+        background: var(--primary-color, #667eea);
+        color: white;
+        border-radius: 1rem;
+        font-size: 0.8rem;
+        white-space: nowrap;
+    }
+    .chip .chip-remove {
+        cursor: pointer;
+        opacity: 0.7;
+        font-size: 0.7rem;
+        margin-left: 0.2rem;
+    }
+    .chip .chip-remove:hover {
+        opacity: 1;
+    }
+    .chip.chip-search {
+        background: #10b981;
+    }
+
+    /* 工具按钮 */
+    .tool-btn {
+        border: none;
+        background: transparent;
+        font-size: 1.2rem;
+        cursor: pointer;
+        padding: 0.4rem;
+        border-radius: 0.5rem;
+        transition: background 0.2s;
+        flex-shrink: 0;
+    }
+    .tool-btn:hover {
+        background: rgba(0,0,0,0.05);
+    }
+    .tool-btn.active {
+        background: rgba(102, 126, 234, 0.15);
+    }
+
+    /* 文档选择弹窗 */
+    .doc-picker-modal {
+        position: absolute;
+        bottom: 100%;
+        left: 1.5rem;
+        right: 1.5rem;
+        max-height: 300px;
+        z-index: 100;
+    }
+    .doc-picker-content {
+        background: var(--bg-primary, white);
+        border: 1px solid var(--border-light);
+        border-radius: 0.75rem;
+        box-shadow: 0 -4px 20px rgba(0,0,0,0.1);
+        padding: 0.75rem;
+        max-height: 300px;
+        overflow-y: auto;
+    }
+    .doc-picker-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-weight: 600;
+        margin-bottom: 0.5rem;
+    }
+    .doc-picker-close-btn {
+        border: none;
+        background: transparent;
+        font-size: 1.1rem;
+        cursor: pointer;
+        padding: 0.2rem 0.4rem;
+        border-radius: 0.3rem;
+    }
+    .doc-picker-close-btn:hover {
+        background: rgba(0,0,0,0.05);
+    }
+    .doc-picker-option {
+        padding: 0.3rem 0;
+    }
+    .doc-picker-option label {
+        cursor: pointer;
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+    .doc-picker-list {
+        max-height: 180px;
+        overflow-y: auto;
+    }
+    .doc-picker-loading {
+        text-align: center;
+        padding: 1rem;
+        color: #999;
+    }
+    .doc-picker-footer {
+        margin-top: 0.5rem;
+        text-align: right;
     }
 
     .input-wrapper {
         display: flex;
-        gap: 0.75rem;
+        gap: 0.5rem;
         align-items: flex-end;
     }
 
@@ -836,8 +949,8 @@
     <div class="chat-section">
         <div class="chat-header">
             <div>
-                <div class="chat-title" id="chat-title">对话模式</div>
-                <div style="font-size: 0.875rem; color: var(--text-muted);" id="chat-subtitle">初始化中...</div>
+                <div class="chat-title" id="chat-title">智能对话</div>
+                <div style="font-size: 0.875rem; color: var(--text-muted);" id="chat-subtitle">点击 📎 选择文档，或直接开始对话</div>
             </div>
             <div class="chat-actions">
                 <button class="btn btn-sm btn-secondary" id="toggle-pdf">📄 PDF</button>
@@ -855,9 +968,37 @@
         </div>
 
         <div class="chat-input">
+            <!-- 芯片栏：显示已选的文档和工具 -->
+            <div id="chips-bar" class="chips-bar" style="display: none;">
+                <div id="chips-container" class="chips-container"></div>
+            </div>
+
             <div class="input-wrapper">
-                <textarea id="message-input" class="form-control" placeholder="请输入问题... (Ctrl+Enter 发送)" disabled></textarea>
-                <button id="send-btn" class="btn btn-primary" disabled>📤</button>
+                <!-- 工具按钮 -->
+                <button id="btn-attach-doc" class="tool-btn" title="选择PDF文档">📎</button>
+                <button id="btn-web-search" class="tool-btn" title="启用网络搜索">🌐</button>
+                <textarea id="message-input" class="form-control" placeholder="直接输入问题开始对话，或点击 📎 选择文档..." disabled></textarea>
+                <button id="send-btn" class="btn btn-primary" disabled>⬆️</button>
+            </div>
+
+            <!-- 文档选择弹窗 -->
+            <div id="doc-picker-modal" class="doc-picker-modal" style="display: none;">
+                <div class="doc-picker-content">
+                    <div class="doc-picker-header">
+                        <span>📚 选择文档</span>
+                        <button id="doc-picker-close" class="doc-picker-close-btn">✕</button>
+                    </div>
+                    <div class="doc-picker-option">
+                        <label><input type="checkbox" id="doc-select-all" value="__all__"> 全部文档（自动匹配）</label>
+                    </div>
+                    <hr style="margin: 0.5rem 0; border-color: var(--border-light);">
+                    <div id="doc-picker-list" class="doc-picker-list">
+                        <div class="doc-picker-loading">加载中...</div>
+                    </div>
+                    <div class="doc-picker-footer">
+                        <button id="doc-picker-confirm" class="btn btn-primary btn-sm">确认</button>
+                    </div>
+                </div>
             </div>
 
             <!-- 快捷导航按钮 -->
@@ -881,7 +1022,7 @@
 
     <div class="resizer" id="resizer"></div>
 
-    <div class="pdf-section" id="pdf-section">
+    <div class="pdf-section hidden" id="pdf-section">
         <div class="pdf-header">
             <div>📄 PDF 预览</div>
             <button class="btn btn-sm btn-secondary" id="close-pdf">✕</button>

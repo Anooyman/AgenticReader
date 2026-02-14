@@ -41,6 +41,21 @@ MCP_CONFIG = {
       "type": "stdio",
     }
   },
+  # ===== SearchAgent MCP 服务（顶层配置）=====
+  # DuckDuckGo 搜索引擎
+  "duckduckgo": {
+    "type": "stdio",
+    "command": "uvx",
+    "args": ["duckduckgo-mcp-server"],
+    "env": {}
+  },
+  # Web Scraper 服务
+  "web_scraper": {
+    "type": "stdio",
+    "command": "python",
+    "args": ["-m", "scraper.mcp_server.server"],
+    "env": {"PYTHONPATH": "src/services/web_scraper"}
+  },
     #"fetch": {
     #  "command": "python",
     #  "args": [

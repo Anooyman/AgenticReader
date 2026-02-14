@@ -4,8 +4,8 @@
 
 class ChatApp {
     constructor() {
-        this.mode = null;
-        this.docName = null;
+        // 工具/文档选择（替代旧的 mode）
+        this.enabledTools = [];
         this.selectedDocs = null;
         this.sessionId = null;
         this.ws = null;
@@ -46,20 +46,26 @@ class ChatApp {
 
     parseUrlParams() {
         const params = new URLSearchParams(window.location.search);
-        this.mode = params.get('mode') || 'single';
-        this.docName = params.get('doc') || null;
         this.sessionId = params.get('session_id') || null;
 
-        // Parse selected docs for manual mode
+        const doc = params.get('doc');
         const docsParam = params.get('docs');
-        if (docsParam) {
+
+        if (doc) {
+            // 单文档模式: /chat?doc=xxx
+            this.enabledTools = ['retrieve_documents'];
+            this.selectedDocs = [doc];
+        } else if (docsParam) {
+            // 多文档模式: /chat?docs=[...]
             try {
+                this.enabledTools = ['retrieve_documents'];
                 this.selectedDocs = JSON.parse(decodeURIComponent(docsParam));
             } catch (e) {
                 console.error('Failed to parse docs parameter:', e);
-                this.selectedDocs = null;
             }
         }
+        // 无 doc/docs 参数 → 默认纯对话，enabled_tools 为空
+        // session_id 存在时，工具/文档选择会从 session 中恢复
     }
 
     /**
@@ -168,6 +174,22 @@ class ChatApp {
             if (await UIComponents.confirm('确定要清空对话吗？')) {
                 await this.clearChat();
             }
+        });
+
+        // 📎 文档选择按钮
+        document.getElementById('btn-attach-doc').addEventListener('click', () => this.toggleDocPicker());
+
+        // 🌐 网络搜索按钮
+        document.getElementById('btn-web-search').addEventListener('click', () => this.toggleWebSearch());
+
+        // 文档选择器关闭
+        document.getElementById('doc-picker-close').addEventListener('click', () => this.hideDocPicker());
+        document.getElementById('doc-picker-confirm').addEventListener('click', () => this.confirmDocSelection());
+
+        // "全选"复选框
+        document.getElementById('doc-select-all').addEventListener('change', (e) => {
+            const checkboxes = document.querySelectorAll('#doc-picker-list input[type="checkbox"]');
+            checkboxes.forEach(cb => { cb.checked = false; cb.disabled = e.target.checked; });
         });
 
         // PDF控制
@@ -327,39 +349,36 @@ class ChatApp {
     async initializeChat() {
         UIComponents.showLoading('初始化中...');
         try {
-            // 初始化聊天服务（传入 sessionId）
-            const result = await API.chat.initialize(this.mode, this.docName, this.selectedDocs, this.sessionId);
+            // 初始化聊天服务
+            const result = await API.chat.initialize(
+                this.enabledTools.length > 0 ? this.enabledTools : null,
+                this.selectedDocs,
+                this.sessionId
+            );
 
             // 从返回的会话信息中恢复状态
             if (result.session_id) {
                 this.sessionId = result.session_id;
-                this.docName = result.doc_name || this.docName;
+                this.enabledTools = result.enabled_tools || this.enabledTools;
                 this.selectedDocs = result.selected_docs || this.selectedDocs;
 
                 console.log('会话已初始化:', {
                     session_id: this.sessionId,
-                    doc_name: this.docName,
+                    enabled_tools: this.enabledTools,
                     selected_docs: this.selectedDocs,
                     message_count: result.message_count
                 });
             }
 
             // 更新UI标题
-            if (this.mode === 'single') {
-                document.getElementById('chat-title').textContent = '单文档对话: ' + this.docName;
-                document.getElementById('chat-subtitle').textContent = '深度分析当前文档';
-            } else if (this.mode === 'cross') {
-                document.getElementById('chat-title').textContent = '跨文档智能对话';
-                document.getElementById('chat-subtitle').textContent = '智能检索所有文档';
-            } else if (this.mode === 'manual') {
-                document.getElementById('chat-title').textContent = '跨文档手动选择模式';
-                const docsCount = this.selectedDocs ? this.selectedDocs.length : 0;
-                document.getElementById('chat-subtitle').textContent = '已选择 ' + docsCount + ' 个文档';
-            }
+            document.getElementById('chat-title').textContent = 'AgenticReader';
+            document.getElementById('chat-subtitle').textContent = '智能文档对话助手';
 
-            // 加载历史消息（如果有）
+            // 更新芯片栏
+            this.updateChipsBar();
+
+            // 加载历史消息
             if (result.messages && result.messages.length > 0) {
-                console.log('加载历史消息:', result.messages.length, '条');
                 this.loadHistoryMessages(result.messages);
                 this.loadedMessageCount = result.messages.length;
             }
@@ -367,33 +386,29 @@ class ChatApp {
             // 设置分页信息
             this.totalMessageCount = result.message_count || 0;
             this.hasMoreMessages = result.has_more_messages || false;
-
-            // 如果有更多历史消息，显示"加载更多"按钮
             if (this.hasMoreMessages) {
                 this.showLoadMoreButton();
             }
 
-            // ✅ 优化: 异步连接WebSocket，不阻塞初始化
+            // 连接 WebSocket
             this.connectWebSocket().catch(err => {
                 console.error('WebSocket连接失败:', err);
                 Utils.notify('连接失败，请刷新页面重试', 'error');
             });
 
-            // 处理PDF预览（异步加载，不阻塞聊天）
-            if (this.mode === 'single' && this.docName) {
-                // 单文档模式：异步加载PDF，不等待完成
-                this.loadPdf(this.docName).catch(err => {
+            // PDF 预览
+            if (this.selectedDocs && this.selectedDocs.length === 1) {
+                this.loadPdf(this.selectedDocs[0]).catch(err => {
                     console.error('PDF加载失败:', err);
                 });
-            } else if (this.mode === 'manual' && this.selectedDocs && this.selectedDocs.length > 0) {
-                // 手动选择模式：显示PDF选择器，填充已选择的文档
+            } else if (this.selectedDocs && this.selectedDocs.length > 1) {
                 this.setupPdfSelector(this.selectedDocs).catch(err => {
                     console.error('PDF选择器设置失败:', err);
                 });
-            } else if (this.mode === 'cross') {
-                // 跨文档智能模式：延迟加载文档列表，减少初始化时间
+            } else if (this.enabledTools.includes('retrieve_documents')) {
+                // 跨文档模式（无指定文档）：设置 PDF 选择器显示所有可用文档
                 this.setupPdfSelectorForCross().catch(err => {
-                    console.error('获取文档列表失败:', err);
+                    console.error('PDF选择器设置失败:', err);
                 });
             }
 
@@ -576,7 +591,7 @@ class ChatApp {
         });
 
         result = result.replace(pattern1, (match, page) => {
-            const doc = this.docName || '';
+            const doc = (this.selectedDocs && this.selectedDocs.length === 1) ? this.selectedDocs[0] : '';
             return '<a href="#" class="page-ref" onclick="chatApp.jumpToPage(\'' + doc + '\', ' + page + '); return false;">📄 p.' + page + '</a>';
         });
 
@@ -630,6 +645,8 @@ class ChatApp {
 
             if (docNames.length > 0) {
                 await this.setupPdfSelector(docNames);
+                // 显示PDF区域，让用户可以选择文档预览
+                document.getElementById('pdf-section').classList.remove('hidden');
             } else {
                 console.log('没有可用的文档');
             }
@@ -868,11 +885,6 @@ class ChatApp {
         setTimeout(() => this.renderVisiblePages(), 200);
     }
 
-    jumpToPage(pageNum) {
-        // 滚动到指定页面
-        this.scrollToPage(pageNum);
-    }
-
     scrollToPage(pageNum) {
         const pageElement = document.getElementById('pdf-page-' + pageNum);
         if (pageElement) {
@@ -910,10 +922,12 @@ class ChatApp {
         this.isSending = true;
         document.getElementById('send-btn').disabled = true;
 
-        // Send message
+        // Send message with tool/doc context
         this.ws.send(JSON.stringify({
             type: 'user_message',
-            message: message
+            message: message,
+            enabled_tools: this.enabledTools.length > 0 ? this.enabledTools : null,
+            selected_docs: this.selectedDocs
         }));
 
         // Clear input
@@ -1008,7 +1022,7 @@ class ChatApp {
         // 如果已经有其他文档在 parallelDocsState 中，或者 mode 是 cross/manual，就使用并行视图
         const isRetrievalAgent = progressData.agent === 'retrieval';
         const hasSpecificDoc = progressData.doc_name && progressData.doc_name !== 'MultiDoc';
-        const isMultiDocMode = this.mode === 'cross' || this.mode === 'manual';
+        const isMultiDocMode = this.selectedDocs && this.selectedDocs.length > 1 || (!this.selectedDocs && this.enabledTools.includes('retrieve_documents'));
         const hasMultipleDocs = this.parallelDocsState && Object.keys(this.parallelDocsState).length > 0;
         
         // 情况1：回答代理进入 retrieve_multi 阶段（准备并行检索）
@@ -1037,15 +1051,17 @@ class ChatApp {
 
         // Stage configuration with icons
         const stageConfig = {
-            // Answer Agent stages
-            'analyze_intent': { name: '意图分析', icon: '🎯' },
-            'retrieve_single': { name: '单文档检索', icon: '📄' },
+            // Answer Agent stages (ReAct循环)
+            'plan': { name: '工具规划', icon: '🧠' },
+            'execute_tools': { name: '执行工具', icon: '⚡' },
+            'generate': { name: '生成答案', icon: '✨' },
+            'generate_answer': { name: '生成答案', icon: '✨' },
+            // Answer Agent 工具内部 stages
             'select_docs': { name: '文档选择', icon: '📚' },
+            'retrieve': { name: '文档检索', icon: '📄' },
             'rewrite_queries': { name: '查询改写', icon: '✏️' },
             'retrieve_multi': { name: '多文档检索', icon: '🔎' },
             'synthesize': { name: '综合答案', icon: '🧩' },
-            'generate': { name: '生成答案', icon: '✨' },
-            'generate_answer': { name: '生成答案', icon: '✨' },
             // Retrieval Agent stages
             'rewrite': { name: '查询重写', icon: '📝' },
             'think': { name: '思考选择', icon: '💭' },
@@ -1141,10 +1157,8 @@ class ChatApp {
         // Define workflow stages for each agent type
         const workflows = {
             'answer': [
-                { key: 'analyze_intent', label: '意图分析' },
-                { key: 'select_docs', label: '文档选择' },
-                { key: 'retrieve_multi', label: '检索' },
-                { key: 'synthesize', label: '综合' },
+                { key: 'plan', label: '规划' },
+                { key: 'execute_tools', label: '执行' },
                 { key: 'generate', label: '生成' }
             ],
             'retrieval': [
@@ -1156,22 +1170,37 @@ class ChatApp {
             ]
         };
 
+        // 工具内部 stage → 映射到 workflow 节点
+        // 当 retrieve_documents 工具内部发送 select_docs/retrieve/rewrite_queries 等 stage 时
+        // 应该让 execute_tools 节点保持高亮
+        const toolStageMapping = {
+            'select_docs': 'execute_tools',
+            'retrieve': 'execute_tools',
+            'rewrite_queries': 'execute_tools',
+            'retrieve_multi': 'execute_tools',
+            'synthesize': 'execute_tools'
+        };
+
         const workflow = workflows[progressData.agent] || [];
         if (workflow.length === 0) {
             nodeFlow.style.display = 'none';
             return;
         }
 
+        // 将工具内部 stage 映射到 workflow 节点
+        const currentStage = progressData.stage;
+        const mappedStage = toolStageMapping[currentStage] || currentStage;
+
         // 总是显示节点流程（包括单文档检索）
         nodeFlow.style.display = 'flex';
-        
+
         // Build node flow HTML
         let html = '';
         workflow.forEach((node, index) => {
             const stageInfo = stageConfig[node.key] || { icon: '⚙️' };
-            const isActive = progressData.stage === node.key || progressData.stage_name === node.key;
-            const isCompleted = index < workflow.findIndex(n => n.key === progressData.stage || n.key === progressData.stage_name);
-            
+            const isActive = mappedStage === node.key || progressData.stage_name === node.key;
+            const isCompleted = index < workflow.findIndex(n => n.key === mappedStage || n.key === progressData.stage_name);
+
             let nodeClass = 'node';
             if (isActive) nodeClass += ' active';
             else if (isCompleted) nodeClass += ' completed';
@@ -1189,46 +1218,6 @@ class ChatApp {
         });
 
         nodeFlow.innerHTML = html;
-    }
-
-    prepareParallelView(progressData) {
-        /**
-         * 准备并行文档视图（当收到 retrieve_multi 的总体进度时）
-         * 显示等待状态，等待具体文档的进度更新
-         */
-        const parallelDocsProgress = document.getElementById('parallel-docs-progress');
-        const docsProgressList = document.getElementById('docs-progress-list');
-        const mainText = document.getElementById('progress-main-text');
-        const nodeFlow = document.getElementById('node-flow');
-        const progressBarWrapper = document.getElementById('progress-bar-wrapper');
-        const progressDetails = document.getElementById('progress-details');
-
-        if (!parallelDocsProgress || !docsProgressList) return;
-
-        // 隐藏单一进度视图
-        progressBarWrapper.style.display = 'none';
-        progressDetails.style.display = 'none';
-        nodeFlow.style.display = 'none';
-
-        // 显示并行进度视图
-        parallelDocsProgress.style.display = 'block';
-
-        // 更新主文本
-        mainText.innerHTML = `🔎 <strong>多文档并行检索</strong>`;
-
-        // 显示等待状态
-        docsProgressList.innerHTML = `
-            <div style="text-align: center; padding: 2rem; color: var(--text-muted);">
-                <div class="spinner" style="margin: 0 auto 1rem;"></div>
-                <div>${progressData.message || '正在准备并行检索...'}</div>
-            </div>
-        `;
-
-        // 重置状态
-        this.parallelDocsState = {};
-
-        // 智能滚动到底部（仅在用户已经在底部时滚动）
-        this.smartScrollToBottom();
     }
 
     updateParallelDocsProgress(progressData) {
@@ -1672,6 +1661,205 @@ class ChatApp {
         } finally {
             this.isLoadingMore = false;
         }
+    }
+
+    // ==================== 工具/文档选择器方法 ====================
+
+    /**
+     * 更新芯片栏显示
+     */
+    updateChipsBar() {
+        const chipsBar = document.getElementById('chips-bar');
+        const container = document.getElementById('chips-container');
+        if (!chipsBar || !container) return;
+
+        container.innerHTML = '';
+        let hasChips = false;
+
+        // 文档芯片
+        if (this.enabledTools.includes('retrieve_documents') && this.selectedDocs) {
+            this.selectedDocs.forEach(doc => {
+                const chip = document.createElement('span');
+                chip.className = 'chip';
+                chip.innerHTML = `📄 ${doc} <span class="chip-remove" data-doc="${doc}">✕</span>`;
+                chip.querySelector('.chip-remove').addEventListener('click', (e) => {
+                    this.removeDoc(e.target.dataset.doc);
+                });
+                container.appendChild(chip);
+                hasChips = true;
+            });
+        } else if (this.enabledTools.includes('retrieve_documents') && !this.selectedDocs) {
+            // 全局检索模式
+            const chip = document.createElement('span');
+            chip.className = 'chip';
+            chip.innerHTML = `📚 全部文档 <span class="chip-remove" data-action="remove-all-docs">✕</span>`;
+            chip.querySelector('.chip-remove').addEventListener('click', () => {
+                this.enabledTools = this.enabledTools.filter(t => t !== 'retrieve_documents');
+                this.selectedDocs = null;
+                this.updateChipsBar();
+                document.getElementById('btn-attach-doc').classList.remove('active');
+            });
+            container.appendChild(chip);
+            hasChips = true;
+        }
+
+        // 网络搜索芯片
+        if (this.enabledTools.includes('search_web')) {
+            const chip = document.createElement('span');
+            chip.className = 'chip chip-search';
+            chip.innerHTML = `🌐 网络搜索 <span class="chip-remove" data-action="remove-search">✕</span>`;
+            chip.querySelector('.chip-remove').addEventListener('click', () => {
+                this.enabledTools = this.enabledTools.filter(t => t !== 'search_web');
+                this.updateChipsBar();
+                document.getElementById('btn-web-search').classList.remove('active');
+            });
+            container.appendChild(chip);
+            hasChips = true;
+        }
+
+        chipsBar.style.display = hasChips ? 'block' : 'none';
+    }
+
+    /**
+     * 移除某个文档
+     */
+    removeDoc(docName) {
+        if (!this.selectedDocs) return;
+        this.selectedDocs = this.selectedDocs.filter(d => d !== docName);
+        if (this.selectedDocs.length === 0) {
+            this.selectedDocs = null;
+            this.enabledTools = this.enabledTools.filter(t => t !== 'retrieve_documents');
+            document.getElementById('btn-attach-doc').classList.remove('active');
+            document.getElementById('pdf-section').classList.add('hidden');
+        }
+        this.updateChipsBar();
+    }
+
+    /**
+     * 切换文档选择器弹窗
+     */
+    async toggleDocPicker() {
+        const modal = document.getElementById('doc-picker-modal');
+        if (modal.style.display === 'none' || !modal.style.display) {
+            await this.showDocPicker();
+        } else {
+            this.hideDocPicker();
+        }
+    }
+
+    /**
+     * 显示文档选择器
+     */
+    async showDocPicker() {
+        const modal = document.getElementById('doc-picker-modal');
+        const list = document.getElementById('doc-picker-list');
+        const selectAll = document.getElementById('doc-select-all');
+
+        modal.style.display = 'block';
+        list.innerHTML = '<div class="doc-picker-loading">加载中...</div>';
+
+        try {
+            // 获取已索引文档列表
+            const result = await API.documents.list();
+            const docs = result.documents || result || [];
+
+            if (docs.length === 0) {
+                list.innerHTML = '<div class="doc-picker-loading">暂无已索引文档</div>';
+                return;
+            }
+
+            list.innerHTML = '';
+            docs.forEach(doc => {
+                const docName = doc.doc_name || doc.name || doc;
+                const isChecked = this.selectedDocs && this.selectedDocs.includes(docName);
+                const div = document.createElement('div');
+                div.className = 'doc-picker-option';
+                div.innerHTML = `<label><input type="checkbox" value="${docName}" ${isChecked ? 'checked' : ''}> ${docName}</label>`;
+                list.appendChild(div);
+            });
+
+            // 设置"全选"状态
+            selectAll.checked = this.enabledTools.includes('retrieve_documents') && !this.selectedDocs;
+            if (selectAll.checked) {
+                list.querySelectorAll('input[type="checkbox"]').forEach(cb => { cb.disabled = true; });
+            }
+        } catch (error) {
+            console.error('获取文档列表失败:', error);
+            list.innerHTML = '<div class="doc-picker-loading">加载失败</div>';
+        }
+    }
+
+    hideDocPicker() {
+        document.getElementById('doc-picker-modal').style.display = 'none';
+    }
+
+    /**
+     * 确认文档选择
+     */
+    confirmDocSelection() {
+        const selectAll = document.getElementById('doc-select-all');
+
+        if (selectAll.checked) {
+            // 全部文档模式
+            if (!this.enabledTools.includes('retrieve_documents')) {
+                this.enabledTools.push('retrieve_documents');
+            }
+            this.selectedDocs = null;
+        } else {
+            // 选择特定文档
+            const checkboxes = document.querySelectorAll('#doc-picker-list input[type="checkbox"]:checked');
+            const selected = Array.from(checkboxes).map(cb => cb.value);
+
+            if (selected.length > 0) {
+                if (!this.enabledTools.includes('retrieve_documents')) {
+                    this.enabledTools.push('retrieve_documents');
+                }
+                this.selectedDocs = selected;
+            } else {
+                // 没选任何文档 → 移除 retrieve_documents
+                this.enabledTools = this.enabledTools.filter(t => t !== 'retrieve_documents');
+                this.selectedDocs = null;
+            }
+        }
+
+        this.hideDocPicker();
+        this.updateChipsBar();
+
+        // 更新按钮状态
+        const btn = document.getElementById('btn-attach-doc');
+        if (this.enabledTools.includes('retrieve_documents')) {
+            btn.classList.add('active');
+        } else {
+            btn.classList.remove('active');
+        }
+
+        // 选了 PDF → 展开 PDF 预览面板并加载
+        const pdfSection = document.getElementById('pdf-section');
+        if (this.selectedDocs && this.selectedDocs.length > 0) {
+            pdfSection.classList.remove('hidden');
+            if (this.selectedDocs.length === 1) {
+                this.loadPdf(this.selectedDocs[0]).catch(err => console.error('PDF加载失败:', err));
+            } else {
+                this.setupPdfSelector(this.selectedDocs).catch(err => console.error('PDF选择器失败:', err));
+            }
+        } else {
+            pdfSection.classList.add('hidden');
+        }
+    }
+
+    /**
+     * 切换网络搜索
+     */
+    toggleWebSearch() {
+        const btn = document.getElementById('btn-web-search');
+        if (this.enabledTools.includes('search_web')) {
+            this.enabledTools = this.enabledTools.filter(t => t !== 'search_web');
+            btn.classList.remove('active');
+        } else {
+            this.enabledTools.push('search_web');
+            btn.classList.add('active');
+        }
+        this.updateChipsBar();
     }
 }
 

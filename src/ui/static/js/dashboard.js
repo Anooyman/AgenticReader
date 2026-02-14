@@ -11,7 +11,11 @@ class Dashboard {
 
     async init() {
         this.setupEventListeners();
-        await this.loadData();
+        // 仅在有文档管理 UI 时才加载数据（简化后的主页不需要）
+        const hasDocTable = document.getElementById('indexed-tbody');
+        if (hasDocTable) {
+            await this.loadData();
+        }
     }
 
     setupEventListeners() {
@@ -209,7 +213,6 @@ class Dashboard {
             return;
         }
 
-        // 显示会话选择对话框
         this.showSessionChoice('cross');
     }
 
@@ -219,7 +222,6 @@ class Dashboard {
             return;
         }
 
-        // 显示会话选择对话框
         this.showSessionChoice('manual');
     }
 
@@ -249,10 +251,8 @@ class Dashboard {
         newSessionBtn.onclick = () => {
             modal.remove();
             if (mode === 'cross') {
-                // 直接跳转到跨文档对话
-                window.location.href = '/chat?mode=cross';
+                window.location.href = '/chat';
             } else {
-                // 显示文档选择器
                 this.showMultiDocSelector();
             }
         };
@@ -290,9 +290,11 @@ class Dashboard {
         try {
             UIComponents.showLoading('加载历史会话...');
 
-            // 获取历史会话列表
-            const result = await API.sessions.list(mode);
-            const sessions = result.sessions || [];
+            // 获取所有历史会话
+            const result = await API.sessions.list();
+            // 按 mode 过滤（用于 dashboard 分类显示）
+            const allSessions = result.sessions || [];
+            const sessions = allSessions.filter(s => s.mode === mode);
 
             UIComponents.hideLoading();
 
@@ -358,7 +360,7 @@ class Dashboard {
 
                 sessionItem.onclick = () => {
                     modal.remove();
-                    this.loadHistorySession(mode, session.session_id);
+                    this.loadHistorySession(session.session_id);
                 };
 
                 sessionItem.onmouseover = () => {
@@ -396,9 +398,8 @@ class Dashboard {
         }
     }
 
-    loadHistorySession(mode, sessionId) {
-        // 跳转到聊天页面，带上session_id参数
-        window.location.href = '/chat?mode=' + mode + '&session_id=' + encodeURIComponent(sessionId);
+    loadHistorySession(sessionId) {
+        window.location.href = '/chat?session_id=' + encodeURIComponent(sessionId);
     }
 
     showMultiDocSelector() {
@@ -535,7 +536,7 @@ class Dashboard {
 
     startChatWithDocs(selectedDocs) {
         const docsParam = encodeURIComponent(JSON.stringify(selectedDocs));
-        window.location.href = '/chat?mode=manual&docs=' + docsParam;
+        window.location.href = '/chat?docs=' + docsParam;
     }
 
     showDocSelector() {
@@ -597,7 +598,7 @@ class Dashboard {
     }
 
     startChat(docName) {
-        window.location.href = '/chat?mode=single&doc=' + encodeURIComponent(docName);
+        window.location.href = '/chat?doc=' + encodeURIComponent(docName);
     }
 
     async uploadFile(file) {

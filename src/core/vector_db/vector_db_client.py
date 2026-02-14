@@ -43,13 +43,17 @@ class VectorDBClient:
         self._retrieved_doc_hashes: Set[str] = set()
 
         # 尝试自动加载已存在的向量数据库
-        if os.path.exists(db_path):
+        # 检查 index.faiss 文件是否存在（而不仅仅是目录）
+        index_file = os.path.join(db_path, "index.faiss")
+        if os.path.exists(index_file):
             try:
                 self.load_vector_db()
                 logger.info(f"✅ 成功加载已存在的向量数据库: {db_path}")
             except Exception as e:
-                logger.warning(f"⚠️ 加载向量数据库失败（可能尚未创建）: {e}")
+                logger.warning(f"⚠️ 加载向量数据库失败（可能已损坏）: {e}")
                 self.vector_db = None
+        elif os.path.exists(db_path):
+            logger.debug(f"📁 向量数据库目录存在但索引文件未创建: {db_path}")
 
     def build_vector_db(self, content_docs: List[Document]) -> FAISS:
         """

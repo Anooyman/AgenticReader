@@ -2,9 +2,14 @@
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 import json
+import traceback
 from datetime import datetime
+import os
 
 router = APIRouter()
+
+# 检查是否为开发模式
+DEBUG_MODE = os.getenv("DEBUG", "false").lower() == "true"
 
 
 @router.websocket("/ws/chat")
@@ -26,6 +31,16 @@ async def websocket_chat(websocket: WebSocket):
 
             message_type = message_data.get("type")
             user_message = message_data.get("message")
+            # 从消息中提取工具/文档选择（支持每条消息动态切换）
+            msg_enabled_tools = message_data.get("enabled_tools")
+            msg_selected_docs = message_data.get("selected_docs")
+
+            # 日志记录收到的消息（开发模式下更详细）
+            if DEBUG_MODE:
+                print(f"📥 收到消息: type={message_type}, tools={msg_enabled_tools}, docs={msg_selected_docs}")
+                print(f"   用户消息: {user_message[:100]}..." if len(user_message or "") > 100 else f"   用户消息: {user_message}")
+            else:
+                print(f"📥 收到消息: type={message_type}")
 
             if message_type == "user_message" and user_message:
                 # 回显用户消息
@@ -66,22 +81,48 @@ async def websocket_chat(websocket: WebSocket):
                         print(f"⚠️  进度更新异常: {type(e).__name__}: {e}")
 
                 try:
-                    # 调用聊天服务（传递进度回调）
-                    response = await chat_service.chat(user_message, progress_callback=progress_callback)
+                    # 调用聊天服务（传递进度回调和工具/文档选择）
+                    response = await chat_service.chat(
+                        user_message,
+                        progress_callback=progress_callback,
+                        enabled_tools=msg_enabled_tools,
+                        selected_docs=msg_selected_docs
+                    )
 
                     # 发送回复
+                    answer_content = response.get("answer", "抱歉，我无法回答这个问题。")
+                    answer_length = len(answer_content)
+
+                    # 日志记录回复
+                    if DEBUG_MODE:
+                        print(f"📤 发送回复: 长度={answer_length}, 引用数={len(response.get('references', []))}")
+                    else:
+                        print(f"📤 发送回复: 长度={answer_length}")
+
                     await websocket.send_json({
                         "type": "assistant_message",
-                        "content": response.get("answer", "抱歉，我无法回答这个问题。"),
+                        "content": answer_content,
                         "references": response.get("references", []),
                         "timestamp": datetime.now().isoformat()
                     })
 
                 except Exception as e:
+                    # 详细的错误日志
+                    error_trace = traceback.format_exc()
                     print(f"❌ 聊天处理失败: {e}")
+                    print(f"详细错误堆栈:\n{error_trace}")
+
+                    # 构建错误响应
+                    error_message = f"处理失败: {str(e)}"
+
+                    # 开发模式下返回详细堆栈信息
+                    if DEBUG_MODE:
+                        error_message += f"\n\n调试信息:\n{error_trace}"
+
                     await websocket.send_json({
                         "type": "error",
-                        "content": f"处理失败: {str(e)}"
+                        "content": error_message,
+                        "timestamp": datetime.now().isoformat()
                     })
 
     except WebSocketDisconnect:
@@ -89,7 +130,22 @@ async def websocket_chat(websocket: WebSocket):
         print("🔌 WebSocket 连接已断开")
     except Exception as e:
         is_connected = False
-        print(f"❌ WebSocket 错误: {e}")
+        error_trace = traceback.format_exc()
+        print(f"❌ WebSocket 顶层错误: {type(e).__name__}: {e}")
+        print(f"详细错误堆栈:\n{error_trace}")
+
+        # 尝试向客户端发送错误消息
+        try:
+            if not websocket.client_state.DISCONNECTED:
+                await websocket.send_json({
+                    "type": "error",
+                    "content": f"连接错误: {str(e)}",
+                    "timestamp": datetime.now().isoformat()
+                })
+        except:
+            pass
+
+        # 尝试关闭连接
         try:
             await websocket.close()
         except:

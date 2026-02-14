@@ -12,7 +12,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    """主菜单页面（Dashboard）"""
+    """主页（Dashboard）"""
     return templates.TemplateResponse("dashboard.html", {"request": request})
 
 

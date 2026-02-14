@@ -2,18 +2,16 @@
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 router = APIRouter()
 
 
 class ChatInitRequest(BaseModel):
     """聊天初始化请求"""
-    mode: str  # 'single', 'cross', 'manual'
-    doc_name: Optional[str] = None
-    selected_docs: Optional[list] = None  # For manual mode
+    enabled_tools: Optional[List[str]] = None  # ["retrieve_documents", "search_web"]
+    selected_docs: Optional[List[str]] = None  # ["paper_a.pdf", "paper_b.pdf"]
     session_id: Optional[str] = None  # 可选：加载指定会话
-    doc_type: str = "pdf"
 
 
 @router.post("/initialize")
@@ -22,19 +20,15 @@ async def initialize_chat(request: ChatInitRequest):
     初始化聊天服务
 
     Args:
-        request: 初始化请求，包含模式、文档信息和可选的会话ID
-
-    Returns:
-        完整的会话信息，包括 session_id、messages 等
+        request: 初始化请求，包含工具/文档选择和可选的会话ID
     """
     try:
         from ...services.chat_service import chat_service
 
         result = chat_service.initialize(
-            mode=request.mode,
-            doc_name=request.doc_name,
+            enabled_tools=request.enabled_tools,
             selected_docs=request.selected_docs,
-            session_id=request.session_id
+            session_id=request.session_id,
         )
 
         if result.get("success"):
@@ -42,8 +36,7 @@ async def initialize_chat(request: ChatInitRequest):
                 "status": "success",
                 "message": "聊天服务初始化成功",
                 "session_id": result.get("session_id"),
-                "mode": result.get("mode"),
-                "doc_name": result.get("doc_name"),
+                "enabled_tools": result.get("enabled_tools"),
                 "selected_docs": result.get("selected_docs"),
                 "title": result.get("title"),
                 "message_count": result.get("message_count"),

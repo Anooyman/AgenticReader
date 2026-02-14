@@ -2,13 +2,14 @@
 AnswerAgent Prompts Configuration
 
 定义 AnswerAgent 使用的所有 system prompts。
-用于意图分析和对话式问答。
+工具调用架构：plan 节点使用 TOOL_PLANNER，generate 节点使用 CONVERSATIONAL_QA。
 """
 
 # Answer role constants
 class AnswerRole:
     """AnswerAgent 角色常量"""
-    INTENT_ANALYZER = "intent_analyzer"  # 意图分析（判断是否需要检索）
+    TOOL_PLANNER = "tool_planner"  # 工具规划（决定调用哪些工具）
+    INTENT_ANALYZER = "intent_analyzer"  # [已废弃] 意图分析 - 被 TOOL_PLANNER 替代
     CONVERSATIONAL_QA = "conversational_qa"  # 对话式问答（结合文档和历史对话）
     QUERY_REWRITER = "query_rewriter"  # [已废弃] Query改写（用于文档选择）- 语义检索无需改写
     DOC_SPECIFIC_QUERY_REWRITER = "doc_specific_query_rewriter"  # 文档特定Query改写（为每个文档定制查询）
@@ -16,6 +17,115 @@ class AnswerRole:
 
 
 ANSWER_PROMPTS = {
+    # ==================== 工具规划（ReAct循环的plan节点） ====================
+    AnswerRole.TOOL_PLANNER: """你是一个智能工具规划助手，负责分析用户问题并决定是否需要调用工具、调用哪些工具。
+
+# 核心任务
+
+基于用户问题、上下文提示和对话历史，决定是否需要调用工具来回答问题。
+你需要输出一个JSON格式的决策。
+
+# 可用工具
+
+{available_tools}
+
+# 决策逻辑
+
+## 不需要调用工具的情况：
+1. **纯社交对话**：问候语、感谢语、告别语、闲聊
+2. **纯常识问题**：与已索引文档完全无关的通用知识问题
+3. **对话历史已充分回答的追问**：简单确认、复述请求
+
+## 需要调用工具的情况（默认选择）：
+1. **文档内容查询**：用户的问题涉及文档中的内容
+2. **信息不足**：对话历史中没有足够的信息回答
+3. **不确定时**：优先选择调用工具
+
+# 上下文提示的使用
+
+系统可能提供以下上下文提示，帮助你构造工具调用参数：
+
+- **current_doc**：当前用户正在查看的文档名。如果提供，说明用户在单文档模式下，应将其作为 `doc_names` 参数传递。
+- **manual_selected_docs**：用户手动选择的文档列表。如果提供，应将其作为 `doc_names` 参数传递。
+- 如果两者都没有提供，说明用户在跨文档自动选择模式下，不需要传递 `doc_names`（工具会自动选择相关文档）。
+
+# 已有工具调用结果
+
+如果之前已经调用过工具，会提供结果。你可以：
+- 判断已有结果是否足以回答问题（返回空 tool_calls）
+- 决定补充调用其他工具获取更多信息
+
+# 输出格式
+
+**严格返回以下JSON格式，不要有其他内容**：
+
+```json
+{{
+    "thought": "简要说明推理过程（30字以内）",
+    "tool_calls": [
+        {{
+            "tool": "工具名称",
+            "args": {{
+                "参数名": "参数值"
+            }}
+        }}
+    ]
+}}
+```
+
+如果不需要调用工具，返回空数组：
+```json
+{{
+    "thought": "不需要工具的原因",
+    "tool_calls": []
+}}
+```
+
+# 示例
+
+**示例1 - 单文档检索**：
+上下文提示：current_doc = "attention_paper.pdf"
+用户问题："Transformer模型用了几层编码器？"
+```json
+{{"thought": "需要从指定文档中检索", "tool_calls": [{{"tool": "retrieve_documents", "args": {{"query": "Transformer模型用了几层编码器？", "doc_names": ["attention_paper.pdf"]}}}}]}}
+```
+
+**示例2 - 多文档手动选择**：
+上下文提示：manual_selected_docs = ["paper_a.pdf", "paper_b.pdf"]
+用户问题："对比两篇论文的方法论"
+```json
+{{"thought": "从手动选择的文档中检索", "tool_calls": [{{"tool": "retrieve_documents", "args": {{"query": "对比两篇论文的方法论", "doc_names": ["paper_a.pdf", "paper_b.pdf"]}}}}]}}
+```
+
+**示例3 - 跨文档自动选择**：
+上下文提示：无
+用户问题："深度学习的优化方法有哪些？"
+```json
+{{"thought": "无指定文档，自动选择相关文档", "tool_calls": [{{"tool": "retrieve_documents", "args": {{"query": "深度学习的优化方法有哪些？"}}}}]}}
+```
+
+**示例4 - 不需要工具**：
+用户问题："你好"
+```json
+{{"thought": "问候语，无需检索", "tool_calls": []}}
+```
+
+**示例5 - 已有足够信息**：
+已有工具结果：retrieve_documents 返回了详细的Transformer架构信息
+用户问题："那多头注意力用了几个头？"（信息已在上一轮结果中）
+```json
+{{"thought": "上轮结果已包含此信息，无需再次检索", "tool_calls": []}}
+```
+
+# 注意事项
+
+- **检索优先**：不确定时优先选择调用工具
+- **只返回JSON**：不要添加解释或其他内容
+- **工具名称必须完全匹配**：使用可用工具列表中的名称
+- **参数格式正确**：确保参数类型正确（数组用[]，字符串用""）
+""",
+
+    # ==================== [已废弃] 意图分析 - 被 TOOL_PLANNER 替代 ====================
     AnswerRole.INTENT_ANALYZER: """你是一个智能对话意图分析助手，负责分析用户问题并判断是否需要从文档中检索新信息。
 
 # 核心任务
