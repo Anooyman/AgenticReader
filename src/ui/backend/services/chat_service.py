@@ -18,6 +18,10 @@ class ChatService:
         self.current_session: Optional[Dict] = None
         self.progress_callback = None
 
+        # Agent缓存池：避免重复创建Agent实例
+        self._agent_cache: Dict[str, AnswerAgent] = {}  # {provider: AnswerAgent}
+        self._current_provider: Optional[str] = None
+
     def initialize(
         self,
         enabled_tools: Optional[List[str]] = None,
@@ -85,17 +89,28 @@ class ChatService:
                 self.current_session["selected_docs"] = self.selected_docs
                 print(f"✅ 创建/加载会话: {self.current_session['session_id']}")
 
-            # 创建 AnswerAgent
+            # 创建或复用 AnswerAgent（缓存优化）
             config = load_config()
             provider = config.get("provider", "openai")
             print(f"📌 使用 LLM Provider: {provider}")
 
-            doc_name = self.selected_docs[0] if self.selected_docs and len(self.selected_docs) == 1 else None
-            self.answer_agent = AnswerAgent(
-                doc_name=doc_name,
-                provider=provider,
-                progress_callback=self.progress_callback
-            )
+            # 检查是否可以复用现有Agent
+            if provider in self._agent_cache and self._current_provider == provider:
+                print(f"♻️  复用已缓存的 AnswerAgent (provider={provider})")
+                self.answer_agent = self._agent_cache[provider]
+                # 更新回调函数
+                self.answer_agent.progress_callback = self.progress_callback
+            else:
+                print(f"🆕 创建新的 AnswerAgent (provider={provider})")
+                doc_name = self.selected_docs[0] if self.selected_docs and len(self.selected_docs) == 1 else None
+                self.answer_agent = AnswerAgent(
+                    doc_name=doc_name,
+                    provider=provider,
+                    progress_callback=self.progress_callback
+                )
+                # 缓存Agent实例
+                self._agent_cache[provider] = self.answer_agent
+                self._current_provider = provider
 
             # 验证选择的文档
             if self.selected_docs and "retrieve_documents" in self.enabled_tools:
@@ -199,11 +214,27 @@ class ChatService:
             final_answer = result.get("final_answer", "")
             tool_results = result.get("tool_results", [])
 
-            # 从工具结果中提取引用文档信息
+            # 从工具结果中提取引用文档信息和使用的agent
             references = []
+            agents_used = []  # 记录本次调用的agent
+
             for tr in tool_results:
                 if not tr.get("success", False):
                     continue
+
+                # 记录使用的工具/agent
+                tool_name = tr.get("tool")
+                if tool_name:
+                    agent_label = None
+                    if tool_name == "retrieve_documents":
+                        agent_label = "RetrievalAgent"
+                    elif tool_name in ["search_web", "web_search"]:
+                        agent_label = "SearchAgent"
+
+                    if agent_label and agent_label not in agents_used:
+                        agents_used.append(agent_label)
+
+                # 提取引用文档
                 tr_result = tr.get("result", {})
                 if isinstance(tr_result, dict) and tr_result.get("doc_names"):
                     for doc_name in tr_result["doc_names"]:
@@ -213,13 +244,17 @@ class ChatService:
                                 "similarity_score": None
                             })
 
-            # 保存助手回复
+            # 保存助手回复（包含agents_used）
             self.session_manager.save_message(
                 session_id=session_id,
                 role="assistant",
                 content=final_answer,
-                references=references
+                references=references,
+                agents_used=agents_used
             )
+
+            # 更新会话级别的agents统计
+            self.session_manager.update_session_agents(session_id, agents_used)
 
             # 更新 current_session
             self.current_session = self.session_manager.load_session(session_id)

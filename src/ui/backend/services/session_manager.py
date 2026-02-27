@@ -156,6 +156,7 @@ class SessionManager:
             "doc_name": doc_name,
             "selected_docs": [doc_name],
             "enabled_tools": ["retrieve_documents"],
+            "agents_used": [],  # 初始化agents记录
             "title": f"单文档对话: {doc_name}",
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat(),
@@ -207,6 +208,7 @@ class SessionManager:
             "doc_name": doc_name,
             "selected_docs": selected_docs,
             "enabled_tools": enabled_tools or [],
+            "agents_used": [],  # 初始化agents记录
             "title": title,
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat(),
@@ -241,7 +243,8 @@ class SessionManager:
         session_id: str,
         role: str,
         content: str,
-        references: Optional[List] = None
+        references: Optional[List] = None,
+        agents_used: Optional[List[str]] = None
     ):
         """
         保存消息到会话
@@ -251,6 +254,7 @@ class SessionManager:
             role: 消息角色 (user/assistant)
             content: 消息内容
             references: 引用信息（可选）
+            agents_used: 本条消息使用的agent列表（可选）
         """
         session_path = self._get_session_path(session_id)
         session_data = self._load_session_file(session_path)
@@ -268,12 +272,45 @@ class SessionManager:
         if references:
             message["references"] = references
 
+        if agents_used:
+            message["agents_used"] = agents_used
+
         session_data["messages"].append(message)
         session_data["message_count"] = len(session_data["messages"])
         session_data["updated_at"] = datetime.now().isoformat()
 
         self._save_session_file(session_path, session_data)
         logger.debug(f"保存消息到会话: {session_id} - {role}")
+
+    def update_session_agents(self, session_id: str, agents_used: List[str]):
+        """
+        更新会话级别的agents统计
+
+        Args:
+            session_id: 会话ID
+            agents_used: 本次使用的agent列表
+        """
+        if not agents_used:
+            return
+
+        session_path = self._get_session_path(session_id)
+        session_data = self._load_session_file(session_path)
+
+        if not session_data:
+            logger.error(f"会话不存在，无法更新agents: {session_id}")
+            return
+
+        # 初始化或更新 agents_used 集合
+        if "agents_used" not in session_data:
+            session_data["agents_used"] = []
+
+        # 合并新使用的agents（去重）
+        for agent in agents_used:
+            if agent not in session_data["agents_used"]:
+                session_data["agents_used"].append(agent)
+
+        self._save_session_file(session_path, session_data)
+        logger.debug(f"更新会话agents: {session_id} - {session_data['agents_used']}")
 
     def get_session_history_for_llm(self, session: Dict) -> List[Dict[str, str]]:
         """将会话历史转换为 LLM 可用的格式"""

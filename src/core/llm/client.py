@@ -64,27 +64,53 @@ class LLMBase:
         """
         self.message_histories = {}
         self.provider = provider.lower()
-        self.providers = {
-            "azure": AzureLLMProvider(),
-            "openai": OpenAILLMProvider(),
-            "ollama": OllamaLLMProvider(),
-            "gemini": GeminiLLMProvider(),
+
+        # 懒加载Provider实例：只在需要时创建（性能优化）
+        self._provider_instances = {}
+        self._provider_classes = {
+            "azure": AzureLLMProvider,
+            "openai": OpenAILLMProvider,
+            "ollama": OllamaLLMProvider,
+            "gemini": GeminiLLMProvider,
         }
-        
+
         # Validate provider
         self._validate_provider()
-            
-        # Initialize models
-        self.chat_model = self.get_chat_model()
-        self.embedding_model = self.get_embedding_model()
-        
-        logger.info(f"LLMBase initialized with provider: {self.provider}")
+
+        # 懒加载模型：只在首次调用时初始化（性能优化）
+        self._chat_model = None
+        self._embedding_model = None
+
+        logger.info(f"LLMBase initialized with provider: {self.provider} (lazy loading enabled)")
 
     def _validate_provider(self):
         """验证当前 provider 是否有效。"""
-        if self.provider not in self.providers:
+        if self.provider not in self._provider_classes:
             logger.error(f"Unknown provider: {self.provider}")
             raise ValueError(f"Unknown provider: {self.provider}")
+
+    def _get_provider(self):
+        """懒加载：获取当前provider实例（仅在首次调用时创建）"""
+        if self.provider not in self._provider_instances:
+            logger.debug(f"Creating provider instance for: {self.provider}")
+            self._provider_instances[self.provider] = self._provider_classes[self.provider]()
+        return self._provider_instances[self.provider]
+
+    @property
+    def chat_model(self):
+        """懒加载：获取chat model（仅在首次调用时初始化）"""
+        if self._chat_model is None:
+            logger.debug(f"Initializing chat model for provider: {self.provider}")
+            self._chat_model = self.get_chat_model()
+        return self._chat_model
+
+    @property
+    def embedding_model(self):
+        """懒加载：获取embedding model（仅在首次调用时初始化）"""
+        if self._embedding_model is None:
+            logger.debug(f"Initializing embedding model for provider: {self.provider}")
+            self._embedding_model = self.get_embedding_model()
+        return self._embedding_model
 
     def _format_system_prompt(self, role: str, system_format_dict: dict = None) -> str:
         """
@@ -234,7 +260,7 @@ class LLMBase:
             "provider": self.provider,
             "chat_model_type": type(self.chat_model).__name__,
             "embedding_model_type": type(self.embedding_model).__name__,
-            "available_providers": list(self.providers.keys()),
+            "available_providers": list(self._provider_classes.keys()),
             "session_count": len(self.message_histories)
         }
 
@@ -584,14 +610,14 @@ class LLMBase:
         获取当前 provider 的 chat model。
         """
         self._validate_provider()
-        return self.providers[self.provider].get_chat_model(**kwargs)
+        return self._get_provider().get_chat_model(**kwargs)
 
     def get_embedding_model(self, **kwargs):
         """
         获取当前 provider 的 embedding model。
         """
         self._validate_provider()
-        return self.providers[self.provider].get_embedding_model(**kwargs)
+        return self._get_provider().get_embedding_model(**kwargs)
 
     def call_llm_chain(
         self,

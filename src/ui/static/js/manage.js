@@ -513,6 +513,43 @@ class DataManager {
         const createdAt = new Date(session.created_at);
         const updatedAt = new Date(session.updated_at);
 
+        // 构建工具标签
+        let toolsHtml = '';
+        if (session.enabled_tools && session.enabled_tools.length > 0) {
+            const toolIcons = {
+                'retrieve_documents': '📚 文档检索',
+                'search_web': '🌐 网络搜索',
+                'web_search': '🌐 网络搜索'
+            };
+            const toolLabels = session.enabled_tools.map(tool =>
+                toolIcons[tool] || `🔧 ${tool}`
+            ).join(', ');
+            toolsHtml = `
+                <div class="session-info" style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;">
+                    <span style="font-weight: 500;">🔧 工具:</span>
+                    <span style="color: #0369a1; background: #e0f2fe; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.85rem;">${toolLabels}</span>
+                </div>
+            `;
+        }
+
+        // 构建Agent标签
+        let agentsHtml = '';
+        if (session.agents_used && session.agents_used.length > 0) {
+            const agentIcons = {
+                'RetrievalAgent': '🔍 检索代理',
+                'SearchAgent': '🌐 搜索代理'
+            };
+            const agentLabels = session.agents_used.map(agent =>
+                agentIcons[agent] || agent
+            ).join(', ');
+            agentsHtml = `
+                <div class="session-info" style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;">
+                    <span style="font-weight: 500;">🤖 调用:</span>
+                    <span style="color: #b45309; background: #fef3c7; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.85rem;">${agentLabels}</span>
+                </div>
+            `;
+        }
+
         return `
             <div class="session-card" data-session-id="${session.session_id}" data-mode="${session.mode}" style="position: relative; cursor: pointer;" onclick="event.target.tagName !== 'INPUT' && event.target.tagName !== 'BUTTON' && !event.target.classList.contains('session-title') && !event.target.classList.contains('expand-toggle') && dataManager.showSessionDetail('${session.session_id}')">
                 <input type="checkbox" class="session-checkbox" data-session-id="${session.session_id}" onclick="event.stopPropagation()">
@@ -527,6 +564,8 @@ class DataManager {
                     <span class="session-mode">${modeLabels[session.mode] || '对话'}</span>
                 </div>
                 ${this.renderSessionDocInfo(session)}
+                ${toolsHtml}
+                ${agentsHtml}
                 <div class="session-info">
                     🕒 创建: ${createdAt.toLocaleDateString('zh-CN')} ${createdAt.toLocaleTimeString('zh-CN', {hour: '2-digit', minute: '2-digit'})}
                 </div>

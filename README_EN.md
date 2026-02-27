@@ -624,6 +624,33 @@ System auto-cleans old data
 <details>
 <summary><b>📝 Changelog (Click to expand)</b></summary>
 
+### 2026-02-24 - Session Management UI Optimization & SearchAgent Fixes
+- 🎨 **Session Management Modal Integration**
+  - ✅ Added session management modal on homepage (no page navigation required)
+  - ✅ Session statistics dashboard (total, single-doc, multi-doc, pure chat)
+  - ✅ Real-time search and filter sessions
+  - ✅ Batch delete functionality (parallel processing)
+  - ✅ Session detail panel (slides in from right, full conversation history)
+  - ✅ URL hash support (`/#sessions` auto-opens modal)
+  - ✅ Keyboard shortcuts (ESC to close, click outside to close)
+- 📊 **Enhanced Session Card Information**
+  - ✅ Display session mode badges (🎯Single/🔀Cross/✋Manual)
+  - ✅ Display enabled tools (📚Document Retrieval/🌐Web Search)
+  - ✅ Display invoked Agents (🔍Retrieval Agent/🌐Search Agent)
+  - ✅ Enhanced time display (show both created and updated timestamps)
+  - ✅ Unified card styles between homepage modal and data management page
+- 🤖 **Agent Invocation Recording System**
+  - ✅ Auto-record Agents used per message (RetrievalAgent, SearchAgent)
+  - ✅ Session-level statistics of all Agents used
+  - ✅ Display Agent usage in cards and detail panels
+  - ✅ Yellow badges to distinguish Agent info (different from tool badges)
+- 🐛 **SearchAgent Content Truncation Fix**
+  - ✅ Fixed 2000-character hard limit issue in `format_answer` method
+  - ✅ Changed to smart dynamic allocation strategy (max 100,000 characters total)
+  - ✅ Single source no longer limited to 2000 characters, dynamically allocated based on total length
+  - ✅ Support long-text URL content full save and analysis (e.g., lengthy news, reports)
+  - ✅ Optimized logging to display merged content length
+
 ### 2026-02-14 - SearchAgent Integration into AnswerAgent
 - 🌐 **Web Search Tool Launch**
   - ✅ Integrated SearchAgent into AnswerAgent's tool system

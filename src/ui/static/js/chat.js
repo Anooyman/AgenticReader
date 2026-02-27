@@ -1861,6 +1861,7 @@ class ChatApp {
         }
         this.updateChipsBar();
     }
+
 }
 
 // 初始化

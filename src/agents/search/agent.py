@@ -168,7 +168,7 @@ class SearchAgent(AgentBase):
         query: str,
         target_urls: Optional[list] = None,
         use_case: Optional[str] = None,
-        max_iterations: int = 3
+        max_iterations: int = 10
     ) -> Dict:
         """
         执行搜索任务

@@ -528,11 +528,33 @@ class SearchNodes:
                 logger.warning("⚠️  [FormatAnswer] 无内容可用，返回默认答案")
                 return state
 
-            # 合并内容
-            merged_content = "\n\n".join([
-                f"=== 来源: {item['url']} ===\n{item['text'][:2000]}"  # 每个来源最多2000字符
-                for item in extracted_content
-            ])
+            # 合并内容 - 移除2000字符限制，使用完整内容
+            # 但设置总长度上限以避免超出 LLM context window
+            max_total_chars = 100000  # 总体上限 10万字符（约25000 tokens）
+
+            merged_parts = []
+            current_length = 0
+
+            for item in extracted_content:
+                text = item.get('text', '')
+                url = item.get('url', '')
+
+                # 单个来源的内容也不再限制为2000，而是根据总长度动态分配
+                if current_length + len(text) <= max_total_chars:
+                    # 完整添加
+                    merged_parts.append(f"=== 来源: {url} ===\n{text}")
+                    current_length += len(text)
+                else:
+                    # 部分添加，填满剩余空间
+                    remaining = max_total_chars - current_length
+                    if remaining > 1000:  # 至少保留1000字符才有意义
+                        merged_parts.append(f"=== 来源: {url} ===\n{text[:remaining]}\n[内容过长，已截断...]")
+                        current_length = max_total_chars
+                    break
+
+            merged_content = "\n\n".join(merged_parts)
+
+            logger.info(f"🎯 [FormatAnswer] 合并内容长度: {len(merged_content)} 字符")
 
             # 构建 prompt
             prompt = SearchRole.CONTENT_SUMMARIZER.format(
