@@ -22,7 +22,7 @@ class SearchState(TypedDict, total=False):
     query: str  # 用户查询/问题
     use_case: str  # 使用场景："search" 或 "url_analysis"
     target_urls: Optional[List[str]]  # Use Case 2: 用户指定的URL列表
-    max_iterations: int  # 最大迭代次数（默认3）
+    max_iterations: int  # 最大迭代次数（默认10）
 
     # ============ Use Case 判断 ============
     detected_use_case: str  # Agent自动判断的use case

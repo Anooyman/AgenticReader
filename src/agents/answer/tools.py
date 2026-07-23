@@ -164,7 +164,7 @@ class AnswerTools:
             result = await self.agent.search_agent.search(
                 query=query,
                 target_urls=target_urls,
-                max_iterations=3
+                max_iterations=10
             )
 
             # 提取返回值

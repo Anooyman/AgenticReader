@@ -201,7 +201,10 @@ class SearchAgent(AgentBase):
 
         try:
             # 执行 workflow
-            final_state = await self.graph.ainvoke(initial_state)
+            final_state = await self.graph.ainvoke(
+                initial_state,
+                config={"recursion_limit": max_iterations * 10 + 20}
+            )
 
             # 提取结果
             result = {

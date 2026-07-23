@@ -100,6 +100,10 @@ class ChatService:
                 self.answer_agent = self._agent_cache[provider]
                 # 更新回调函数
                 self.answer_agent.progress_callback = self.progress_callback
+                # 更新当前文档上下文（修复文档切换时的上下文混乱问题）
+                doc_name = self.selected_docs[0] if self.selected_docs and len(self.selected_docs) == 1 else None
+                self.answer_agent.current_doc = doc_name
+                print(f"📌 更新文档上下文: current_doc={doc_name}")
             else:
                 print(f"🆕 创建新的 AnswerAgent (provider={provider})")
                 doc_name = self.selected_docs[0] if self.selected_docs and len(self.selected_docs) == 1 else None
@@ -183,6 +187,10 @@ class ChatService:
                 self.enabled_tools = enabled_tools
             if selected_docs is not None:
                 self.selected_docs = selected_docs
+
+            # 更新当前文档上下文（修复每次对话时的文档上下文）
+            doc_name = current_docs[0] if current_docs and len(current_docs) == 1 else None
+            self.answer_agent.current_doc = doc_name
 
             session_id = self.current_session["session_id"]
 

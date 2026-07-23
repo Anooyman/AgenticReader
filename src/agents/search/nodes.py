@@ -42,7 +42,7 @@ class SearchNodes:
 
             # 设置默认值
             if 'max_iterations' not in state:
-                state['max_iterations'] = 3
+                state['max_iterations'] = 10
 
             if 'current_iteration' not in state:
                 state['current_iteration'] = 0
@@ -483,7 +483,7 @@ class SearchNodes:
 
         try:
             current_iteration = state.get('current_iteration', 0)
-            max_iterations = state.get('max_iterations', 3)
+            max_iterations = state.get('max_iterations', 10)
             extracted_content = state.get('extracted_content', [])
 
             logger.info(f"⚖️ [Evaluate] 迭代进度: {current_iteration + 1}/{max_iterations}")
