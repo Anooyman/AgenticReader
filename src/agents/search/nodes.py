@@ -401,6 +401,42 @@ class SearchNodes:
             state['strategy_reason'] = f"评估失败，默认直接对话: {str(e)}"
             return state
 
+    # ========== 索引调用节点 ==========
+
+    async def call_indexing_agent(self, state: SearchState) -> Dict:
+        """
+        步骤（Use Case 2 可选）：当内容量超过阈值时，调用 IndexingAgent 建立索引
+
+        索引失败不阻断整体流程——退回 direct_chat 语义，仍然继续走
+        extract_and_merge/format_answer 生成一个基于已爬取内容的摘要答案，
+        只是 indexing_result 会带上错误信息供调用方判断。
+        """
+        logger.info("📚 [CallIndexingAgent] ========== 调用 IndexingAgent 建立索引 ==========")
+
+        try:
+            result = await self.agent.call_indexing_agent(
+                source_url=(state.get('target_urls') or [''])[0],
+                doc_name=state.get('generated_doc_name'),
+                json_path=state.get('web_content_json'),
+            )
+            state['indexing_result'] = result
+
+            if result.get('success') and result.get('indexed'):
+                logger.info(f"✅ [CallIndexingAgent] 索引完成: {result.get('index_path')}")
+            else:
+                logger.warning(f"⚠️  [CallIndexingAgent] 索引未完成: {result.get('error', '未知原因')}")
+                state['warnings'] = state.get('warnings', []) + [
+                    f"索引失败，已退回直接对话摘要: {result.get('error', '未知原因')}"
+                ]
+
+            return state
+
+        except Exception as e:
+            logger.error(f"❌ [CallIndexingAgent] 节点执行异常: {e}", exc_info=True)
+            state['indexing_result'] = {"success": False, "error": str(e), "indexed": False}
+            state['warnings'] = state.get('warnings', []) + [f"索引节点异常，已退回直接对话摘要: {e}"]
+            return state
+
     # ========== 内容提取节点 ==========
 
     async def extract_and_merge(self, state: SearchState) -> Dict:

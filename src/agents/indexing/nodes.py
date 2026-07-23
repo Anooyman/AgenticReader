@@ -314,10 +314,53 @@ class IndexingNodes:
                 )
 
             elif doc_type == "url":
-                # TODO: 使用WebReader提取内容
-                logger.warning("URL类型文档暂未实现，使用占位符")
-                state["raw_data"] = f"Web content from {doc_path}"
+                logger.info(f"📄 [Parse] 使用Web内容提取器处理: {doc_path}")
+
+                # doc_path 指向 SearchAgent.utils.save_web_content() 保存的 JSON
+                # 结构：{"url", "url_hash", "timestamp", "content": {"text", "html", "json"}, "metadata"}
+                with open(doc_path, 'r', encoding='utf-8') as f:
+                    web_data = json.load(f)
+
+                full_text = (web_data.get("content", {}) or {}).get("text", "") or ""
+                if not full_text.strip():
+                    raise ValueError(f"Web内容为空，无法解析: {doc_path}")
+
+                # 将正文按固定长度切成"虚拟页"，与 PDF 提取产物完全同构，
+                # 使下游 extract_structure/chunk_text/process_chapters/build_index
+                # 无需任何改动即可复用（包括 analyze_full_structure_impl 的智能分段能力）
+                virtual_page_chars = 2500
+                pdf_data_list = [
+                    {"page": i + 1, "data": full_text[i * virtual_page_chars:(i + 1) * virtual_page_chars]}
+                    for i in range((len(full_text) + virtual_page_chars - 1) // virtual_page_chars)
+                ]
+
+                raw_data = "\n\n".join([
+                    f"[Page {item['page']}]\n{item['data']}"
+                    for item in pdf_data_list
+                ])
+                json_data_dict = {str(item["page"]): item["data"] for item in pdf_data_list}
+
+                # 落盘 data.json，格式与 PDF 路径一致，使 check_cache 能对 url 文档同样生效
+                doc_json_folder = os.path.join(self.agent.json_data_path, doc_name)
+                os.makedirs(doc_json_folder, exist_ok=True)
+                output_json_path = os.path.join(doc_json_folder, "data.json")
+                with open(output_json_path, 'w', encoding='utf-8') as f:
+                    json.dump(pdf_data_list, f, ensure_ascii=False, indent=2)
+
+                state["raw_data"] = raw_data
+                state["pdf_data_list"] = pdf_data_list
+                state["json_data_dict"] = json_data_dict
+                state["generated_files"]["json_data"] = output_json_path
                 state["status"] = "parsed"
+
+                logger.info(f"✅ [Parse] Web内容解析完成，切分为 {len(pdf_data_list)} 个虚拟页，总长度: {len(full_text)} 字符")
+
+                self.agent.doc_registry.update_stage_status(
+                    doc_name=doc_name,
+                    stage_name="parse",
+                    status="completed",
+                    output_files=[output_json_path]
+                )
 
             else:
                 raise ValueError(f"不支持的文档类型: {doc_type}")
@@ -364,9 +407,9 @@ class IndexingNodes:
         doc_name = state["doc_name"]
         doc_type = state.get("doc_type")
 
-        # 仅PDF类型需要提取结构
-        if doc_type != "pdf":
-            logger.info("非PDF文档，跳过结构提取")
+        # 非 PDF/URL 类型没有结构可提取
+        if doc_type not in ("pdf", "url"):
+            logger.info(f"不支持结构提取的文档类型（{doc_type}），跳过")
             state["has_toc"] = False
             state["agenda_dict"] = {}
             return state
@@ -374,6 +417,51 @@ class IndexingNodes:
         # 定义结构文件路径（使用文档文件夹）
         doc_json_folder = os.path.join(self.agent.json_data_path, doc_name)
         structure_json_path = os.path.join(doc_json_folder, "structure.json")
+
+        if doc_type == "url":
+            # Web 内容没有 PDF 式目录页可快速提取，直接走全文智能分段
+            # （analyze_full_structure_impl 本身按 split_pdf_raw_data 分块调用 LLM
+            #  识别章节标题，天然能处理任意长度文本，也能识别文中已有的小标题结构；
+            #  失败时兜底为"整篇当一个章节"）
+            try:
+                pdf_data_list = state.get("pdf_data_list", [])
+                if not pdf_data_list:
+                    logger.warning("虚拟页数据为空，无法提取结构")
+                    state["has_toc"] = False
+                    state["agenda_dict"] = {}
+                    return state
+
+                logger.info("🔍 [ExtractStructure] Web内容：直接分析全文结构")
+                agenda_dict = await self.agent.tools.analyze_full_structure_impl(pdf_data_list)
+
+                state["agenda_dict"] = agenda_dict
+                state["has_toc"] = False
+                logger.info(f"✅ [ExtractStructure] Web内容结构分析完成: {len(agenda_dict)} 个章节")
+
+                structure_data = {"agenda_dict": agenda_dict, "has_toc": False}
+                os.makedirs(os.path.dirname(structure_json_path), exist_ok=True)
+                with open(structure_json_path, 'w', encoding='utf-8') as f:
+                    json.dump(structure_data, f, ensure_ascii=False, indent=2)
+
+                self.agent.doc_registry.update_stage_status(
+                    doc_name=doc_name,
+                    stage_name="extract_structure",
+                    status="completed",
+                    output_files=[structure_json_path]
+                )
+                return state
+
+            except Exception as e:
+                logger.error(f"❌ [ExtractStructure] Web内容结构提取失败: {e}")
+                state["status"] = "error"
+                state["error"] = str(e)
+                self.agent.doc_registry.update_stage_status(
+                    doc_name=doc_name,
+                    stage_name="extract_structure",
+                    status="failed",
+                    output_files=[]
+                )
+                return state
 
         try:
             pdf_data_list = state.get("pdf_data_list", [])

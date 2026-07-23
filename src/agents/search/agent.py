@@ -9,6 +9,8 @@ SearchAgent - 网络搜索与URL内容分析Agent
 from langgraph.graph import StateGraph, END
 from typing import Optional, Dict
 import logging
+import os
+import json
 
 from ..base import AgentBase
 from .state import SearchState
@@ -84,6 +86,7 @@ class SearchAgent(AgentBase):
 
         # Use Case 2: URL分析专用节点
         workflow.add_node("evaluate_content_size", self.nodes.evaluate_content_size)
+        workflow.add_node("call_indexing_agent", self.nodes.call_indexing_agent)
 
         # ========== 添加边 ==========
 
@@ -117,9 +120,18 @@ class SearchAgent(AgentBase):
             }
         )
 
-        # 内容量评估后 → 提取内容
-        # NOTE: 实际的索引调用会在这里处理（未来扩展）
-        workflow.add_edge("evaluate_content_size", "extract_and_merge")
+        # 内容量评估后：
+        # - 需要索引（内容超过阈值）→ call_indexing_agent，索引完成/失败后仍继续 extract_and_merge
+        # - 不需要索引（direct_chat）→ 直接 extract_and_merge
+        workflow.add_conditional_edges(
+            "evaluate_content_size",
+            lambda state: "index" if state.get("should_call_indexing") else "direct",
+            {
+                "index": "call_indexing_agent",
+                "direct": "extract_and_merge",
+            }
+        )
+        workflow.add_edge("call_indexing_agent", "extract_and_merge")
 
         # ========== 通用后续流程 ==========
         workflow.add_edge("extract_and_merge", "evaluate_completeness")
@@ -285,84 +297,70 @@ class SearchAgent(AgentBase):
         """
         调用 IndexingAgent 对内容进行索引
 
-        这个方法将在 Use Case 2 中使用，当内容量超过阈值时调用。
+        用于 Use Case 2，当内容量超过阈值时调用。IndexingAgent 的 `doc_type="url"`
+        分支（见 src/agents/indexing/nodes.py 的 parse_document）直接读取
+        SearchAgent.utils.save_web_content() 产出的 JSON 文件，因此这里优先使用
+        json_path，而不是重新落一份临时文本文件。
 
         Args:
-            content: 要索引的文本内容（如果 json_path 未提供）
+            content: 要索引的文本内容（如果没有 json_path，会用它现造一份同结构的 JSON）
             source_url: 内容来源URL
             doc_name: 文档名称（可选，默认使用URL生成）
             json_path: JSON 文件路径（优先使用，如果提供）
 
         Returns:
-            索引结果
+            索引结果 {"success", "doc_name", "index_path", "doc_id", "indexed"}
         """
         logger.info("📚 [CallIndexingAgent] 准备调用 IndexingAgent...")
 
         try:
             from ..indexing import IndexingAgent
-            import tempfile
-            import os
-            import json
 
-            # 如果提供了 JSON 路径，从 JSON 读取内容
-            if json_path and os.path.exists(json_path):
-                logger.info(f"📄 [CallIndexingAgent] 从 JSON 文件读取内容: {json_path}")
-                with open(json_path, 'r', encoding='utf-8') as f:
-                    web_data = json.load(f)
-
-                content = web_data.get('content', {}).get('text', '')
+            if not json_path:
+                if not content:
+                    raise ValueError("没有可索引的内容（content 和 json_path 均为空）")
                 if not source_url:
-                    source_url = web_data.get('url', '')
+                    raise ValueError("缺少 source_url，无法生成/落盘 web 内容 JSON")
+                # 没有现成的 json_path 时，用同样的格式现造一份，保持与
+                # save_web_content() 产出结构一致，供 IndexingAgent 的 url 分支读取
+                json_path = self.utils.save_web_content(
+                    url=source_url,
+                    content={"text": content, "html": "", "json": {}},
+                )
 
-                logger.info(f"   - 内容长度: {len(content)} 字符")
+            if not os.path.exists(json_path):
+                raise FileNotFoundError(f"web 内容 JSON 不存在: {json_path}")
 
-            # 如果没有内容，报错
-            if not content:
-                raise ValueError("没有可索引的内容")
-
-            # 生成文档名称
-            if not doc_name and source_url:
+            if not doc_name:
+                if not source_url:
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        source_url = json.load(f).get('url', '')
                 doc_name = self.utils.generate_doc_name_from_url(source_url)
 
             logger.info(f"📚 [CallIndexingAgent] 文档名: {doc_name}")
+            logger.info(f"🔄 [CallIndexingAgent] 开始索引文档...")
 
-            # 创建临时文件保存内容
-            temp_file = tempfile.NamedTemporaryFile(
-                mode='w',
-                encoding='utf-8',
-                suffix='.txt',
-                delete=False
-            )
+            indexing_agent = IndexingAgent(provider=self.llm.provider)
+            result_state = await indexing_agent.graph.ainvoke({
+                "doc_name": doc_name,
+                "doc_path": json_path,
+                "doc_type": "url",
+                "is_complete": False,
+            })
 
-            try:
-                temp_file.write(content)
-                temp_file.close()
+            if result_state.get("error") or result_state.get("status") == "error":
+                raise RuntimeError(result_state.get("error") or "IndexingAgent 索引失败，未返回具体错误")
 
-                # 调用 IndexingAgent
-                indexing_agent = IndexingAgent(provider=self.provider)
+            index_path = result_state.get("index_path", "")
+            logger.info(f"✅ [CallIndexingAgent] 索引完成: {index_path}")
 
-                # 执行索引
-                # 注意：IndexingAgent 的 process 方法需要 pdf_path 和 pdf_name
-                # 但我们是 web 内容，所以需要适配
-                # 暂时使用临时文件路径
-                logger.info(f"🔄 [CallIndexingAgent] 开始索引文档...")
-
-                # TODO: 这里需要调用 IndexingAgent 的正确方法
-                # 现在暂时返回占位符，等待实际集成
-                logger.warning("⚠️  [CallIndexingAgent] IndexingAgent 集成尚未完成，返回占位符")
-
-                return {
-                    "success": True,
-                    "doc_name": doc_name,
-                    "index_path": "",  # 待实现
-                    "indexed": False,  # 待实现
-                    "message": "IndexingAgent 集成待完成"
-                }
-
-            finally:
-                # 清理临时文件
-                if os.path.exists(temp_file.name):
-                    os.unlink(temp_file.name)
+            return {
+                "success": True,
+                "doc_name": doc_name,
+                "index_path": index_path,
+                "doc_id": result_state.get("doc_id", ""),
+                "indexed": True,
+            }
 
         except Exception as e:
             logger.error(f"❌ [CallIndexingAgent] 索引失败: {e}", exc_info=True)

@@ -1,4 +1,5 @@
 import os
+import sys
 from dotenv import load_dotenv
 from .constants import MCPConstants, ProcessingLimits, PathConstants, PDFConstants, LLMConstants
 
@@ -30,7 +31,10 @@ MCP_CONFIG = {
     #}
     "ddg-search": {
         "type": "stdio",
-        "command": "python",
+        # 用当前解释器的完整路径而非裸 "python"/"python3"：MCP 子进程的 env
+        # 会整体替换（不继承父进程环境），若靠系统 PATH 解析命令名，很容易解析到
+        # 一个没装 mcp/项目依赖的系统 Python，而不是本项目的 venv。
+        "command": sys.executable,
         "args": ["src/services/duckduckgo_mcp_server.py"]
     },
   },
@@ -52,7 +56,7 @@ MCP_CONFIG = {
   # Web Scraper 服务
   "web_scraper": {
     "type": "stdio",
-    "command": "python",
+    "command": sys.executable,
     "args": ["-m", "scraper.mcp_server.server"],
     "env": {"PYTHONPATH": "src/services"}
   },
