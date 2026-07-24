@@ -189,8 +189,11 @@ async def scrape_url_tool(
         page = await context.new_page()
 
         # 访问目标 URL
-        # wait_until=\"networkidle\" 表示等待网络空闲（没有请求）
-        response = await page.goto(url, wait_until="networkidle", timeout=timeout)
+        # wait_until="domcontentloaded"：等 DOM 解析完成即可，不等网络空闲。
+        # 新闻站的广告追踪/推荐流轮询、SPA（如 bsky.app）的 WebSocket 长连接会
+        # 让网络连接持续不断，"networkidle" 在这类页面上几乎永远等不到，实测
+        # 20s 超时直接失败；domcontentloaded 在同一 URL 上几秒内即可正常返回。
+        response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
 
         # 第二步：等待特定元素出现（如果指定了 wait_for）
         # 适用于动态加载的内容
@@ -600,8 +603,8 @@ async def download_resources_tool(
         context = await browser_manager.get_context(config)
         page = await context.new_page()
 
-        # 访问目标 URL
-        await page.goto(url, wait_until="networkidle")
+        # 访问目标 URL（同 scrape_url_tool：用 domcontentloaded，理由见上方注释）
+        await page.goto(url, wait_until="domcontentloaded")
 
         # 第二步：根据资源类型下载
         if "images" in resource_types or "all" in resource_types:
