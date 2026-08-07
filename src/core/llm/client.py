@@ -57,13 +57,25 @@ class LLMBase:
     - Better error handling
     - Flexible configuration
     """
-    def __init__(self, provider: str) -> None:
+    # provider 内部对"模型名"参数的命名不统一（Azure/Gemini 用 model_name，
+    # OpenAI/Ollama 用 model）；对外统一用 model 一个入口，这里做映射。
+    _MODEL_KWARG_BY_PROVIDER = {
+        "azure": "model_name",
+        "openai": "model_name",
+        "ollama": "model",
+        "gemini": "model_name",
+    }
+
+    def __init__(self, provider: str, model: Optional[str] = None) -> None:
         """
         Args:
             provider (str): 'azure', 'openai', 'ollama', 'gemini'
+            model (str, optional): 覆盖该 provider 默认使用的模型名
+                （不传则沿用 LLM_CONFIG 里对应 provider 的环境变量默认值）。
         """
         self.message_histories = {}
         self.provider = provider.lower()
+        self.model = model
 
         # 懒加载Provider实例：只在需要时创建（性能优化）
         self._provider_instances = {}
@@ -81,7 +93,10 @@ class LLMBase:
         self._chat_model = None
         self._embedding_model = None
 
-        logger.info(f"LLMBase initialized with provider: {self.provider} (lazy loading enabled)")
+        logger.info(
+            f"LLMBase initialized with provider: {self.provider}"
+            f"{f', model override: {self.model}' if self.model else ''} (lazy loading enabled)"
+        )
 
     def _validate_provider(self):
         """验证当前 provider 是否有效。"""
@@ -608,8 +623,14 @@ class LLMBase:
     def get_chat_model(self, **kwargs):
         """
         获取当前 provider 的 chat model。
+
+        若初始化时传入了 model 覆盖值，且调用方没有显式传入该 provider
+        对应的模型名 kwarg，则在这里补上——调用方显式传入的值优先。
         """
         self._validate_provider()
+        if self.model:
+            model_kwarg = self._MODEL_KWARG_BY_PROVIDER[self.provider]
+            kwargs.setdefault(model_kwarg, self.model)
         return self._get_provider().get_chat_model(**kwargs)
 
     def get_embedding_model(self, **kwargs):

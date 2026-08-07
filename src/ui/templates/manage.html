@@ -64,78 +64,9 @@
         display: block;
     }
 
-    /* Overview Cards */
-    .overview-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-        gap: 1.5rem;
-        margin-bottom: 2rem;
-    }
-
-    .overview-card {
-        background: var(--bg-primary);
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        box-shadow: var(--shadow-sm);
-        border-left: 4px solid var(--primary-color);
-    }
-
-    .overview-card h3 {
-        margin: 0 0 0.5rem 0;
-        font-size: 0.875rem;
-        color: var(--text-muted);
-        text-transform: uppercase;
-    }
-
-    .overview-card .value {
-        font-size: 2rem;
-        font-weight: bold;
-        color: var(--text-primary);
-    }
-
-    .overview-card .unit {
-        font-size: 0.875rem;
-        color: var(--text-muted);
-        margin-left: 0.25rem;
-    }
-
-    /* Search and Controls */
-    .controls-bar {
-        display: flex;
-        gap: 1rem;
-        margin-bottom: 1.5rem;
-        flex-wrap: wrap;
-        align-items: center;
-    }
-
-    .search-box {
-        flex: 1;
-        min-width: 250px;
-        position: relative;
-    }
-
-    .search-box input {
-        width: 100%;
-        padding: 0.75rem 2.5rem 0.75rem 1rem;
-        border: 1px solid var(--border-color);
-        border-radius: 0.5rem;
-        font-size: 1rem;
-        background: var(--bg-primary);
-        color: var(--text-primary);
-    }
-
-    .search-box input:focus {
-        outline: none;
-        border-color: var(--primary-color);
-    }
-
-    .search-icon {
-        position: absolute;
-        right: 1rem;
-        top: 50%;
-        transform: translateY(-50%);
-        color: var(--text-muted);
-    }
+    /* .overview-grid / .overview-card / .controls-bar / .search-box /
+       .search-icon 已上移到 components.css（dashboard.html 的历史对话
+       弹窗需要复用这几个类，避免两页各存一份）。 */
 
     /* Document Cards */
     .documents-grid {
@@ -318,136 +249,8 @@
         background: #e0a800;
     }
 
-    /* Session Cards */
-    .sessions-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
-        gap: 1.5rem;
-    }
-
-    .session-card {
-        background: var(--bg-primary);
-        border-radius: 0.5rem;
-        box-shadow: var(--shadow-md);
-        padding: 1.5rem;
-        transition: transform 0.2s, box-shadow 0.2s;
-    }
-
-    .session-card:hover {
-        transform: translateY(-2px);
-        box-shadow: var(--shadow-lg);
-    }
-
-    .session-card.selected {
-        border: 2px solid var(--primary-color);
-        background: rgba(0, 123, 255, 0.05);
-    }
-
-    .session-checkbox {
-        position: absolute;
-        top: 1rem;
-        right: 1rem;
-        width: 20px;
-        height: 20px;
-        cursor: pointer;
-    }
-
-    .session-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        margin-bottom: 1rem;
-    }
-
-    .session-title-wrapper {
-        flex: 1;
-        margin-right: 1rem;
-    }
-
-    .session-title {
-        font-size: 1.125rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        cursor: pointer;
-        padding: 0.25rem 0.5rem;
-        margin: -0.25rem -0.5rem;
-        border-radius: 0.25rem;
-        transition: background 0.2s;
-    }
-
-    .session-title:hover {
-        background: var(--bg-secondary);
-    }
-
-    .session-title-input {
-        width: 100%;
-        padding: 0.25rem 0.5rem;
-        border: 2px solid var(--primary-color);
-        border-radius: 0.25rem;
-        font-size: 1.125rem;
-        font-weight: 600;
-        background: var(--bg-primary);
-        color: var(--text-primary);
-    }
-
-    .session-mode {
-        background: var(--primary-color);
-        color: white;
-        padding: 0.25rem 0.75rem;
-        border-radius: 1rem;
-        font-size: 0.75rem;
-        white-space: nowrap;
-    }
-
-    .session-info {
-        font-size: 0.875rem;
-        color: var(--text-muted);
-        margin-bottom: 0.5rem;
-    }
-
-    .session-stats {
-        display: grid;
-        grid-template-columns: repeat(2, 1fr);
-        gap: 0.75rem;
-        margin-top: 1rem;
-        padding-top: 1rem;
-        border-top: 1px solid var(--border-light);
-    }
-
-    .session-stat {
-        text-align: center;
-    }
-
-    .session-stat-value {
-        font-size: 1.5rem;
-        font-weight: bold;
-        color: var(--primary-color);
-    }
-
-    .session-stat-label {
-        font-size: 0.75rem;
-        color: var(--text-muted);
-        text-transform: uppercase;
-    }
-
-    /* Empty State */
-    .empty-state {
-        text-align: center;
-        padding: 4rem 2rem;
-        color: var(--text-muted);
-    }
-
-    .empty-state-icon {
-        font-size: 4rem;
-        margin-bottom: 1rem;
-    }
-
-    /* Loading */
-    .loading {
-        text-align: center;
-        padding: 2rem;
-        color: var(--text-muted);
-    }
+    /* .sessions-grid / .session-card / .session-* / .empty-state / .loading
+       已上移到 components.css（原因同上，dashboard.html 弹窗复用）。 */
 
     /* Notification animations */
     @keyframes slideInRight {
@@ -572,49 +375,93 @@
         text-align: center;
     }
 
-    /* Pagination */
-    .pagination {
+    /* .pagination / .pagination-btn / .pagination-ellipsis 已上移到
+       components.css（原因同上）。 */
+
+    /* Memory tab */
+    .memory-search-result {
+        border: 1px solid var(--border-light);
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin-bottom: 1.5rem;
+        background: var(--bg-secondary);
+        white-space: pre-wrap;
+        font-size: 0.875rem;
+    }
+
+    .namespace-tabs {
         display: flex;
-        justify-content: center;
-        align-items: center;
         gap: 0.5rem;
-        margin: 2rem 0;
+        margin-bottom: 1rem;
         flex-wrap: wrap;
     }
 
-    .pagination-btn {
-        padding: 0.5rem 1rem;
+    .namespace-tabs button {
+        padding: 6px 14px;
         border: 1px solid var(--border-color);
-        border-radius: 0.375rem;
+        border-radius: 999px;
         background: var(--bg-primary);
         color: var(--text-primary);
         cursor: pointer;
         font-size: 0.875rem;
-        font-weight: 500;
-        transition: all 0.2s;
     }
 
-    .pagination-btn:hover:not(:disabled) {
-        background: var(--bg-secondary);
-        border-color: var(--primary-color);
-        color: var(--primary-color);
-    }
-
-    .pagination-btn.active {
+    .namespace-tabs button.active {
         background: var(--primary-color);
         color: white;
         border-color: var(--primary-color);
     }
 
-    .pagination-btn:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
+    .memory-group {
+        border: 1px solid var(--border-light);
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        background: var(--bg-primary);
     }
 
-    .pagination-ellipsis {
-        padding: 0.5rem 0.25rem;
+    .memory-group .group-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 0.5rem;
+    }
+
+    .memory-group .source-id {
+        font-family: monospace;
+        font-size: 0.75rem;
         color: var(--text-muted);
+    }
+
+    .memory-item {
+        border-top: 1px solid var(--border-light);
+        padding: 0.5rem 0;
         font-size: 0.875rem;
+    }
+
+    .memory-item .keywords {
+        margin-top: 4px;
+    }
+
+    .memory-item .keywords span {
+        display: inline-block;
+        background: var(--bg-tertiary);
+        border-radius: 4px;
+        padding: 1px 6px;
+        margin-right: 4px;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+    }
+
+    .memory-item button.danger {
+        font-size: 0.75rem;
+        color: var(--danger-color);
+        border: 1px solid var(--danger-color);
+        background: var(--bg-primary);
+        border-radius: 4px;
+        padding: 2px 8px;
+        cursor: pointer;
+        margin-top: 4px;
     }
 </style>
 {% endblock %}
@@ -630,7 +477,8 @@
     <!-- Tab Navigation -->
     <div class="tab-nav">
         <button class="tab-button active" data-tab="documents">📄 文档与存储</button>
-        <button class="tab-button" data-tab="sessions">💬 会话管理</button>
+        <button class="tab-button" data-tab="sessions">💬 历史对话</button>
+        <button class="tab-button" data-tab="memory">🧠 Memory</button>
     </div>
 
     <!-- Documents & Storage Tab -->
@@ -798,6 +646,25 @@
             <h3>暂无会话</h3>
             <p>开始对话以创建会话历史</p>
         </div>
+    </div>
+
+    <!-- Memory Tab -->
+    <div id="memory-tab" class="tab-content">
+        <div class="overview-grid" id="memory-overview-stats"></div>
+
+        <div class="controls-bar">
+            <div class="search-box" style="flex: 2;">
+                <input type="text" id="memory-search-query" placeholder="检索测试...">
+            </div>
+            <select id="memory-search-namespace" class="btn btn-secondary" style="cursor: pointer;">
+                <option value="">全部 namespace</option>
+            </select>
+            <button class="btn btn-primary" id="memory-search-btn">检索</button>
+        </div>
+        <div id="memory-search-result" class="memory-search-result" style="display:none"></div>
+
+        <div class="namespace-tabs" id="memory-namespace-tabs"></div>
+        <div id="memory-groups"></div>
     </div>
 </div>
 

@@ -46,7 +46,8 @@ class AgentBase:
     def __init__(
         self,
         name: str,
-        provider: str = 'openai'
+        provider: str = 'openai',
+        model: Optional[str] = None
     ):
         """
         初始化Agent
@@ -54,15 +55,26 @@ class AgentBase:
         Args:
             name: Agent名称
             provider: LLM提供商 ('azure', 'openai', 'ollama')
+            model: 覆盖该 provider 默认使用的模型名（可选）。省略时按
+                src.config.model_overrides.AGENT_MODEL_OVERRIDES 里以 name
+                为键查找配置好的覆盖值；两者都没有则沿用 provider 的
+                环境变量默认模型。显式传入的 model 优先于配置表。
         """
         self.name = name
 
+        if model is None:
+            from src.config.model_overrides import AGENT_MODEL_OVERRIDES
+            model = AGENT_MODEL_OVERRIDES.get(name)
+
         # 初始化LLM实例（Agent级别，供所有工具方法复用）
         from src.core.llm import LLMBase
-        self.llm = LLMBase(provider=provider)
+        self.llm = LLMBase(provider=provider, model=model)
         self.embedding_model = self.llm.embedding_model
 
-        logger.info(f"✅ {self.name} initialized with LLM provider: {provider}")
+        logger.info(
+            f"✅ {self.name} initialized with LLM provider: {provider}"
+            f"{f', model: {model}' if model else ''}"
+        )
 
         self.graph: Optional[StateGraph] = None
 

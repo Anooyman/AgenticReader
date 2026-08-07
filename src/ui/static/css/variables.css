@@ -61,3 +61,28 @@
     /* Header */
     --header-height: 64px;
 }
+
+/* 深色主题——切换靠给 <html> 加 data-theme="dark"（见 base.html 里的
+   切换按钮/持久化脚本），下面这组覆盖值会连带影响所有引用了这些变量
+   的地方（几乎整个页面），不需要每个模板单独适配。 */
+:root[data-theme="dark"] {
+    --text-primary: #e5e7eb;
+    --text-secondary: #9ca3af;
+    /* 原来的 #6b7280 在三种深色背景上对比度都不到 3.5:1（WCAG AA 正文
+       要求 4.5:1），页面里大量提示文字/次要信息用的就是这个变量，
+       深色模式下大片看不清。#94a0b0 在三种背景上都能过 4.5:1，同时仍
+       比 text-secondary 暗一档，保留"次要文字"的视觉层级。 */
+    --text-muted: #94a0b0;
+    --text-white: #ffffff;
+
+    --bg-primary: #24272e;
+    --bg-secondary: #1a1d23;
+    --bg-tertiary: #2d3139;
+
+    --border-light: #363b45;
+    --border-color: #454b57;
+
+    --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+}

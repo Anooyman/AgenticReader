@@ -199,6 +199,23 @@ async def scrape_url_tool(
         # 适用于动态加载的内容
         if wait_for:
             await page.wait_for_selector(wait_for, timeout=timeout)
+        elif "text" in content_types:
+            # domcontentloaded 只保证 DOM 解析完成，客户端渲染的 SPA（React/
+            # Vue 等）此时 body 往往还是空壳——真实验证过 bsky.app：html 有
+            # 25928 字符（壳子），innerText 却是 0。没有指定 wait_for 时，
+            # 给一段有硬上限的"软等待"：轮询 body.innerText 直到非空或
+            # 超过 min(3000ms, timeout/2)，不用 networkidle（对长连接页面
+            # 几乎永远等不到，那正是 domcontentloaded 替换掉它的原因）。
+            # 超时不算错误——静态页面本来就没有额外内容可等，直接放行，
+            # 走原有的空文本兜底逻辑。
+            soft_wait_ms = min(3000, timeout // 2)
+            try:
+                await page.wait_for_function(
+                    "() => document.body && document.body.innerText.trim().length > 0",
+                    timeout=soft_wait_ms,
+                )
+            except Exception:
+                pass
 
         # 第三步：提取内容
         content = {}       # 存储提取的内容

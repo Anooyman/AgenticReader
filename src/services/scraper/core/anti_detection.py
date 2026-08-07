@@ -88,12 +88,13 @@ class AntiDetectionEngine:
             "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
             # 支持的压缩编码
             "Accept-Encoding": "gzip, deflate, br",
-            # Chrome 的品牌和版本信息（客户端提示）
-            "sec-ch-ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-            # 不是移动设备
-            "sec-ch-ua-mobile": "?0",
-            # 运行平台
-            "sec-ch-ua-platform": '"macOS"',
+            # 不手动设置 sec-ch-ua / sec-ch-ua-mobile / sec-ch-ua-platform：
+            # 之前这里硬编码 Chrome 122，但 Playwright 自带的 Chromium 版本会
+            # 随依赖升级（实测已是 131），版本号与真实 User-Agent 不一致正是
+            # 网站反爬检测最容易抓到的信号——真实验证过：这个不一致会让
+            # bsky.app 之类有反爬检测的站点渲染出空壳页面（body.innerText
+            # 始终为空，即便等待再久也不会变化）。Chromium 自己在真实请求里
+            # 已经会发送与其版本匹配的 sec-ch-ua 系列头部，不覆盖即可保持一致。
             # 安全相关：同站请求
             "Sec-Fetch-Site": "none",
             # 导航模式

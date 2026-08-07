@@ -14,6 +14,14 @@ body {
     line-height: 1.5;
 }
 
+/* 表单元素默认继承浏览器原生的白底黑字，不会跟着 --bg-primary/
+   --text-primary 变色——深色模式下会在页面里留一片刺眼的白色输入框。
+   这里给个全站兜底，具体页面/组件（如 .form-control）可以再按需覆盖。 */
+input, textarea, select {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
 .app-container {
     min-height: 100vh;
     display: flex;

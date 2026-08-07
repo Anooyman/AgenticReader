@@ -19,6 +19,11 @@ tiktoken==0.9.0
 faiss-cpu==1.11.0
 numpy==2.3.1
 
+# Memory subsystem (src/memory/) — LanceDB-backed long-term memory,
+# ported from the LLM-Memory project for the ai-research-pipeline merge
+lancedb>=0.6.0
+pyarrow>=12.0.0
+
 # ==================== Web Framework ====================
 
 # FastAPI & Server

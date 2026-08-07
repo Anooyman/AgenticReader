@@ -12,13 +12,9 @@ except ImportError:
 
 load_dotenv()
 
-# 导入 AgentType 用于 AgentCard 配置
-from .prompts.agent_prompts import AgentType
-
 # 使用常量文件中的定义，保持向后兼容性
 class MCPToolName:
     WEB_SEARCH = MCPConstants.ToolNames.WEB_SEARCH
-    MEMORY = MCPConstants.ToolNames.MEMORY
 
 MCP_CONFIG = {
   MCPToolName.WEB_SEARCH: {
@@ -37,13 +33,6 @@ MCP_CONFIG = {
         "command": sys.executable,
         "args": ["src/services/duckduckgo_mcp_server.py"]
     },
-  },
-  MCPToolName.MEMORY: {
-    "rag-memory": {
-      "command": "npx",
-      "args": ["-y", "rag-memory-mcp"],
-      "type": "stdio",
-    }
   },
   # ===== SearchAgent MCP 服务（顶层配置）=====
   # DuckDuckGo 搜索引擎
@@ -67,23 +56,6 @@ MCP_CONFIG = {
     #    "mcp_server_fetch"
     #  ]
     #},
-}
-
-# AgentCard 配置保留在这里，因为它是业务逻辑配置而非提示词
-AgentCard = {
-  AgentType.MEMORY:{
-    "name": AgentType.MEMORY,
-    "description": "MemoryAgent是负责管理、检索和处理各类记忆信息的核心组件。",
-    "status": "enable",
-    "tools": [
-      {
-        "search": "检索已有的记忆内容",
-      },
-      {
-        "add": "更新已有的记忆"
-      }
-    ]
-  },
 }
 
 
@@ -151,22 +123,6 @@ PDF_IMAGE_CONFIG = {
     "dpi": PDFConstants.DEFAULT_DPI,
     "quality": "high",
     "presets": PDFConstants.QUALITY_LEVELS
-}
-
-MEMORY_VECTOR_DB_CONFIG = {
-  "db_path": f"{MEMORY_PATH}/longterm_index",
-  "location": {
-    "file_path": f"{MEMORY_PATH}/location.json"
-  },
-  "person": {
-    "file_path": f"{MEMORY_PATH}/person.json"
-  },
-  "date": {
-    "file_path": f"{MEMORY_PATH}/date.json"
-  },
-  "tag": {
-    "file_path": f"{MEMORY_PATH}/tag.json"
-  }
 }
 
 # ==================== 文档选择配置（跨文档检索） ====================

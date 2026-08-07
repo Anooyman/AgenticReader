@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-AgenticReader is an advanced document analysis and intelligent Q&A tool powered by large language models. It supports PDF and web content parsing with multiple LLM providers (Azure OpenAI, OpenAI, Ollama). The system automatically extracts content, generates summaries, builds vector databases, and supports multi-turn intelligent conversations with an intelligent memory system based on multi-agent architecture.
+AgenticReader is an advanced document analysis and intelligent Q&A tool powered by large language models. It supports PDF and web content parsing with multiple LLM providers (Azure OpenAI, OpenAI, Ollama). The system automatically extracts content, generates summaries, builds vector databases, and supports multi-turn intelligent conversations via a multi-agent architecture (see "Memory System" below for the current state of long-term memory).
 
 ## Development Commands
 
@@ -20,15 +20,12 @@ mkdir -p data/pdf data/pdf_image data/json_data data/vector_db data/output data/
 git status
 git branch
 
-# Optional: Install MCP services (required for Web Reader and Memory features)
+# Optional: Install MCP services (required for Web Reader features)
 # Option 1: Use Playwright MCP (recommended)
 # npx @playwright/mcp@latest
 
 # Option 2: Use DuckDuckGo MCP
 uv pip install duckduckgo-mcp-server
-
-# Install Memory service
-npm install -g rag-memory-mcp
 ```
 
 ### Running the Application
@@ -37,10 +34,6 @@ npm install -g rag-memory-mcp
 ```bash
 # Run main application (handles both PDF and URL inputs)
 python main.py
-
-# Test specific module
-python src/chat/memory_agent.py  # Test memory agent
-python src/chat/chat.py          # Test multi-agent system
 ```
 
 **UI Mode (FastAPI + WebSocket):**
@@ -304,11 +297,14 @@ data/json_data/{doc_name}/
 - Clear organization for finding specific document data
 - Aligns with vector DB and output directory structure
 
-### Memory System Integration
-- **Intent Recognition**: Automatic classification of storage vs. retrieval requests
-- **Multi-dimensional Tagging**: Time, location, person, tag-based metadata organization
-- **Semantic Retrieval**: Vector-based content matching with knowledge graph enhancement
-- **Asynchronous Processing**: Background execution with state management
+### Memory System
+The previous `rag-memory-mcp`-based memory agent (`src/chat/memory_agent.py`) has
+been removed — it was never wired into `main.py` or the UI and had gone stale.
+A new long-term memory subsystem (`src/memory/`, LanceDB-backed, adapted from the
+sibling `LLM-Memory` project) is planned as part of merging in the
+`ai-research-pipeline` research/report features. Until that lands, AgenticReader
+has no persistent cross-session memory beyond per-document vector DBs and chat
+session history.
 
 ### UI Data Flow
 1. **Session Persistence**: Client localStorage → Server file storage → Backup rotation
@@ -335,11 +331,10 @@ data/json_data/{doc_name}/
 - **Web Content Fetching**: Two options available
   - Playwright MCP service (`npx @playwright/mcp@latest`) - Recommended
   - DuckDuckGo MCP service (`uv pip install duckduckgo-mcp-server`) - Alternative option
-- **Memory Management**: RAG-memory-mcp service (`npx -y rag-memory-mcp`)
 - **Configuration**: Toggle between services in `src/config/settings.py` under `MCP_CONFIG`
   - Playwright config is commented out by default
   - DuckDuckGo config is currently active (requires separate installation)
-- **Note**: MCP services are optional but required for Web Reader and Memory Agent features
+- **Note**: MCP services are optional but required for Web Reader features
 - Extensible service configuration for future integrations
 
 ### UI Features (FastAPI Interface)
@@ -562,9 +557,6 @@ npx @playwright/mcp@latest
 # Test DuckDuckGo MCP (if installed)
 # Note: Requires duckduckgo-mcp-server to be installed
 uvx duckduckgo-mcp-server
-
-# Test Memory service
-npx -y rag-memory-mcp
 
 # Verify MCP configuration in settings
 grep -A 10 "MCP_CONFIG" src/config/settings.py

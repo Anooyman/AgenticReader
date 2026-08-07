@@ -5,39 +5,108 @@
 {% block extra_css %}
 <style>
     .dashboard {
-        max-width: 800px;
+        max-width: 900px;
         margin: 0 auto;
-        padding: 2rem;
+        padding: 1.5rem 2rem;
     }
 
     .welcome {
         text-align: center;
-        padding: 3rem 0 2rem;
+        padding: 1.5rem 0;
     }
 
     .welcome h1 {
-        font-size: 2.5rem;
+        font-size: 2rem;
         color: var(--primary-color);
-        margin-bottom: 0.5rem;
+        margin-bottom: 0.25rem;
     }
 
-    .quick-start {
-        margin-bottom: 3rem;
+    .welcome p {
+        color: var(--text-muted);
+        font-size: 0.9rem;
     }
 
     .section-title {
-        font-size: 1.5rem;
+        font-size: 1.125rem;
         font-weight: 600;
-        margin-bottom: 1.5rem;
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .section-title a {
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: var(--primary-color);
+        text-decoration: none;
+    }
+
+    .section-title a:hover {
+        text-decoration: underline;
+    }
+
+    /* 今日简报预览——首页的视觉主体，不是又一个入口卡片，直接展示内容
+       摘要，点了就能处理，不需要先猜"该去哪个页面看"。 */
+    .briefs-preview {
+        margin-bottom: 2rem;
+    }
+
+    .briefs-preview-card {
+        background: var(--bg-primary);
+        border-radius: 0.75rem;
+        border: 1px solid var(--border-light);
+        box-shadow: var(--shadow-sm);
+        padding: 1.25rem 1.5rem;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .briefs-preview-card:hover {
+        border-color: var(--primary-color);
+        box-shadow: var(--shadow-md);
+    }
+
+    .briefs-preview-summary {
+        color: var(--text-secondary);
+        font-size: 0.875rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .briefs-preview-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .briefs-preview-list li {
+        padding: 0.375rem 0;
+        border-top: 1px solid var(--border-light);
+        font-size: 0.875rem;
+        color: var(--text-primary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .briefs-preview-empty {
+        color: var(--text-muted);
+        font-size: 0.875rem;
         text-align: center;
+        padding: 1rem 0;
+    }
+
+    /* 快捷操作行——降级为次要功能，让位给上面的简报预览 */
+    .quick-actions {
+        margin-bottom: 2rem;
     }
 
     .mode-card {
         background: var(--bg-primary);
         border-radius: 0.75rem;
-        padding: 2.5rem;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-        border: 2px solid var(--border-light);
+        padding: 1.25rem;
+        box-shadow: var(--shadow-sm);
+        border: 1px solid var(--border-light);
         transition: all 0.2s;
         cursor: pointer;
         text-align: center;
@@ -45,20 +114,45 @@
 
     .mode-card:hover {
         border-color: var(--primary-color);
-        box-shadow: 0 8px 30px rgba(102, 126, 234, 0.15);
-        transform: translateY(-4px);
+        box-shadow: var(--shadow-md);
+        transform: translateY(-2px);
     }
 
-    .mode-icon { font-size: 3.5rem; margin-bottom: 1rem; }
-    .mode-title { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.75rem; }
-    .mode-desc { color: var(--text-secondary); margin-bottom: 1rem; line-height: 1.6; }
+    .mode-icon { font-size: 1.75rem; margin-bottom: 0.5rem; }
+    .mode-title { font-size: 1rem; font-weight: 700; margin-bottom: 0.25rem; }
     .mode-requirement {
-        font-size: 0.875rem;
+        font-size: 0.75rem;
         color: var(--text-muted);
         background: var(--bg-secondary);
-        padding: 0.5rem 1rem;
+        padding: 0.25rem 0.6rem;
         border-radius: 0.5rem;
         display: inline-block;
+        margin-top: 0.25rem;
+    }
+
+    /* 后台任务小面板：默认只显示一行摘要，点了才展开列表——首页只做
+       "看一眼有没有在跑"，真正管理任务在 /briefs 的任务表格里。 */
+    .jobs-panel-list {
+        margin-top: 0.75rem;
+        border-top: 1px solid var(--border-light);
+        padding-top: 0.75rem;
+        text-align: left;
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+    }
+
+    .jobs-panel-list .job-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.25rem 0;
+    }
+
+    .jobs-panel-list .job-row .job-name {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     /* 响应式优化 */
@@ -68,540 +162,50 @@
         }
     }
 
-    /* ==================== 会话管理弹窗样式 ==================== */
-    .sessions-modal {
+    /* 历史对话弹窗——内容渲染复用 manage.js 里 DataManager 已有的会话
+       方法（loadSessions/renderSessions/showSessionDetail 等），这里只是
+       给它们一个模态框外壳，不重新实现列表/搜索/删除逻辑。 */
+    #sessions-modal-overlay {
+        display: none;
         position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0, 0, 0, 0.6);
-        display: flex;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 1000;
         align-items: center;
         justify-content: center;
-        z-index: 9999;
-        backdrop-filter: blur(4px);
-        animation: fadeIn 0.2s ease-out;
     }
 
-    @keyframes fadeIn {
-        from { opacity: 0; }
-        to { opacity: 1; }
+    #sessions-modal-overlay.open {
+        display: flex;
     }
 
-    .sessions-modal-content {
+    .sessions-modal-panel {
         background: var(--bg-primary);
-        border-radius: 1rem;
-        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        border-radius: 0.75rem;
+        box-shadow: var(--shadow-lg);
         width: 90%;
         max-width: 900px;
         max-height: 85vh;
         display: flex;
         flex-direction: column;
-        animation: modalSlideIn 0.3s ease-out;
-    }
-
-    @keyframes modalSlideIn {
-        from {
-            opacity: 0;
-            transform: translateY(-30px) scale(0.95);
-        }
-        to {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-        }
     }
 
     .sessions-modal-header {
-        padding: 1.5rem 2rem;
-        border-bottom: 1px solid var(--border-light);
         display: flex;
         justify-content: space-between;
         align-items: center;
+        padding: 1.25rem 1.5rem;
+        border-bottom: 1px solid var(--border-light);
         flex-shrink: 0;
     }
 
-    .sessions-modal-header h2 {
+    .sessions-modal-header h3 {
         margin: 0;
-        font-size: 1.5rem;
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
     }
 
-    .close-modal-btn {
-        background: none;
-        border: none;
-        font-size: 2rem;
-        cursor: pointer;
-        color: var(--text-muted);
-        line-height: 1;
-        padding: 0;
-        transition: color 0.2s;
-    }
-
-    .close-modal-btn:hover {
-        color: var(--text-primary);
-    }
-
-    /* 会话统计卡片 */
-    .sessions-stats {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 1rem;
-        padding: 1.5rem 2rem;
-        background: var(--bg-secondary);
-        border-bottom: 1px solid var(--border-light);
-    }
-
-    .stat-card {
-        text-align: center;
-        padding: 0.75rem;
-        background: var(--bg-primary);
-        border-radius: 0.5rem;
-        border: 1px solid var(--border-light);
-    }
-
-    .stat-value {
-        font-size: 1.75rem;
-        font-weight: bold;
-        color: var(--primary-color);
-        margin-bottom: 0.25rem;
-    }
-
-    .stat-label {
-        font-size: 0.75rem;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-
-    /* 搜索和控制栏 */
-    .sessions-controls {
-        padding: 1rem 2rem;
-        border-bottom: 1px solid var(--border-light);
-        display: flex;
-        gap: 1rem;
-        flex-wrap: wrap;
-        align-items: center;
-        background: var(--bg-primary);
-    }
-
-    .search-input {
-        flex: 1;
-        min-width: 200px;
-        padding: 0.5rem 1rem;
-        border: 1px solid var(--border-light);
-        border-radius: 0.5rem;
-        font-size: 0.875rem;
-        background: var(--bg-secondary);
-    }
-
-    .search-input:focus {
-        outline: none;
-        border-color: var(--primary-color);
-        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-    }
-
-    .control-btn {
-        padding: 0.5rem 1rem;
-        border: 1px solid var(--border-light);
-        border-radius: 0.5rem;
-        background: var(--bg-secondary);
-        cursor: pointer;
-        font-size: 0.875rem;
-        transition: all 0.2s;
-        white-space: nowrap;
-    }
-
-    .control-btn:hover {
-        background: var(--bg-primary);
-        border-color: var(--primary-color);
-    }
-
-    .control-btn.danger {
-        background: #dc3545;
-        color: white;
-        border-color: #dc3545;
-    }
-
-    .control-btn.danger:hover {
-        background: #c82333;
-        border-color: #c82333;
-    }
-
-    /* 会话列表 */
-    .sessions-list-container {
-        flex: 1;
-        overflow-y: auto;
-        padding: 1.5rem 2rem;
-    }
-
-    .session-item {
-        background: var(--bg-secondary);
-        border: 2px solid transparent;
-        border-radius: 0.75rem;
-        padding: 1.25rem;
-        margin-bottom: 1rem;
-        transition: all 0.2s;
-        position: relative;
-    }
-
-    .session-item:hover {
-        border-color: var(--primary-color);
-        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
-        transform: translateY(-2px);
-    }
-
-    .session-item.selected {
-        border-color: var(--primary-color);
-        background: rgba(102, 126, 234, 0.05);
-    }
-
-    .session-checkbox {
-        position: absolute;
-        top: 1rem;
-        right: 1rem;
-        width: 18px;
-        height: 18px;
-        cursor: pointer;
-    }
-
-    .session-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: flex-start;
-        margin-bottom: 0.75rem;
-        padding-right: 2rem;
-    }
-
-    .session-title {
-        font-size: 1.125rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin: 0;
-        flex: 1;
-    }
-
-    .session-type-badge {
-        padding: 0.25rem 0.75rem;
-        border-radius: 1rem;
-        font-size: 0.75rem;
-        font-weight: 600;
-        white-space: nowrap;
-        margin-left: 0.5rem;
-    }
-
-    .session-type-badge.single {
-        background: #3b82f6;
-        color: white;
-    }
-
-    .session-type-badge.multi {
-        background: #8b5cf6;
-        color: white;
-    }
-
-    .session-type-badge.chat {
-        background: #10b981;
-        color: white;
-    }
-
-    /* 模式和工具标签 */
-    .session-badges {
-        display: flex;
-        gap: 0.5rem;
-        flex-wrap: wrap;
-        margin-bottom: 0.75rem;
-    }
-
-    .session-mode-badge {
-        padding: 0.25rem 0.75rem;
-        border-radius: 0.375rem;
-        font-size: 0.75rem;
-        font-weight: 500;
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-        color: white;
-        white-space: nowrap;
-    }
-
-    .session-tool-badge {
-        padding: 0.25rem 0.75rem;
-        border-radius: 0.375rem;
-        font-size: 0.75rem;
-        font-weight: 500;
-        background: #e0f2fe;
-        color: #0369a1;
-        border: 1px solid #bae6fd;
-        white-space: nowrap;
-    }
-
-    .session-agent-badge {
-        padding: 0.25rem 0.75rem;
-        border-radius: 0.375rem;
-        font-size: 0.75rem;
-        font-weight: 500;
-        background: #fef3c7;
-        color: #b45309;
-        border: 1px solid #fde68a;
-        white-space: nowrap;
-    }
-
-    .session-meta {
-        display: flex;
-        gap: 1rem;
-        font-size: 0.8rem;
-        color: var(--text-muted);
-        flex-wrap: wrap;
-        margin-bottom: 0.75rem;
-    }
-
-    .session-meta > span {
-        display: flex;
-        align-items: center;
-        gap: 0.25rem;
-    }
-
-    .session-docs {
-        font-size: 0.75rem;
-        color: var(--text-secondary);
-        margin-bottom: 0.75rem;
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-    }
-
-    .session-actions {
-        display: flex;
-        gap: 0.5rem;
-        margin-top: 0.75rem;
-        padding-top: 0.75rem;
-        border-top: 1px solid var(--border-light);
-    }
-
-    .session-action-btn {
-        padding: 0.5rem 1rem;
-        border: none;
-        border-radius: 0.5rem;
-        cursor: pointer;
-        font-size: 0.875rem;
-        font-weight: 500;
-        transition: all 0.2s;
-    }
-
-    .session-action-btn.primary {
-        background: var(--primary-color);
-        color: white;
-    }
-
-    .session-action-btn.primary:hover {
-        background: #5568d3;
-        transform: translateY(-1px);
-    }
-
-    .session-action-btn.secondary {
-        background: var(--bg-secondary);
-        color: var(--text-primary);
-        border: 1px solid var(--border-light);
-    }
-
-    .session-action-btn.secondary:hover {
-        background: #e7f3ff;
-        border-color: var(--primary-color);
-        transform: translateY(-1px);
-    }
-
-    .session-action-btn.danger {
-        background: #dc3545;
-        color: white;
-    }
-
-    .session-action-btn.danger:hover {
-        background: #c82333;
-    }
-
-    /* 空状态 */
-    .sessions-empty {
-        text-align: center;
-        padding: 4rem 2rem;
-        color: var(--text-muted);
-    }
-
-    .sessions-empty-icon {
-        font-size: 5rem;
-        margin-bottom: 1rem;
-        opacity: 0.5;
-    }
-
-    /* 加载状态 */
-    .sessions-loading {
-        text-align: center;
-        padding: 3rem;
-        color: var(--text-muted);
-    }
-
-    @keyframes spin {
-        to { transform: rotate(360deg); }
-    }
-
-    .spinner {
-        display: inline-block;
-        width: 40px;
-        height: 40px;
-        border: 4px solid var(--border-light);
-        border-top-color: var(--primary-color);
-        border-radius: 50%;
-        animation: spin 1s linear infinite;
-        margin-bottom: 1rem;
-    }
-
-    /* ==================== 会话详情面板 ==================== */
-    .session-detail-panel {
-        position: fixed;
-        top: 0;
-        right: 0;
-        bottom: 0;
-        width: 600px;
-        max-width: 90vw;
-        background: var(--bg-primary);
-        box-shadow: -4px 0 20px rgba(0, 0, 0, 0.2);
-        z-index: 10000;
-        display: flex;
-        flex-direction: column;
-        animation: slideInRight 0.3s ease-out;
-        overflow: hidden;
-    }
-
-    @keyframes slideInRight {
-        from {
-            transform: translateX(100%);
-            opacity: 0;
-        }
-        to {
-            transform: translateX(0);
-            opacity: 1;
-        }
-    }
-
-    .detail-panel-header {
-        padding: 1.5rem 2rem;
-        border-bottom: 2px solid var(--border-light);
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        flex-shrink: 0;
-    }
-
-    .detail-panel-header h3 {
-        margin: 0 0 0.5rem 0;
-        font-size: 1.25rem;
-        font-weight: 600;
-    }
-
-    .detail-panel-meta {
-        font-size: 0.875rem;
-        opacity: 0.9;
-        display: flex;
-        gap: 1rem;
-        margin-top: 0.5rem;
-    }
-
-    .close-detail-btn {
-        position: absolute;
-        top: 1rem;
-        right: 1rem;
-        background: rgba(255, 255, 255, 0.2);
-        border: none;
-        color: white;
-        font-size: 1.5rem;
-        width: 32px;
-        height: 32px;
-        border-radius: 50%;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transition: all 0.2s;
-        line-height: 1;
-    }
-
-    .close-detail-btn:hover {
-        background: rgba(255, 255, 255, 0.3);
-        transform: rotate(90deg);
-    }
-
-    .detail-panel-content {
-        flex: 1;
+    .sessions-modal-body {
         overflow-y: auto;
         padding: 1.5rem;
-    }
-
-    .detail-message {
-        margin-bottom: 1.5rem;
-        animation: fadeIn 0.3s ease-out;
-    }
-
-    .detail-message-user {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-    }
-
-    .detail-message-assistant {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-    }
-
-    .detail-message-user .detail-bubble {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 1rem 1.25rem;
-        border-radius: 1.125rem 1.125rem 0.25rem 1.125rem;
-        max-width: 80%;
-        word-wrap: break-word;
-        box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
-    }
-
-    .detail-message-assistant .detail-bubble {
-        background: var(--bg-secondary);
-        color: var(--text-primary);
-        padding: 1rem 1.25rem;
-        border-radius: 1.125rem 1.125rem 1.125rem 0.25rem;
-        max-width: 80%;
-        word-wrap: break-word;
-        border: 1px solid var(--border-light);
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
-        line-height: 1.6;
-    }
-
-    .detail-bubble pre {
-        background: rgba(0, 0, 0, 0.05);
-        padding: 0.75rem;
-        border-radius: 0.5rem;
-        overflow-x: auto;
-        margin: 0.5rem 0;
-    }
-
-    .detail-bubble code {
-        font-family: 'Courier New', monospace;
-        font-size: 0.9em;
-    }
-
-    .detail-timestamp {
-        font-size: 0.75rem;
-        color: var(--text-muted);
-        margin-top: 0.5rem;
-    }
-
-    .detail-panel-overlay {
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0, 0, 0, 0.3);
-        z-index: 9999;
-        animation: fadeIn 0.2s ease-out;
     }
 </style>
 {% endblock %}
@@ -614,648 +218,266 @@
         <p>智能文档对话助手 - 深入理解每一份文档</p>
     </div>
 
-    <!-- 快速启动 -->
-    <section class="quick-start">
-        <h2 class="section-title">🚀 快速启动</h2>
-        <div class="mode-cards" style="max-width: 600px; margin: 0 auto; display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem;">
+    <!-- 今日简报预览——首页的视觉主体：不需要先猜"该去哪个页面看"，
+         一进页就知道今天有没有新东西、有几条还没处理。 -->
+    <section class="briefs-preview">
+        <div class="section-title">
+            <span id="briefs-preview-heading">📰 今日简报</span>
+            <a href="/briefs">查看全部 →</a>
+        </div>
+        <div class="briefs-preview-card" id="briefs-preview-card">
+            <div class="briefs-preview-summary" id="briefs-preview-summary">加载中...</div>
+            <ul class="briefs-preview-list" id="briefs-preview-list"></ul>
+        </div>
+    </section>
+
+    <!-- 快捷操作——新对话/历史对话/后台任务，降级为次要功能 -->
+    <section class="quick-actions">
+        <div class="mode-cards" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;">
             <!-- 新对话 -->
             <a href="/chat" style="text-decoration: none; color: inherit; display: block;">
                 <div class="mode-card" id="start-chat-card" role="button" tabindex="0">
                     <div class="mode-icon">💬</div>
                     <div class="mode-title">新对话</div>
-                    <div class="mode-desc">开始新的对话，可选择文档或网络搜索增强回答</div>
-                    <div class="mode-requirement">💡 支持多种模式</div>
+                    <div class="mode-requirement">💡 多种模式</div>
                 </div>
             </a>
 
-            <!-- 历史对话 -->
+            <!-- 历史对话：点击在首页内弹窗展示，不跳转页面 -->
             <div class="mode-card" id="history-sessions-card" role="button" tabindex="0" style="cursor: pointer;">
                 <div class="mode-icon">📜</div>
                 <div class="mode-title">历史对话</div>
-                <div class="mode-desc">查看和管理所有历史会话，支持批量操作</div>
                 <div class="mode-requirement" id="session-count">加载中...</div>
+            </div>
+
+            <!-- 后台任务：点开展开简单列表，不跳页面；真正管理任务在
+                 /briefs 的任务表格里，这里只做"看一眼有没有在跑" -->
+            <div class="mode-card" id="jobs-summary-card" role="button" tabindex="0" style="cursor: pointer;">
+                <div class="mode-icon">⚙️</div>
+                <div class="mode-title">后台任务</div>
+                <div class="mode-requirement" id="jobs-summary-count">加载中...</div>
+                <div class="jobs-panel-list" id="jobs-panel-list" style="display: none;"></div>
             </div>
         </div>
     </section>
+</div>
+
+<!-- 历史对话弹窗——DOM 结构照搬 manage.html 的"历史对话"tab，这样
+     manage.js 里现成的 DataManager 会话方法（用 getElementById 找这些
+     固定 ID）不用改一行就能直接工作，只是外层包了一个模态框而不是 tab。 -->
+<div id="sessions-modal-overlay">
+    <div class="sessions-modal-panel">
+        <div class="sessions-modal-header">
+            <h3>📜 历史对话</h3>
+            <button class="btn btn-secondary" id="sessions-modal-close" style="padding: 0.25rem 0.75rem;">✕</button>
+        </div>
+        <div class="sessions-modal-body">
+            <div class="overview-grid">
+                <div class="overview-card">
+                    <h3>总会话数</h3>
+                    <div class="value" id="session-total">0</div>
+                </div>
+                <div class="overview-card">
+                    <h3>单文档会话</h3>
+                    <div class="value" id="session-single">0</div>
+                </div>
+                <div class="overview-card">
+                    <h3>跨文档会话</h3>
+                    <div class="value" id="session-cross">0</div>
+                </div>
+                <div class="overview-card">
+                    <h3>手动选择会话</h3>
+                    <div class="value" id="session-manual">0</div>
+                </div>
+            </div>
+
+            <div class="controls-bar">
+                <div class="search-box">
+                    <input type="text" id="session-search" placeholder="搜索会话标题...">
+                    <span class="search-icon">🔍</span>
+                </div>
+                <button class="btn btn-secondary" onclick="dataManager.toggleSelectAll()">
+                    <span id="select-all-text">☑️ 全选</span>
+                </button>
+                <button class="btn btn-danger" onclick="dataManager.batchDeleteSessions()" id="batch-delete-btn" style="display: none;">
+                    🗑️ 删除选中 (<span id="selected-count">0</span>)
+                </button>
+                <button class="btn btn-secondary" onclick="dataManager.refreshSessions()">🔄 刷新</button>
+            </div>
+
+            <div id="sessions-loading" class="loading">
+                <div>⏳ 加载会话数据中...</div>
+            </div>
+            <div id="sessions-grid" class="sessions-grid" style="display: none;"></div>
+            <div id="session-pagination" class="pagination" style="display: none;"></div>
+            <div id="sessions-empty" class="empty-state" style="display: none;">
+                <div class="empty-state-icon">💬</div>
+                <h3>暂无会话</h3>
+                <p>开始对话以创建会话历史</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 会话详情弹窗——showSessionDetail() 需要这个固定 ID 结构 -->
+<div id="detail-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1100; align-items: center; justify-content: center;" onclick="if(event.target === this) dataManager.closeDetailModal()">
+    <div style="background: var(--bg-primary); border-radius: 0.5rem; max-width: 800px; max-height: 80vh; box-shadow: var(--shadow-lg); width: 90%; display: flex; flex-direction: column;">
+        <div style="display: flex; justify-content: space-between; align-items: center; padding: 1.5rem 2rem; border-bottom: 1px solid var(--border-light); flex-shrink: 0;">
+            <h3 id="detail-modal-title" style="margin: 0;">详细信息</h3>
+            <button class="btn btn-secondary" onclick="dataManager.closeDetailModal()" style="padding: 0.25rem 0.75rem;">✕</button>
+        </div>
+        <div id="detail-modal-content" style="line-height: 1.6; overflow-y: auto; flex: 1; padding: 2rem;"></div>
+    </div>
 </div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
-// ==================== Dashboard 主逻辑 ====================
-class DashboardApp {
-    constructor() {
-        this.sessions = [];
-        this.filteredSessions = [];
-        this.selectedSessions = new Set();
-        this.init();
-    }
-
-    async init() {
-        console.log('✅ Dashboard 页面初始化');
-        this.setupEventListeners();
-        await this.loadSessionStats();
-
-        // 检查URL hash，如果是#sessions则自动打开弹窗
-        if (window.location.hash === '#sessions') {
-            // 延迟一下确保页面加载完成
-            setTimeout(() => this.showSessionsModal(), 100);
+    // manage.js 在实例化 DataManager 之前读取这个全局配置：sessionsOnly
+    // 模式下跳过文档/概览/待索引PDF的加载和 DOM 绑定（弹窗里没有那些
+    // 元素），只做会话相关的事——这样首页不会白白多打四个和会话无关的
+    // 数据管理 API 请求。
+    window.DATA_MANAGER_OPTIONS = { sessionsOnly: true };
+</script>
+<script src="/static/js/manage.js"></script>
+<script>
+(async function loadSessionCount() {
+    try {
+        const response = await fetch('/api/v1/sessions/list');
+        if (!response.ok) throw new Error('加载会话失败');
+        const data = await response.json();
+        const count = (data.sessions || []).length;
+        const countElement = document.getElementById('session-count');
+        if (countElement) {
+            countElement.textContent = count > 0 ? `📊 ${count} 个历史会话` : '🆕 暂无历史会话';
         }
+    } catch (error) {
+        console.error('加载会话统计失败:', error);
+        const countElement = document.getElementById('session-count');
+        if (countElement) countElement.textContent = '⚠️ 加载失败';
+    }
+})();
+
+(function setupSessionsModal() {
+    const overlay = document.getElementById('sessions-modal-overlay');
+    const openBtn = document.getElementById('history-sessions-card');
+    const closeBtn = document.getElementById('sessions-modal-close');
+
+    function openModal() {
+        overlay.classList.add('open');
+        // 弹窗打开时才真正拉取会话列表/统计（sessionsOnly 模式下
+        // DataManager 不会在页面加载时自动请求）。loadSessionStats()
+        // 内部已经会调用 renderSessionStats()，不需要再手动调一次。
+        dataManager.loadSessionStats();
+        dataManager.loadSessions();
     }
 
-    setupEventListeners() {
-        // 历史对话卡片点击
-        const historyCard = document.getElementById('history-sessions-card');
-        if (historyCard) {
-            historyCard.addEventListener('click', () => this.showSessionsModal());
-        }
-
-        // 监听hash变化
-        window.addEventListener('hashchange', () => {
-            if (window.location.hash === '#sessions') {
-                this.showSessionsModal();
-            }
-        });
+    function closeModal() {
+        overlay.classList.remove('open');
     }
 
-    async loadSessionStats() {
-        try {
-            const response = await fetch('/api/v1/sessions/list');
-            if (!response.ok) throw new Error('加载会话失败');
-
-            const data = await response.json();
-            this.sessions = data.sessions || [];
-
-            // 更新会话数量显示
-            const countElement = document.getElementById('session-count');
-            if (countElement) {
-                const count = this.sessions.length;
-                countElement.textContent = count > 0
-                    ? `📊 ${count} 个历史会话`
-                    : '🆕 暂无历史会话';
-            }
-        } catch (error) {
-            console.error('加载会话统计失败:', error);
-            const countElement = document.getElementById('session-count');
-            if (countElement) {
-                countElement.textContent = '⚠️ 加载失败';
-            }
-        }
-    }
-
-    // ==================== 会话管理弹窗 ====================
-
-    async showSessionsModal() {
-        // 重新加载最新数据
-        await this.loadSessions();
-
-        // 创建弹窗
-        const modal = document.createElement('div');
-        modal.className = 'sessions-modal';
-        modal.innerHTML = `
-            <div class="sessions-modal-content">
-                <!-- 头部 -->
-                <div class="sessions-modal-header">
-                    <h2>📜 会话管理</h2>
-                    <button class="close-modal-btn" onclick="dashboard.closeModal()">&times;</button>
-                </div>
-
-                <!-- 统计信息 -->
-                <div class="sessions-stats" id="sessions-stats">
-                    ${this.renderStats()}
-                </div>
-
-                <!-- 控制栏 -->
-                <div class="sessions-controls">
-                    <input type="text"
-                           class="search-input"
-                           id="session-search"
-                           placeholder="🔍 搜索会话标题..."
-                           oninput="dashboard.filterSessions(this.value)">
-                    <button class="control-btn" onclick="dashboard.toggleSelectAll()">
-                        <span id="select-all-text">☑️ 全选</span>
-                    </button>
-                    <button class="control-btn danger"
-                            id="batch-delete-btn"
-                            style="display: none;"
-                            onclick="dashboard.batchDeleteSessions()">
-                        🗑️ 删除选中 (<span id="selected-count">0</span>)
-                    </button>
-                    <button class="control-btn" onclick="dashboard.refreshSessions()">
-                        🔄 刷新
-                    </button>
-                </div>
-
-                <!-- 会话列表 -->
-                <div class="sessions-list-container" id="sessions-list-container">
-                    ${this.renderSessionsList()}
-                </div>
-            </div>
-        `;
-
-        document.body.appendChild(modal);
-
-        // 点击背景关闭
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) this.closeModal();
-        });
-
-        // ESC键关闭
-        const escHandler = (e) => {
-            if (e.key === 'Escape') {
-                this.closeModal();
-                document.removeEventListener('keydown', escHandler);
-            }
-        };
-        document.addEventListener('keydown', escHandler);
-    }
-
-    async loadSessions() {
-        try {
-            const response = await fetch('/api/v1/sessions/list');
-            if (!response.ok) throw new Error('加载会话失败');
-
-            const data = await response.json();
-            this.sessions = data.sessions || [];
-            this.filteredSessions = [...this.sessions];
-            this.selectedSessions = new Set();
-        } catch (error) {
-            console.error('加载会话失败:', error);
-            this.sessions = [];
-            this.filteredSessions = [];
-        }
-    }
-
-    renderStats() {
-        const total = this.sessions.length;
-        const single = this.sessions.filter(s => s.selected_docs && s.selected_docs.length === 1).length;
-        const multi = this.sessions.filter(s => s.selected_docs && s.selected_docs.length > 1).length;
-        const chat = this.sessions.filter(s => !s.selected_docs || s.selected_docs.length === 0).length;
-
-        return `
-            <div class="stat-card">
-                <div class="stat-value">${total}</div>
-                <div class="stat-label">总会话数</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${single}</div>
-                <div class="stat-label">单文档</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${multi}</div>
-                <div class="stat-label">多文档</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${chat}</div>
-                <div class="stat-label">纯对话</div>
-            </div>
-        `;
-    }
-
-    renderSessionsList() {
-        if (this.filteredSessions.length === 0) {
-            if (this.sessions.length === 0) {
-                return `
-                    <div class="sessions-empty">
-                        <div class="sessions-empty-icon">📭</div>
-                        <h3>暂无历史会话</h3>
-                        <p>开始新对话后会显示在这里</p>
-                    </div>
-                `;
-            } else {
-                return `
-                    <div class="sessions-empty">
-                        <div class="sessions-empty-icon">🔍</div>
-                        <h3>未找到匹配的会话</h3>
-                        <p>尝试使用其他关键词搜索</p>
-                    </div>
-                `;
-            }
-        }
-
-        return this.filteredSessions.map(session => {
-            const isSelected = this.selectedSessions.has(session.session_id);
-            const updatedDate = new Date(session.updated_at);
-            const createdDate = new Date(session.created_at);
-            const updateTimeStr = this.formatTime(updatedDate);
-            const createTimeStr = this.formatTime(createdDate);
-            const messageCount = session.message_count || 0;
-
-            // 会话类型和模式标签
-            let typeBadge = '';
-            let modeBadge = '';
-
-            if (session.selected_docs && session.selected_docs.length === 1) {
-                typeBadge = `<span class="session-type-badge single">📄 单文档</span>`;
-            } else if (session.selected_docs && session.selected_docs.length > 1) {
-                typeBadge = `<span class="session-type-badge multi">📚 多文档 (${session.selected_docs.length})</span>`;
-            } else {
-                typeBadge = `<span class="session-type-badge chat">💬 纯对话</span>`;
-            }
-
-            // 模式标签
-            if (session.mode === 'single') {
-                modeBadge = `<span class="session-mode-badge">🎯 单文档模式</span>`;
-            } else if (session.mode === 'cross') {
-                modeBadge = `<span class="session-mode-badge">🔀 跨文档模式</span>`;
-            } else if (session.mode === 'manual') {
-                modeBadge = `<span class="session-mode-badge">✋ 手动选择</span>`;
-            }
-
-            // 工具标签
-            let toolBadges = '';
-            if (session.enabled_tools && session.enabled_tools.length > 0) {
-                const toolIcons = {
-                    'retrieve_documents': '📚 文档检索',
-                    'search_web': '🌐 网络搜索',
-                    'web_search': '🌐 网络搜索'
-                };
-                toolBadges = session.enabled_tools.map(tool => {
-                    const label = toolIcons[tool] || `🔧 ${tool}`;
-                    return `<span class="session-tool-badge">${label}</span>`;
-                }).join('');
-            }
-
-            // Agent使用标签
-            let agentBadges = '';
-            if (session.agents_used && session.agents_used.length > 0) {
-                const agentIcons = {
-                    'RetrievalAgent': '🔍 检索代理',
-                    'SearchAgent': '🌐 搜索代理'
-                };
-                agentBadges = session.agents_used.map(agent => {
-                    const label = agentIcons[agent] || agent;
-                    return `<span class="session-agent-badge">${label}</span>`;
-                }).join('');
-            }
-
-            return `
-                <div class="session-item ${isSelected ? 'selected' : ''}" data-session-id="${session.session_id}">
-                    <input type="checkbox"
-                           class="session-checkbox"
-                           ${isSelected ? 'checked' : ''}
-                           onchange="dashboard.toggleSessionSelection('${session.session_id}')">
-
-                    <div class="session-header">
-                        <h3 class="session-title">${this.escapeHtml(session.title || '未命名会话')}</h3>
-                        ${typeBadge}
-                    </div>
-
-                    ${modeBadge || toolBadges || agentBadges ? `
-                        <div class="session-badges">
-                            ${modeBadge}
-                            ${toolBadges}
-                            ${agentBadges}
-                        </div>
-                    ` : ''}
-
-                    <div class="session-meta">
-                        <span>💬 ${messageCount} 条消息</span>
-                        <span>🕒 更新: ${updateTimeStr}</span>
-                        <span>📅 创建: ${createTimeStr}</span>
-                    </div>
-
-                    ${session.selected_docs && session.selected_docs.length > 0 ? `
-                        <div class="session-docs">
-                            <span>📎</span>
-                            <span>${session.selected_docs.map(doc => this.escapeHtml(doc)).join(', ')}</span>
-                        </div>
-                    ` : ''}
-
-                    <div class="session-actions">
-                        <button class="session-action-btn secondary" onclick="dashboard.viewSessionDetails('${session.session_id}')">
-                            👁️ 查看详情
-                        </button>
-                        <button class="session-action-btn primary" onclick="dashboard.openSession('${session.session_id}')">
-                            💬 打开会话
-                        </button>
-                        <button class="session-action-btn danger" onclick="dashboard.deleteSession('${session.session_id}')">
-                            🗑️ 删除
-                        </button>
-                    </div>
-                </div>
-            `;
-        }).join('');
-    }
-
-    filterSessions(query) {
-        const searchTerm = query.toLowerCase().trim();
-        if (!searchTerm) {
-            this.filteredSessions = [...this.sessions];
-        } else {
-            this.filteredSessions = this.sessions.filter(session => {
-                const title = (session.title || '').toLowerCase();
-                const docs = (session.selected_docs || []).join(' ').toLowerCase();
-                return title.includes(searchTerm) || docs.includes(searchTerm);
-            });
-        }
-        this.updateSessionsList();
-    }
-
-    toggleSelectAll() {
-        const selectAllText = document.getElementById('select-all-text');
-        if (this.selectedSessions.size === this.filteredSessions.length && this.filteredSessions.length > 0) {
-            // 取消全选
-            this.selectedSessions.clear();
-            selectAllText.textContent = '☑️ 全选';
-        } else {
-            // 全选
-            this.filteredSessions.forEach(s => this.selectedSessions.add(s.session_id));
-            selectAllText.textContent = '☐ 取消全选';
-        }
-        this.updateSessionsList();
-        this.updateBatchDeleteButton();
-    }
-
-    toggleSessionSelection(sessionId) {
-        if (this.selectedSessions.has(sessionId)) {
-            this.selectedSessions.delete(sessionId);
-        } else {
-            this.selectedSessions.add(sessionId);
-        }
-
-        // 更新全选按钮状态
-        const selectAllText = document.getElementById('select-all-text');
-        if (this.selectedSessions.size === this.filteredSessions.length && this.filteredSessions.length > 0) {
-            selectAllText.textContent = '☐ 取消全选';
-        } else {
-            selectAllText.textContent = '☑️ 全选';
-        }
-
-        this.updateBatchDeleteButton();
-    }
-
-    updateBatchDeleteButton() {
-        const batchDeleteBtn = document.getElementById('batch-delete-btn');
-        const selectedCount = document.getElementById('selected-count');
-
-        if (this.selectedSessions.size > 0) {
-            batchDeleteBtn.style.display = 'block';
-            selectedCount.textContent = this.selectedSessions.size;
-        } else {
-            batchDeleteBtn.style.display = 'none';
-        }
-    }
-
-    updateSessionsList() {
-        const container = document.getElementById('sessions-list-container');
-        if (container) {
-            container.innerHTML = this.renderSessionsList();
-        }
-    }
-
-    async refreshSessions() {
-        const container = document.getElementById('sessions-list-container');
-        if (container) {
-            container.innerHTML = '<div class="sessions-loading"><div class="spinner"></div><p>正在刷新...</p></div>';
-        }
-
-        await this.loadSessions();
-
-        const statsContainer = document.getElementById('sessions-stats');
-        if (statsContainer) {
-            statsContainer.innerHTML = this.renderStats();
-        }
-
-        this.updateSessionsList();
-        this.updateBatchDeleteButton();
-    }
-
-    async batchDeleteSessions() {
-        if (this.selectedSessions.size === 0) return;
-
-        const confirmMsg = `确定要删除选中的 ${this.selectedSessions.size} 个会话吗？\n\n删除后无法恢复。`;
-        if (!confirm(confirmMsg)) return;
-
-        const deletePromises = Array.from(this.selectedSessions).map(sessionId =>
-            fetch(`/api/v1/sessions/${sessionId}`, { method: 'DELETE' })
-        );
-
-        try {
-            await Promise.all(deletePromises);
-            alert(`成功删除 ${this.selectedSessions.size} 个会话`);
-            this.selectedSessions.clear();
-            await this.refreshSessions();
-        } catch (error) {
-            console.error('批量删除失败:', error);
-            alert('部分会话删除失败，请刷新后重试');
-        }
-    }
-
-    async deleteSession(sessionId) {
-        if (!confirm('确定要删除这个会话吗？\n\n删除后无法恢复。')) return;
-
-        try {
-            const response = await fetch(`/api/v1/sessions/${sessionId}`, {
-                method: 'DELETE'
-            });
-
-            if (!response.ok) throw new Error('删除失败');
-
-            alert('会话已删除');
-            this.selectedSessions.delete(sessionId);
-            await this.refreshSessions();
-        } catch (error) {
-            console.error('删除会话失败:', error);
-            alert('删除失败: ' + error.message);
-        }
-    }
-
-    openSession(sessionId) {
-        window.location.href = `/chat?session_id=${encodeURIComponent(sessionId)}`;
-    }
-
-    closeModal() {
-        const modal = document.querySelector('.sessions-modal');
-        if (modal) {
-            modal.remove();
-        }
-        this.selectedSessions = new Set();
-
-        // 清除URL hash
-        if (window.location.hash === '#sessions') {
-            history.pushState("", document.title, window.location.pathname + window.location.search);
-        }
-
-        // 刷新主页的会话统计
-        this.loadSessionStats();
-    }
-
-    formatTime(date) {
-        const now = new Date();
-        const diffMs = now - date;
-        const diffMins = Math.floor(diffMs / 60000);
-        const diffHours = Math.floor(diffMs / 3600000);
-        const diffDays = Math.floor(diffMs / 86400000);
-
-        if (diffMins < 1) return '刚刚';
-        if (diffMins < 60) return `${diffMins}分钟前`;
-        if (diffHours < 24) return `${diffHours}小时前`;
-        if (diffDays < 7) return `${diffDays}天前`;
-
-        return date.toLocaleDateString('zh-CN', {
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit'
-        });
-    }
-
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    // ==================== 会话详情查看 ====================
-
-    async viewSessionDetails(sessionId) {
-        try {
-            // 获取完整会话数据
-            const response = await fetch(`/api/v1/sessions/${sessionId}`);
-            if (!response.ok) throw new Error('获取会话详情失败');
-
-            const session = await response.json();
-
-            // 构建工具和模式信息
-            let modeInfo = '';
-            if (session.mode === 'single') {
-                modeInfo = '🎯 单文档模式';
-            } else if (session.mode === 'cross') {
-                modeInfo = '🔀 跨文档模式';
-            } else if (session.mode === 'manual') {
-                modeInfo = '✋ 手动选择';
-            }
-
-            let toolsInfo = '';
-            if (session.enabled_tools && session.enabled_tools.length > 0) {
-                const toolIcons = {
-                    'retrieve_documents': '📚 文档检索',
-                    'search_web': '🌐 网络搜索',
-                    'web_search': '🌐 网络搜索'
-                };
-                toolsInfo = session.enabled_tools.map(tool => toolIcons[tool] || tool).join(', ');
-            }
-
-            let agentsInfo = '';
-            if (session.agents_used && session.agents_used.length > 0) {
-                const agentIcons = {
-                    'RetrievalAgent': '🔍 检索代理',
-                    'SearchAgent': '🌐 搜索代理'
-                };
-                agentsInfo = session.agents_used.map(agent => agentIcons[agent] || agent).join(', ');
-            }
-
-            let docsInfo = '';
-            if (session.selected_docs && session.selected_docs.length > 0) {
-                docsInfo = session.selected_docs.join(', ');
-            }
-
-            // 创建遮罩层
-            const overlay = document.createElement('div');
-            overlay.className = 'detail-panel-overlay';
-            overlay.onclick = () => this.closeDetailPanel();
-
-            // 创建详情面板
-            const panel = document.createElement('div');
-            panel.className = 'session-detail-panel';
-            panel.innerHTML = `
-                <div class="detail-panel-header">
-                    <button class="close-detail-btn" onclick="dashboard.closeDetailPanel()">&times;</button>
-                    <h3>${this.escapeHtml(session.title || '未命名会话')}</h3>
-                    <div class="detail-panel-meta">
-                        <span>💬 ${session.messages ? session.messages.length : 0} 条消息</span>
-                        <span>🕒 ${this.formatTime(new Date(session.updated_at))}</span>
-                    </div>
-                    ${modeInfo ? `<div class="detail-panel-meta"><span>${modeInfo}</span></div>` : ''}
-                    ${toolsInfo ? `<div class="detail-panel-meta"><span>🔧 启用工具: ${toolsInfo}</span></div>` : ''}
-                    ${agentsInfo ? `<div class="detail-panel-meta"><span>🤖 调用代理: ${agentsInfo}</span></div>` : ''}
-                    ${docsInfo ? `<div class="detail-panel-meta"><span>📎 文档: ${this.escapeHtml(docsInfo)}</span></div>` : ''}
-                </div>
-                <div class="detail-panel-content" id="detail-messages-container">
-                    ${this.renderDetailMessages(session.messages || [])}
-                </div>
-            `;
-
-            document.body.appendChild(overlay);
-            document.body.appendChild(panel);
-
-            // ESC键关闭
-            const escHandler = (e) => {
-                if (e.key === 'Escape') {
-                    this.closeDetailPanel();
-                    document.removeEventListener('keydown', escHandler);
-                }
-            };
-            document.addEventListener('keydown', escHandler);
-
-            // 滚动到底部
-            setTimeout(() => {
-                const container = document.getElementById('detail-messages-container');
-                if (container) {
-                    container.scrollTop = container.scrollHeight;
-                }
-            }, 100);
-
-        } catch (error) {
-            console.error('查看会话详情失败:', error);
-            alert('查看会话详情失败: ' + error.message);
-        }
-    }
-
-    renderDetailMessages(messages) {
-        if (!messages || messages.length === 0) {
-            return `
-                <div class="sessions-empty">
-                    <div class="sessions-empty-icon">📭</div>
-                    <h3>暂无消息</h3>
-                    <p>这个会话还没有任何对话内容</p>
-                </div>
-            `;
-        }
-
-        return messages.map(msg => {
-            const isUser = msg.role === 'user';
-            const messageClass = isUser ? 'detail-message-user' : 'detail-message-assistant';
-            const timestamp = msg.timestamp ? this.formatTime(new Date(msg.timestamp)) : '';
-
-            // 处理消息内容（支持Markdown渲染）
-            let content = this.escapeHtml(msg.content);
-
-            // 简单的Markdown支持：代码块
-            content = content.replace(/```(\w+)?\n([\s\S]*?)```/g, (match, lang, code) => {
-                return `<pre><code class="language-${lang || 'text'}">${code}</code></pre>`;
-            });
-
-            // 内联代码
-            content = content.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-            // 粗体
-            content = content.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-
-            // 换行
-            content = content.replace(/\n/g, '<br>');
-
-            return `
-                <div class="detail-message ${messageClass}">
-                    <div class="detail-bubble">${content}</div>
-                    ${timestamp ? `<div class="detail-timestamp">${timestamp}</div>` : ''}
-                </div>
-            `;
-        }).join('');
-    }
-
-    closeDetailPanel() {
-        const panel = document.querySelector('.session-detail-panel');
-        const overlay = document.querySelector('.detail-panel-overlay');
-
-        if (panel) panel.remove();
-        if (overlay) overlay.remove();
-    }
+    openBtn.addEventListener('click', openModal);
+    closeBtn.addEventListener('click', closeModal);
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) closeModal();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && overlay.classList.contains('open')) closeModal();
+    });
+})();
+
+function escapeHtmlDashboard(str) {
+    const div = document.createElement('div');
+    div.textContent = str == null ? '' : String(str);
+    return div.innerHTML;
 }
 
-// 初始化Dashboard
-const dashboard = new DashboardApp();
+// 今日简报预览——首页的视觉主体：显示最新一天的简报里有多少条、还有
+// 多少没处理、以及几条标题预览，点了直接跳 /briefs 处理，不需要先猜
+// "今天有没有新东西"。
+(async function loadBriefsPreview() {
+    const headingEl = document.getElementById('briefs-preview-heading');
+    const summaryEl = document.getElementById('briefs-preview-summary');
+    const listEl = document.getElementById('briefs-preview-list');
+    const cardEl = document.getElementById('briefs-preview-card');
+
+    cardEl.addEventListener('click', () => { window.location.href = '/briefs'; });
+
+    try {
+        const datesRes = await fetch('/api/v1/briefs/dates');
+        if (!datesRes.ok) throw new Error('加载简报日期失败');
+        const { dates } = await datesRes.json();
+
+        if (!dates || !dates.length) {
+            summaryEl.textContent = '暂无简报数据';
+            listEl.innerHTML = '';
+            return;
+        }
+
+        const latestDate = dates[0];
+        headingEl.textContent = `📰 今日简报（${latestDate}）`;
+
+        const cardsRes = await fetch(`/api/v1/briefs/cards?coverage_date=${encodeURIComponent(latestDate)}`);
+        if (!cardsRes.ok) throw new Error('加载简报内容失败');
+        const data = await cardsRes.json();
+
+        const notLoaded = (data.counts && data.counts.not_loaded) || 0;
+        summaryEl.textContent = `${data.pdf.length} 篇论文 · ${data.web.length} 篇文章` +
+            (notLoaded ? ` · ${notLoaded} 条未处理` : ' · 全部已处理');
+
+        const preview = [...data.pdf, ...data.web].slice(0, 4);
+        listEl.innerHTML = preview.length
+            ? preview.map((c) => `<li>${escapeHtmlDashboard(c.title || c.url || c.item_id)}</li>`).join('')
+            : '<li class="briefs-preview-empty" style="border-top:none;">暂无条目</li>';
+    } catch (error) {
+        console.error('加载简报预览失败:', error);
+        summaryEl.textContent = '加载失败';
+    }
+})();
+
+// 后台任务小面板——首页只做"看一眼有没有在跑"，点开展开一个轻量列表；
+// 真正的管理（重试等）留在 /briefs 页面自己的任务表格里，不重复造轮子。
+(function setupJobsSummary() {
+    const card = document.getElementById('jobs-summary-card');
+    const countEl = document.getElementById('jobs-summary-count');
+    const listEl = document.getElementById('jobs-panel-list');
+    let jobs = [];
+    let expanded = false;
+
+    function renderList() {
+        if (!jobs.length) {
+            listEl.innerHTML = '<div class="job-row"><span class="job-name">暂无进行中的任务</span></div>';
+            return;
+        }
+        listEl.innerHTML = jobs.slice(0, 8).map((j) => `
+            <div class="job-row">
+                <span class="job-name">${escapeHtmlDashboard(j.title || j.target)}</span>
+                <span>${escapeHtmlDashboard(j.status)}</span>
+            </div>`).join('');
+    }
+
+    async function loadJobsSummary() {
+        try {
+            const res = await fetch('/api/v1/jobs');
+            if (!res.ok) throw new Error('加载任务失败');
+            const data = await res.json();
+            jobs = (data.jobs || []).filter((j) => j.status === 'queued' || j.status === 'running');
+            countEl.textContent = jobs.length ? `⏳ ${jobs.length} 个进行中` : '✅ 空闲';
+            if (expanded) renderList();
+        } catch (error) {
+            console.error('加载后台任务失败:', error);
+            countEl.textContent = '⚠️ 加载失败';
+        }
+    }
+
+    card.addEventListener('click', () => {
+        expanded = !expanded;
+        listEl.style.display = expanded ? 'block' : 'none';
+        if (expanded) renderList();
+    });
+
+    loadJobsSummary();
+    setInterval(loadJobsSummary, 15000);
+})();
 </script>
 {% endblock %}

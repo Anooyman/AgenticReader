@@ -3,22 +3,30 @@
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from src.agents.answer import AnswerAgent
+from src.agents.orchestrator import ask as orchestrator_ask
 from .session_manager import SessionManager
 from ..api.v1.config import load_config
+
+# Orchestrator 的 sub-agent name -> 展示用 agent 标签，用于写入 session 的
+# agents_used（沿用旧 UI 里 RetrievalAgent/SearchAgent 这类标签习惯）。
+_SOURCE_TO_AGENT_LABEL = {
+    "search_memory": "MemorySearch",
+    "deep_dive_document": "DeepDive",
+}
 
 
 class ChatService:
     """聊天服务单例"""
 
     def __init__(self):
-        self.answer_agent: Optional[AnswerAgent] = None
         self.enabled_tools: List[str] = []
         self.selected_docs: Optional[list] = None
         self.session_manager = SessionManager()
         self.current_session: Optional[Dict] = None
         self.progress_callback = None
 
-        # Agent缓存池：避免重复创建Agent实例
+        # 仅用于校验手动选择的文档是否存在（AnswerAgent 实例缓存池，避免
+        # 重复创建）；真正的问答走 Orchestrator，见 chat()。
         self._agent_cache: Dict[str, AnswerAgent] = {}  # {provider: AnswerAgent}
         self._current_provider: Optional[str] = None
 
@@ -89,36 +97,23 @@ class ChatService:
                 self.current_session["selected_docs"] = self.selected_docs
                 print(f"✅ 创建/加载会话: {self.current_session['session_id']}")
 
-            # 创建或复用 AnswerAgent（缓存优化）
+            # AnswerAgent 现在只用于校验用户手动选择的文档是否存在
+            # （真正的问答走 Orchestrator，deep_dive_document 子 agent 内部
+            # 会自己按需实例化 AnswerAgent，这里不再需要长期持有一个带
+            # 历史状态的实例）。
             config = load_config()
             provider = config.get("provider", "openai")
             print(f"📌 使用 LLM Provider: {provider}")
 
-            # 检查是否可以复用现有Agent
-            if provider in self._agent_cache and self._current_provider == provider:
-                print(f"♻️  复用已缓存的 AnswerAgent (provider={provider})")
-                self.answer_agent = self._agent_cache[provider]
-                # 更新回调函数
-                self.answer_agent.progress_callback = self.progress_callback
-                # 更新当前文档上下文（修复文档切换时的上下文混乱问题）
-                doc_name = self.selected_docs[0] if self.selected_docs and len(self.selected_docs) == 1 else None
-                self.answer_agent.current_doc = doc_name
-                print(f"📌 更新文档上下文: current_doc={doc_name}")
-            else:
-                print(f"🆕 创建新的 AnswerAgent (provider={provider})")
-                doc_name = self.selected_docs[0] if self.selected_docs and len(self.selected_docs) == 1 else None
-                self.answer_agent = AnswerAgent(
-                    doc_name=doc_name,
-                    provider=provider,
-                    progress_callback=self.progress_callback
-                )
-                # 缓存Agent实例
-                self._agent_cache[provider] = self.answer_agent
-                self._current_provider = provider
-
-            # 验证选择的文档
             if self.selected_docs and "retrieve_documents" in self.enabled_tools:
-                valid_docs, invalid_docs = self.answer_agent.validate_manual_selected_docs(self.selected_docs)
+                if provider in self._agent_cache and self._current_provider == provider:
+                    validator_agent = self._agent_cache[provider]
+                else:
+                    validator_agent = AnswerAgent(provider=provider)
+                    self._agent_cache[provider] = validator_agent
+                    self._current_provider = provider
+
+                valid_docs, invalid_docs = validator_agent.validate_manual_selected_docs(self.selected_docs)
                 if invalid_docs:
                     print(f"⚠️  以下文档未找到: {invalid_docs}")
                 if valid_docs:
@@ -126,13 +121,6 @@ class ChatService:
                 else:
                     self.selected_docs = None
                     print("⚠️  所有文档无效，将使用自动文档选择")
-
-            # 加载历史消息
-            if self.current_session and self.current_session.get("message_count", 0) > 0:
-                llm_history = self.session_manager.get_session_history_for_llm(self.current_session)
-                if hasattr(self.answer_agent, 'load_history'):
-                    self.answer_agent.load_history(llm_history, selected_docs=self.selected_docs)
-                print(f"✅ 加载历史消息: {len(llm_history)} 条")
 
             print(f"✅ 聊天服务初始化成功")
 
@@ -166,18 +154,14 @@ class ChatService:
         enabled_tools: Optional[List[str]] = None,
         selected_docs: Optional[list] = None
     ) -> Dict[str, Any]:
-        """处理聊天消息"""
+        """处理聊天消息——统一走 Orchestrator（是否检索 memory/深挖原文由
+        LLM 自行判断，见 src/agents/orchestrator）。"""
         try:
-            if not self.answer_agent:
-                return {"answer": "聊天服务未初始化，请先初始化。", "references": []}
-
             if not self.current_session:
                 return {"answer": "会话未初始化，请先初始化。", "references": []}
 
-            # 更新进度回调
             if progress_callback:
                 self.progress_callback = progress_callback
-                self.answer_agent.progress_callback = progress_callback
 
             # 使用本次消息的工具/文档设置（如果提供），否则用初始化时的
             current_tools = enabled_tools if enabled_tools is not None else self.enabled_tools
@@ -188,9 +172,9 @@ class ChatService:
             if selected_docs is not None:
                 self.selected_docs = selected_docs
 
-            # 更新当前文档上下文（修复每次对话时的文档上下文）
+            # 单文档模式下把 doc_name 告知 Orchestrator，让它可以调用
+            # deep_dive_document；跨文档/纯对话模式下留空，只能靠 search_memory。
             doc_name = current_docs[0] if current_docs and len(current_docs) == 1 else None
-            self.answer_agent.current_doc = doc_name
 
             session_id = self.current_session["session_id"]
 
@@ -201,56 +185,38 @@ class ChatService:
                 content=user_query
             )
 
-            # 构建完整状态并调用 AnswerAgent
-            state = {
-                "user_query": user_query,
-                "enabled_tools": current_tools,
-                "selected_docs": current_docs,
-                # 初始化 ReAct 循环字段
-                "thoughts": [],
-                "tool_calls": [],
-                "tool_results": [],
-                "current_iteration": 0,
-                "max_iterations": 3,
-                # 初始化输出字段
-                "is_complete": False,
-                "error": None
-            }
+            # Orchestrator 自己管理对话历史，这里从 session 文件里取（不含
+            # 刚保存的这条用户消息，避免在 messages 里重复出现）。
+            history = self.session_manager.get_session_history_for_llm(self.current_session)
 
-            result = await self.answer_agent.graph.ainvoke(state)
+            async def on_progress(stage: str, detail: str):
+                if not self.progress_callback:
+                    return
+                data = {"agent": "orchestrator", "stage": stage, "message": detail}
+                cb_result = self.progress_callback(data)
+                if cb_result is not None:
+                    await cb_result
 
-            final_answer = result.get("final_answer", "")
-            tool_results = result.get("tool_results", [])
+            result = await orchestrator_ask(
+                user_query,
+                doc_name=doc_name,
+                history=history,
+                on_progress=on_progress,
+            )
 
-            # 从工具结果中提取引用文档信息和使用的agent
-            references = []
-            agents_used = []  # 记录本次调用的agent
+            final_answer = result.get("answer", "")
+            sources_used = result.get("sources_used", [])
 
-            for tr in tool_results:
-                if not tr.get("success", False):
-                    continue
+            # agents_used：把 Orchestrator 的子 agent name 映射成展示标签
+            agents_used = []
+            for name in sources_used:
+                label = _SOURCE_TO_AGENT_LABEL.get(name, name)
+                if label not in agents_used:
+                    agents_used.append(label)
 
-                # 记录使用的工具/agent
-                tool_name = tr.get("tool")
-                if tool_name:
-                    agent_label = None
-                    if tool_name == "retrieve_documents":
-                        agent_label = "RetrievalAgent"
-                    elif tool_name in ["search_web", "web_search"]:
-                        agent_label = "SearchAgent"
-
-                    if agent_label and agent_label not in agents_used:
-                        agents_used.append(agent_label)
-
-                # 提取引用文档
-                tr_result = tr.get("result", {})
-                if isinstance(tr_result, dict) and tr_result.get("doc_names"):
-                    for doc_name in tr_result["doc_names"]:
-                        if not any(r["doc_name"] == doc_name for r in references):
-                            references.append({
-                                "doc_name": doc_name,
-                                "similarity_score": None
-                            })
+            references: List[Dict[str, Any]] = []
+            if doc_name:
+                references.append({"doc_name": doc_name, "similarity_score": None})
 
             # 保存助手回复（包含agents_used）
             self.session_manager.save_message(
@@ -288,11 +254,7 @@ class ChatService:
 
         session_id = self.current_session.get("session_id")
 
-        # 1. 清空 LLM 历史
-        if self.answer_agent and hasattr(self.answer_agent, 'reset_history'):
-            self.answer_agent.reset_history()
-
-        # 2. 清空 session 文件中的消息
+        # 清空 session 文件中的消息
         session = self.session_manager.load_session(session_id)
         if session:
             session["messages"] = []
@@ -309,17 +271,6 @@ class ChatService:
                 self.current_session["message_count"] = 0
                 self.current_session["updated_at"] = datetime.now().isoformat()
 
-        # 3. 重新实例化 AnswerAgent
-        from src.agents.answer import AnswerAgent
-        config = load_config()
-        provider = config.get("provider", "openai")
-
-        doc_name = self.selected_docs[0] if self.selected_docs and len(self.selected_docs) == 1 else None
-        self.answer_agent = AnswerAgent(
-            doc_name=doc_name,
-            provider=provider,
-            progress_callback=self.progress_callback
-        )
         print("✅ 聊天服务已重置")
 
     def get_current_session(self) -> Optional[Dict]:
@@ -335,7 +286,6 @@ class ChatService:
         self.session_manager.delete_session(session_id)
         if self.current_session and self.current_session["session_id"] == session_id:
             self.current_session = None
-            self.answer_agent = None
             self.enabled_tools = []
             self.selected_docs = None
 

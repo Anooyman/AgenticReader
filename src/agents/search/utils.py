@@ -10,6 +10,7 @@ SearchAgent 辅助工具函数
 
 from __future__ import annotations
 from typing import TYPE_CHECKING, Dict, List, Optional
+import asyncio
 import logging
 import re
 import json
@@ -72,6 +73,17 @@ class SimpleMCPClient:
     不依赖 LLMBase，只负责工具调用
     """
 
+    # MCP RPC 往返（session.initialize() / session.call_tool()）没有自带
+    # 超时——工具参数里的 timeout（如 scrape_url 的 30000ms）只约束 Playwright
+    # 内部的 page.goto 等待，管不到 MCP 子进程本身卡死/无响应的情况（比如
+    # 子进程崩溃后 stdio 管道悬空、Playwright 浏览器进程僵死）。这里的
+    # 硬上限就是补这道口子：真实场景下 job_runner 依赖 subprocess 被 kill
+    # 兜底超时，一旦改成同进程直接调用（ai-research-pipeline 合并计划），
+    # 这层 subprocess 保险会消失，必须在这里显式补上，否则一次卡死会拖垂
+    # 整条任务车道。
+    INITIALIZE_TIMEOUT = 30
+    CALL_TOOL_TIMEOUT = 90
+
     def __init__(self, service_name: str, config: Dict):
         """
         初始化简化的 MCP Client
@@ -109,13 +121,21 @@ class SimpleMCPClient:
                     ClientSession(read_stream, write_stream)
                 )
 
-                await self.session.initialize()
+                await asyncio.wait_for(
+                    self.session.initialize(), timeout=self.INITIALIZE_TIMEOUT
+                )
                 logger.info(f"✅ [SimpleMCP] {self.service_name} session 初始化成功")
 
             else:
                 logger.error(f"❌ [SimpleMCP] 不支持的连接类型: {connection_type}")
                 raise ValueError(f"不支持的连接类型: {connection_type}")
 
+        except asyncio.TimeoutError:
+            logger.error(
+                f"❌ [SimpleMCP] {self.service_name} 初始化超时"
+                f"（>{self.INITIALIZE_TIMEOUT}s，MCP 子进程可能未正常响应）"
+            )
+            raise
         except Exception as e:
             logger.error(f"❌ [SimpleMCP] 初始化失败: {e}", exc_info=True)
             raise
@@ -135,7 +155,10 @@ class SimpleMCPClient:
             raise RuntimeError("MCP session 未初始化")
 
         try:
-            result = await self.session.call_tool(tool_name, arguments)
+            result = await asyncio.wait_for(
+                self.session.call_tool(tool_name, arguments),
+                timeout=self.CALL_TOOL_TIMEOUT,
+            )
 
             # 提取内容
             if hasattr(result, 'content') and result.content:
@@ -143,6 +166,12 @@ class SimpleMCPClient:
 
             return []
 
+        except asyncio.TimeoutError:
+            logger.error(
+                f"❌ [SimpleMCP] 调用工具 {tool_name} 超时"
+                f"（>{self.CALL_TOOL_TIMEOUT}s，MCP 子进程可能卡死）"
+            )
+            raise
         except Exception as e:
             logger.error(f"❌ [SimpleMCP] 调用工具 {tool_name} 失败: {e}", exc_info=True)
             raise

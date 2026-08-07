@@ -5,10 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}AgenticReader{% endblock %}</title>
 
+    <!-- 在任何 CSS 生效之前先把已保存的主题应用到 <html>，避免深色模式下
+         刷新页面时先闪一下白色背景再变黑（FOUC）。 -->
+    <script>
+        (function () {
+            const saved = localStorage.getItem('AgenticReader_theme');
+            if (saved === 'dark') {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
+
     <!-- CSS -->
-    <link rel="stylesheet" href="/static/css/variables.css">
-    <link rel="stylesheet" href="/static/css/base.css">
-    <link rel="stylesheet" href="/static/css/components.css">
+    <link rel="stylesheet" href="/static/css/variables.css?v=12">
+    <link rel="stylesheet" href="/static/css/base.css?v=12">
+    <link rel="stylesheet" href="/static/css/components.css?v=12">
     <style>
         /* Badge for pending notifications */
         .badge {
@@ -44,12 +55,15 @@
         <header class="header">
             <div class="header-title">📚 AgenticReader</div>
             <nav class="header-nav">
-                <a href="/" class="nav-link">🏠 主页</a>
+                <a href="/" class="nav-link">🏠 首页</a>
+                <a href="/report" class="nav-link">📄 Report</a>
+                <a href="/briefs" class="nav-link">📰 简报</a>
                 <a href="/data" class="nav-link" style="position: relative;">
-                    🗂️ 数据管理
+                    🗂️ 管理中心
                     <span id="pending-badge" class="badge" style="display: none;"></span>
                 </a>
-                <a href="/config" class="nav-link">⚙️ 配置</a>
+                <a href="/config" class="nav-link" title="配置">⚙️</a>
+                <button id="theme-toggle-btn" class="nav-link" type="button" title="切换深色/浅色模式" style="border: none; background: none; cursor: pointer; font: inherit;">🌙</button>
             </nav>
         </header>
 
@@ -94,6 +108,37 @@
         } else {
             updatePendingBadge();
         }
+    </script>
+
+    <!-- 深色/浅色模式切换：状态存在 localStorage，跨页面/刷新保持；
+         <head> 里的内联脚本已经在首次渲染前应用过一次，这里只负责
+         按钮图标同步和点击切换。 -->
+    <script>
+        (function () {
+            const THEME_KEY = 'AgenticReader_theme';
+            const btn = document.getElementById('theme-toggle-btn');
+
+            function currentTheme() {
+                return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+            }
+
+            function syncButtonIcon() {
+                btn.textContent = currentTheme() === 'dark' ? '☀️' : '🌙';
+            }
+
+            btn.addEventListener('click', () => {
+                const next = currentTheme() === 'dark' ? 'light' : 'dark';
+                if (next === 'dark') {
+                    document.documentElement.setAttribute('data-theme', 'dark');
+                } else {
+                    document.documentElement.removeAttribute('data-theme');
+                }
+                localStorage.setItem(THEME_KEY, next);
+                syncButtonIcon();
+            });
+
+            syncButtonIcon();
+        })();
     </script>
 </body>
 </html>

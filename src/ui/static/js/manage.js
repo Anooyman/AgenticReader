@@ -5,7 +5,15 @@
  */
 
 class DataManager {
-    constructor() {
+    /**
+     * @param {Object} options
+     * @param {boolean} options.sessionsOnly - 仅用于会话浏览的场景（例如
+     *   dashboard 首页的历史对话弹窗）：跳过文档/概览/待索引PDF的初始加载
+     *   和相关 DOM 绑定（那些元素在弹窗里根本不存在），只在需要时才
+     *   loadSessions()。数据管理页（/data）不传这个参数，行为完全不变。
+     */
+    constructor(options = {}) {
+        this.sessionsOnly = !!options.sessionsOnly;
         this.documents = [];
         this.sessions = [];
         this.overview = null;
@@ -99,6 +107,15 @@ class DataManager {
     // ==================== Initialization ====================
 
     async init() {
+        if (this.sessionsOnly) {
+            // dashboard 弹窗场景：只接会话搜索框，不做 tab 切换/文档加载
+            // 那一整套（弹窗里没有那些 DOM 元素）。
+            document.getElementById('session-search')?.addEventListener('input', (e) => {
+                this.filterSessions(e.target.value);
+            });
+            return;
+        }
+
         // Tab switching
         document.querySelectorAll('.tab-button').forEach(btn => {
             btn.addEventListener('click', () => this.switchTab(btn.dataset.tab));
@@ -113,8 +130,19 @@ class DataManager {
             this.filterSessions(e.target.value);
         });
 
+        document.getElementById('memory-search-btn')?.addEventListener('click', () => {
+            this.searchMemory();
+        });
+
         // Load initial data
         await this.loadAllData();
+
+        // 支持 /data#sessions、/data#memory 等直达链接（dashboard 的入口
+        // 卡片跳转过来时默认打开对应 tab，而不是总落在"文档与存储"）
+        const initialTab = (window.location.hash || '').replace('#', '');
+        if (initialTab && document.getElementById(`${initialTab}-tab`)) {
+            this.switchTab(initialTab);
+        }
     }
 
     switchTab(tabName) {
@@ -135,7 +163,110 @@ class DataManager {
             this.loadDocuments();
         } else if (tabName === 'sessions' && !this.sessions.length) {
             this.loadSessions();
+        } else if (tabName === 'memory' && !this.memoryOverview) {
+            this.loadMemoryOverview();
         }
+    }
+
+    // ==================== Memory Tab ====================
+    // 原 memory.html/memory.js 内容迁移到这里，作为数据管理页的第三个 tab
+    // （不再是独立页面），沿用 dataManager 的 escapeHtml 等既有方法。
+
+    async loadMemoryOverview() {
+        try {
+            const res = await fetch('/api/v1/memory/overview');
+            if (!res.ok) throw new Error('Failed to fetch memory overview');
+            this.memoryOverview = await res.json();
+            this.renderMemoryOverview();
+        } catch (error) {
+            console.error('Error loading memory overview:', error);
+        }
+    }
+
+    renderMemoryOverview() {
+        const overview = this.memoryOverview;
+        if (!overview) return;
+
+        const statsEl = document.getElementById('memory-overview-stats');
+        statsEl.innerHTML = `
+            <div class="overview-card"><h3>总记忆条数</h3><div class="value">${overview.total}</div></div>
+            <div class="overview-card"><h3>Namespace 数</h3><div class="value">${overview.total_namespaces}</div></div>
+        `;
+
+        const namespaceTabs = document.getElementById('memory-namespace-tabs');
+        namespaceTabs.innerHTML = overview.namespaces.map((ns) =>
+            `<button data-ns="${this.escapeHtml(ns.namespace)}">${this.escapeHtml(ns.namespace)} (${ns.total})</button>`
+        ).join('');
+        namespaceTabs.querySelectorAll('button').forEach((btn) => {
+            btn.addEventListener('click', () => this.selectMemoryNamespace(btn.dataset.ns));
+        });
+
+        const searchNamespace = document.getElementById('memory-search-namespace');
+        searchNamespace.innerHTML = '<option value="">全部 namespace</option>' +
+            overview.namespaces.map((ns) => `<option value="${this.escapeHtml(ns.namespace)}">${this.escapeHtml(ns.namespace)}</option>`).join('');
+
+        if (overview.namespaces.length && !this.currentMemoryNamespace) {
+            this.selectMemoryNamespace(overview.namespaces[0].namespace);
+        }
+    }
+
+    async selectMemoryNamespace(ns) {
+        this.currentMemoryNamespace = ns;
+        document.querySelectorAll('#memory-namespace-tabs button').forEach((btn) => {
+            btn.classList.toggle('active', btn.dataset.ns === ns);
+        });
+        const res = await fetch(`/api/v1/memory/namespace/${encodeURIComponent(ns)}`);
+        const data = await res.json();
+        const groupsEl = document.getElementById('memory-groups');
+        groupsEl.innerHTML = data.groups.length
+            ? data.groups.map((g) => this.renderMemoryGroup(g)).join('')
+            : '<p class="empty-hint" style="color: var(--text-muted); padding: 1rem;">此 namespace 暂无记忆</p>';
+    }
+
+    renderMemoryGroup(group) {
+        const items = group.items.map((item) => `
+            <div class="memory-item" data-id="${this.escapeHtml(item.id)}">
+                <div>${item.is_summary ? '<b>[整篇摘要]</b> ' : ''}${this.escapeHtml(item.abstract)}</div>
+                <div class="keywords">${(item.keywords || []).map((k) => `<span>${this.escapeHtml(k)}</span>`).join('')}</div>
+                <button class="danger" onclick="dataManager.deleteMemoryItem('${this.escapeHtml(item.id)}')">删除这条</button>
+            </div>
+        `).join('');
+
+        return `
+            <div class="memory-group">
+                <div class="group-header">
+                    <div><b>${this.escapeHtml(group.source_type)}</b> · ${group.count} 条</div>
+                    <div class="source-id">${this.escapeHtml(group.source_id)}</div>
+                </div>
+                <p>${this.escapeHtml(group.representative_abstract)}</p>
+                <details>
+                    <summary>展开全部 ${group.count} 条</summary>
+                    ${items}
+                </details>
+            </div>`;
+    }
+
+    async deleteMemoryItem(memoryId) {
+        if (!confirm('删除这一条记忆？')) return;
+        await fetch(`/api/v1/memory/item/${encodeURIComponent(memoryId)}`, { method: 'DELETE' });
+        if (this.currentMemoryNamespace) this.selectMemoryNamespace(this.currentMemoryNamespace);
+        this.loadMemoryOverview();
+    }
+
+    async searchMemory() {
+        const query = document.getElementById('memory-search-query').value.trim();
+        if (!query) return;
+        const namespace = document.getElementById('memory-search-namespace').value || null;
+        const resultEl = document.getElementById('memory-search-result');
+        resultEl.style.display = 'block';
+        resultEl.textContent = '检索中...';
+        const res = await fetch('/api/v1/memory/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query, namespace }),
+        });
+        const data = await res.json();
+        resultEl.textContent = data.answer || '(无结果)';
     }
 
     async loadAllData() {
@@ -1753,5 +1884,7 @@ class DataManager {
     }
 }
 
-// Initialize on page load
-const dataManager = new DataManager();
+// Initialize on page load. 页面可以在加载这个脚本之前设置
+// window.DATA_MANAGER_OPTIONS（例如 dashboard 的历史对话弹窗只想要
+// sessionsOnly 模式），/data 页面本身不设置，行为不变。
+const dataManager = new DataManager(window.DATA_MANAGER_OPTIONS || {});
