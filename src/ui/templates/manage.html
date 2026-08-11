@@ -412,6 +412,27 @@
         border-color: var(--primary-color);
     }
 
+    .memory-namespace-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 0.75rem;
+    }
+
+    .btn-danger-outline {
+        font-size: 0.8125rem;
+        color: var(--danger-color);
+        border: 1px solid var(--danger-color);
+        background: var(--bg-primary);
+        border-radius: 6px;
+        padding: 5px 12px;
+        cursor: pointer;
+    }
+
+    .btn-danger-outline:hover {
+        background: var(--danger-color);
+        color: white;
+    }
+
     .memory-group {
         border: 1px solid var(--border-light);
         border-radius: 0.5rem;
@@ -425,6 +446,28 @@
         justify-content: space-between;
         align-items: baseline;
         gap: 0.5rem;
+    }
+
+    .memory-group .group-header-right {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex-shrink: 0;
+    }
+
+    .memory-group .group-delete-btn {
+        font-size: 0.75rem;
+        color: var(--danger-color);
+        border: 1px solid var(--danger-color);
+        background: var(--bg-primary);
+        border-radius: 4px;
+        padding: 2px 8px;
+        cursor: pointer;
+    }
+
+    .memory-group .group-delete-btn:hover {
+        background: var(--danger-color);
+        color: white;
     }
 
     .memory-group .source-id {
@@ -664,6 +707,9 @@
         <div id="memory-search-result" class="memory-search-result" style="display:none"></div>
 
         <div class="namespace-tabs" id="memory-namespace-tabs"></div>
+        <div class="memory-namespace-actions">
+            <button class="btn-danger-outline" id="memory-clear-namespace-btn">清空当前 namespace</button>
+        </div>
         <div id="memory-groups"></div>
     </div>
 </div>
@@ -700,5 +746,5 @@
 <script src="/static/js/utils.js?v=5"></script>
 <script src="/static/js/api.js?v=5"></script>
 <script src="/static/js/ui-components.js?v=5"></script>
-<script src="/static/js/manage.js?v=5"></script>
+<script src="/static/js/manage.js?v=6"></script>
 {% endblock %}

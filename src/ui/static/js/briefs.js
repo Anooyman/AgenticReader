@@ -75,7 +75,7 @@
     article.dataset.itemId = card.item_id;
     article.innerHTML = `
       <div class="card-check">
-        <input type="checkbox" class="brief-checkbox" value="${escapeHtml(card.item_id)}" ${selectable ? '' : 'disabled'} ${selectable ? 'checked' : ''}>
+        <input type="checkbox" class="brief-checkbox" value="${escapeHtml(card.item_id)}" ${selectable ? '' : 'disabled'}>
       </div>
       <div class="card-body">
         <div class="card-head">
@@ -198,6 +198,15 @@
       });
     });
   }
+
+  document.getElementById('select-all-btn').addEventListener('click', () => {
+    // 每次点按当前状态取反：只要还有未勾选的可选项就全选，否则全部取消——
+    // 跟"全部展开/收起"按钮同一套交互逻辑，避免误点全选之后想撤销还得
+    // 一条条取消。disabled 的（已加载/排队中）checkbox 天然跳过。
+    const boxes = [...document.querySelectorAll('.brief-checkbox:not(:disabled)')];
+    const shouldCheck = boxes.some((el) => !el.checked);
+    boxes.forEach((el) => { el.checked = shouldCheck; });
+  });
 
   document.getElementById('load-selected-btn').addEventListener('click', async () => {
     const coverageDate = dateSelect.value;

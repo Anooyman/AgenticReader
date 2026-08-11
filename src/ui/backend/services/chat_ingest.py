@@ -98,8 +98,14 @@ def due_sessions(now: datetime = None) -> list:
 
     纯函数式地从磁盘推导，不依赖任何进程内状态——这正是重启后能自动补齐
     积压会话的原因。
+
+    `now` 必须是 naive datetime（不带时区），与 session_manager.py 写入
+    updated_at 时用的 datetime.now().isoformat()（本地时间、无时区）保持
+    同一形式——之前这里用 datetime.now(timezone.utc) 与 naive 的
+    updated_dt 相减，每轮 sweep 必抛 TypeError，被 run_forever() 的
+    except 吞掉后台静默失败，导致对话从未真正入库过。
     """
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now()
     state = _load_state().get("sessions", {})
     if not SESSIONS_DIR.exists():
         return []

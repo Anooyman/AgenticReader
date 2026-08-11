@@ -171,5 +171,40 @@ const API = {
             if (!res.ok) throw new Error('获取章节失败');
             return await res.json();
         }
+    },
+
+    // 语音
+    speech: {
+        async transcribe(audioBlob) {
+            const formData = new FormData();
+            formData.append('file', audioBlob, 'recording.webm');
+
+            const res = await fetch('/api/v1/speech/transcribe', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!res.ok) {
+                const error = await res.json();
+                throw new Error(error.detail || '语音转文字失败');
+            }
+
+            return await res.json();
+        },
+
+        async synthesize(text) {
+            const res = await fetch('/api/v1/speech/synthesize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text })
+            });
+
+            if (!res.ok) {
+                const error = await res.json();
+                throw new Error(error.detail || '语音合成失败');
+            }
+
+            return await res.blob();
+        }
     }
 };

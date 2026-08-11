@@ -134,6 +134,10 @@ class DataManager {
             this.searchMemory();
         });
 
+        document.getElementById('memory-clear-namespace-btn')?.addEventListener('click', () => {
+            this.clearMemoryNamespace();
+        });
+
         // Load initial data
         await this.loadAllData();
 
@@ -236,7 +240,10 @@ class DataManager {
             <div class="memory-group">
                 <div class="group-header">
                     <div><b>${this.escapeHtml(group.source_type)}</b> · ${group.count} 条</div>
-                    <div class="source-id">${this.escapeHtml(group.source_id)}</div>
+                    <div class="group-header-right">
+                        <div class="source-id">${this.escapeHtml(group.source_id)}</div>
+                        <button class="group-delete-btn" onclick="dataManager.deleteMemorySource('${this.escapeHtml(group.namespace)}', '${this.escapeHtml(group.source_id)}')">删除整组</button>
+                    </div>
                 </div>
                 <p>${this.escapeHtml(group.representative_abstract)}</p>
                 <details>
@@ -250,6 +257,22 @@ class DataManager {
         if (!confirm('删除这一条记忆？')) return;
         await fetch(`/api/v1/memory/item/${encodeURIComponent(memoryId)}`, { method: 'DELETE' });
         if (this.currentMemoryNamespace) this.selectMemoryNamespace(this.currentMemoryNamespace);
+        this.loadMemoryOverview();
+    }
+
+    async deleteMemorySource(namespace, sourceId) {
+        if (!confirm(`删除来源 "${sourceId}" 的全部记忆？此操作不可撤销。`)) return;
+        await fetch(`/api/v1/memory/namespace/${encodeURIComponent(namespace)}/source/${encodeURIComponent(sourceId)}`, { method: 'DELETE' });
+        if (this.currentMemoryNamespace) this.selectMemoryNamespace(this.currentMemoryNamespace);
+        this.loadMemoryOverview();
+    }
+
+    async clearMemoryNamespace() {
+        const ns = this.currentMemoryNamespace;
+        if (!ns) return;
+        if (!confirm(`清空 namespace "${ns}" 下的全部记忆？此操作不可撤销。`)) return;
+        await fetch(`/api/v1/memory/namespace/${encodeURIComponent(ns)}`, { method: 'DELETE' });
+        this.selectMemoryNamespace(ns);
         this.loadMemoryOverview();
     }
 

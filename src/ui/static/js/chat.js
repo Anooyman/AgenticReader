@@ -35,6 +35,13 @@ class ChatApp {
         // 新内容计数
         this.newContentCount = 0;  // 用户不在底部时的新内容数量
 
+        // 语音输入/输出
+        this.mediaRecorder = null;
+        this.audioChunks = [];
+        this.isRecording = false;
+        this.currentAudio = null;  // 当前正在播放的TTS音频
+        this.currentPlayingBtn = null;
+
         this.init();
     }
 
@@ -181,6 +188,9 @@ class ChatApp {
 
         // 🌐 网络搜索按钮
         document.getElementById('btn-web-search').addEventListener('click', () => this.toggleWebSearch());
+
+        // 🎤 语音输入按钮
+        document.getElementById('btn-voice-input').addEventListener('click', () => this.toggleVoiceInput());
 
         // 文档选择器关闭
         document.getElementById('doc-picker-close').addEventListener('click', () => this.hideDocPicker());
@@ -529,6 +539,14 @@ class ChatApp {
                     throwOnError: false
                 });
             }
+
+            // 语音播放按钮
+            const ttsBtn = document.createElement('button');
+            ttsBtn.className = 'msg-tts-btn';
+            ttsBtn.title = '朗读此回复';
+            ttsBtn.textContent = '🔊';
+            ttsBtn.addEventListener('click', () => this.toggleSpeech(ttsBtn, content));
+            bubble.insertBefore(ttsBtn, bubble.firstChild);
         } else {
             bubble.textContent = content;
         }
@@ -907,6 +925,143 @@ class ChatApp {
         this.setupPdfScrollListener();
         // 滚动到当前页面
         this.scrollToPage(this.currentPage);
+    }
+
+    /**
+     * 切换语音输入录制状态
+     */
+    async toggleVoiceInput() {
+        if (this.isRecording) {
+            this.stopVoiceRecording();
+        } else {
+            await this.startVoiceRecording();
+        }
+    }
+
+    async startVoiceRecording() {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            Utils.notify('当前浏览器不支持语音录制', 'error');
+            return;
+        }
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            this.audioChunks = [];
+            this.mediaRecorder = new MediaRecorder(stream);
+
+            this.mediaRecorder.addEventListener('dataavailable', (e) => {
+                if (e.data && e.data.size > 0) this.audioChunks.push(e.data);
+            });
+
+            this.mediaRecorder.addEventListener('stop', () => {
+                stream.getTracks().forEach(track => track.stop());
+                this.handleRecordingStop();
+            });
+
+            this.mediaRecorder.start();
+            this.isRecording = true;
+
+            const btn = document.getElementById('btn-voice-input');
+            btn.classList.add('recording');
+            btn.title = '点击停止录音';
+
+            Utils.notify('开始录音...', 'info');
+        } catch (error) {
+            console.error('无法访问麦克风:', error);
+            Utils.notify('无法访问麦克风: ' + error.message, 'error');
+        }
+    }
+
+    stopVoiceRecording() {
+        if (this.mediaRecorder && this.isRecording) {
+            this.mediaRecorder.stop();
+            this.isRecording = false;
+
+            const btn = document.getElementById('btn-voice-input');
+            btn.classList.remove('recording');
+            btn.title = '语音输入';
+        }
+    }
+
+    async handleRecordingStop() {
+        if (this.audioChunks.length === 0) return;
+
+        const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
+        this.audioChunks = [];
+
+        UIComponents.showLoading('识别语音中...');
+        try {
+            const result = await API.speech.transcribe(audioBlob);
+            const input = document.getElementById('message-input');
+            if (result.text) {
+                input.value = (input.value ? input.value + ' ' : '') + result.text;
+                input.focus();
+            } else {
+                Utils.notify('未识别到语音内容', 'warning');
+            }
+        } catch (error) {
+            console.error('语音识别失败:', error);
+            Utils.notify('语音识别失败: ' + error.message, 'error');
+        } finally {
+            UIComponents.hideLoading();
+        }
+    }
+
+    /**
+     * 播放/停止文字转语音
+     */
+    async toggleSpeech(btn, text) {
+        // 如果点击的是正在播放的按钮，停止播放
+        if (this.currentAudio && this.currentPlayingBtn === btn) {
+            this.stopSpeech();
+            return;
+        }
+
+        // 停止其他正在播放的音频
+        this.stopSpeech();
+
+        btn.textContent = '⏳';
+        try {
+            const audioBlob = await API.speech.synthesize(text);
+            const audioUrl = URL.createObjectURL(audioBlob);
+            const audio = new Audio(audioUrl);
+
+            this.currentAudio = audio;
+            this.currentPlayingBtn = btn;
+
+            btn.textContent = '⏹️';
+            btn.classList.add('playing');
+
+            audio.addEventListener('ended', () => {
+                URL.revokeObjectURL(audioUrl);
+                btn.textContent = '🔊';
+                btn.classList.remove('playing');
+                if (this.currentAudio === audio) {
+                    this.currentAudio = null;
+                    this.currentPlayingBtn = null;
+                }
+            });
+
+            await audio.play();
+        } catch (error) {
+            console.error('语音播放失败:', error);
+            Utils.notify('语音播放失败: ' + error.message, 'error');
+            btn.textContent = '🔊';
+            btn.classList.remove('playing');
+        }
+    }
+
+    stopSpeech() {
+        if (this.currentAudio) {
+            this.currentAudio.pause();
+            this.currentAudio.currentTime = 0;
+            this.currentAudio = null;
+        }
+        if (this.currentPlayingBtn) {
+            this.currentPlayingBtn.textContent = '🔊';
+            this.currentPlayingBtn.classList.remove('playing');
+            this.currentPlayingBtn = null;
+        }
     }
 
     sendMessage() {

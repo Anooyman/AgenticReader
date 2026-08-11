@@ -35,6 +35,19 @@ async def delete_item(memory_id: str):
     return await memory_browse.delete_memory(memory_id)
 
 
+@router.delete("/namespace/{namespace}/source/{source_id}")
+async def delete_source(namespace: str, source_id: str):
+    """删掉一个来源（一篇论文/一段对话）在该 namespace 下的全部记忆行——
+    对应 UI 上"删除整组"按钮，一次删掉一张 group 卡片的所有 chunk。"""
+    return await memory_browse.delete_source(namespace, source_id)
+
+
+@router.delete("/namespace/{namespace}")
+async def delete_namespace(namespace: str):
+    """清空一个 namespace 下的全部记忆。"""
+    return await memory_browse.delete_namespace(namespace)
+
+
 @router.post("/search")
 async def post_search(body: dict):
     """手动执行一次检索测试——复用 agentic_search，验证效果。"""

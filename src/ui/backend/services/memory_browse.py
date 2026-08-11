@@ -126,6 +126,31 @@ def _delete_memory(memory_id: str) -> Dict[str, Any]:
     return {"ok": True, "id": memory_id}
 
 
+def _delete_source(namespace: str, source_id: str) -> Dict[str, Any]:
+    """删掉一个来源（一篇论文/一段对话）在某 namespace 下的全部记忆行——
+    对应 UI 上一张 group 卡片。VectorStore 本身没有按 source_id 批量删的
+    原子操作，这里跟 LLM-Memory 原实现（_memory_delete_worker.py）一样，
+    先用 rows_for_source 取出全部行再逐条 delete()。"""
+    vs = _vs()
+    rows = vs.rows_for_source(namespace, source_id)
+    deleted = 0
+    for row in rows:
+        vs.delete(row["id"])
+        deleted += 1
+    return {"ok": True, "deleted": deleted, "source_id": source_id}
+
+
+def _delete_namespace(namespace: str) -> Dict[str, Any]:
+    """清空一个 namespace 下的全部记忆——逐条删，理由同 _delete_source。"""
+    vs = _vs()
+    rows = vs.all_rows(namespace)
+    deleted = 0
+    for row in rows:
+        vs.delete(row["id"])
+        deleted += 1
+    return {"ok": True, "deleted": deleted, "namespace": namespace}
+
+
 async def fetch_overview() -> Dict[str, Any]:
     return await asyncio.to_thread(_build_overview)
 
@@ -140,3 +165,11 @@ async def fetch_detail(memory_id: str) -> Dict[str, Any]:
 
 async def delete_memory(memory_id: str) -> Dict[str, Any]:
     return await asyncio.to_thread(_delete_memory, memory_id)
+
+
+async def delete_source(namespace: str, source_id: str) -> Dict[str, Any]:
+    return await asyncio.to_thread(_delete_source, namespace, source_id)
+
+
+async def delete_namespace(namespace: str) -> Dict[str, Any]:
+    return await asyncio.to_thread(_delete_namespace, namespace)

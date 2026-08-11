@@ -79,7 +79,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 from .api import pages, websocket
 from .api.v1 import (
     documents, chat, pdf, chapters, structure, config, sessions, data,
-    report, briefs, jobs, memory,
+    report, briefs, jobs, memory, speech,
 )
 
 app.include_router(pages.router, tags=["Pages"])
@@ -96,6 +96,7 @@ app.include_router(report.router, prefix="/api/v1/report", tags=["Report"])
 app.include_router(briefs.router, prefix="/api/v1/briefs", tags=["Briefs"])
 app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["Jobs"])
 app.include_router(memory.router, prefix="/api/v1/memory", tags=["Memory"])
+app.include_router(speech.router, prefix="/api/v1/speech", tags=["Speech"])
 
 
 @app.get("/health")
