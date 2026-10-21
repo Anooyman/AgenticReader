@@ -56,3 +56,9 @@ async def report_page(request: Request):
 async def briefs_page(request: Request):
     """每日简报加载页面"""
     return templates.TemplateResponse("briefs.html", {"request": request})
+
+
+@router.get("/memory", response_class=HTMLResponse)
+async def memory_page(request: Request):
+    """LLM-Memory 简报记忆浏览/对话页面（桥接外部 LLM-Memory webui）"""
+    return templates.TemplateResponse("memory.html", {"request": request})

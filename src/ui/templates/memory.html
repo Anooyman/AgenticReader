@@ -1,0 +1,405 @@
+{% extends "base.html" %}
+
+{% block title %}AgenticReader - 简报记忆{% endblock %}
+
+{% block extra_css %}
+<style>
+    .mem-layout {
+        display: grid;
+        grid-template-columns: 280px minmax(0, 1.1fr) minmax(0, 1fr);
+        gap: var(--spacing-md);
+        padding: var(--spacing-md);
+        align-items: start;
+        max-width: 1500px;
+        margin: 0 auto;
+    }
+    @media (max-width: 1100px) {
+        .mem-layout { grid-template-columns: 1fr; }
+    }
+    .mem-panel {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-lg);
+        padding: var(--spacing-md);
+        min-width: 0;
+    }
+    .mem-panel h3 { margin: 0 0 var(--spacing-sm); font-size: 14px; }
+    .mem-panel .hint { color: var(--text-muted); font-size: 12px; margin-bottom: var(--spacing-sm); }
+
+    /* 日期列表 */
+    .date-row {
+        display: flex; align-items: center; gap: 6px;
+        padding: 5px 6px; border-radius: 6px; cursor: pointer;
+        font-size: 13px;
+    }
+    .date-row:hover { background: var(--bg-hover, rgba(128,128,128,.08)); }
+    .date-row input { accent-color: var(--accent-primary, #4f7cff); }
+    .badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; }
+    .badge.loaded { background: rgba(76,175,125,.15); color: var(--color-success, #3fa771); }
+    .badge.unloaded { background: rgba(150,150,150,.15); color: var(--text-muted); }
+    .badge.failed { background: rgba(229,99,107,.15); color: var(--color-danger, #e5636b); }
+    .load-btn {
+        margin-left: auto; font-size: 11px; padding: 2px 8px;
+        border: 1px solid var(--border-color); border-radius: 6px;
+        background: transparent; color: var(--text-secondary); cursor: pointer;
+    }
+    .load-btn:hover { border-color: var(--accent-primary, #4f7cff); }
+
+    /* 对话 */
+    .chat-log {
+        height: 420px; overflow-y: auto; display: flex; flex-direction: column;
+        gap: 8px; padding: 4px; margin-bottom: var(--spacing-sm);
+    }
+    .chat-bubble {
+        max-width: 92%; padding: 8px 11px; border-radius: 10px; font-size: 13px;
+        line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+    }
+    .chat-bubble.user { align-self: flex-end; background: var(--accent-primary, #4f7cff); color: #fff; }
+    .chat-bubble.assistant { align-self: flex-start; background: var(--bg-primary); border: 1px solid var(--border-color); }
+    .chat-bubble .cite { color: var(--text-muted); font-size: 11px; display: block; margin-top: 4px; }
+    .chat-input-row { display: flex; gap: 6px; }
+    .chat-input-row textarea {
+        flex: 1; resize: vertical; min-height: 46px; padding: 8px;
+        border: 1px solid var(--border-color); border-radius: 8px;
+        background: var(--bg-primary); color: var(--text-primary); font: inherit; font-size: 13px;
+    }
+    .send-btn { padding: 0 16px; border-radius: 8px; border: none; cursor: pointer;
+        background: var(--accent-primary, #4f7cff); color: #fff; }
+    .send-btn:disabled { opacity: .5; cursor: default; }
+
+    /* 论文列表 */
+    .paper-card {
+        border: 1px solid var(--border-color); border-radius: 8px;
+        padding: 8px 10px; margin-bottom: 8px; font-size: 13px;
+    }
+    .paper-card .title { font-weight: 600; line-height: 1.4; margin-bottom: 4px; }
+    .paper-card .digest { color: var(--text-secondary); font-size: 12px; line-height: 1.5;
+        display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .paper-card .actions { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+    .paper-card .actions button, .paper-card .actions a {
+        font-size: 11px; padding: 2px 9px; border-radius: 6px; text-decoration: none;
+        border: 1px solid var(--border-color); background: transparent;
+        color: var(--text-secondary); cursor: pointer;
+    }
+    .paper-card .actions .dl.ok { border-color: var(--color-success, #3fa771); color: var(--color-success, #3fa771); }
+    .date-group-head { font-size: 12px; font-weight: 700; color: var(--text-muted);
+        margin: 10px 0 6px; letter-spacing: .04em; }
+    .toolbar-row { display: flex; gap: 6px; align-items: center; margin-bottom: var(--spacing-sm); flex-wrap: wrap; }
+    .tool-btn { font-size: 12px; padding: 3px 10px; border: 1px solid var(--border-color);
+        border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+    .status-line { font-size: 12px; color: var(--text-muted); min-height: 16px; }
+    .err-box { background: rgba(229,99,107,.12); border: 1px solid rgba(229,99,107,.4);
+        color: var(--color-danger, #e5636b); font-size: 12px; padding: 8px; border-radius: 6px;
+        margin-bottom: 8px; display: none; white-space: pre-wrap; }
+    .dot-sep { color: var(--text-muted); }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="mem-layout">
+    <!-- 日期面板 -->
+    <div class="mem-panel">
+        <h3>📚 日期目录</h3>
+        <div class="hint">来自 LLM-Memory 的 brief 管线。勾选 = 该日期进入对话范围与右侧论文列表；"加载"即触发按天增量入库。</div>
+        <div class="err-box" id="errBox"></div>
+        <div class="toolbar-row">
+            <button class="tool-btn" id="selectAllLoaded" title="只勾选已加载日期">全选已加载</button>
+            <button class="tool-btn" id="clearSel">清空选择</button>
+        </div>
+        <div id="dateList"><div class="status-line">加载中…</div></div>
+    </div>
+
+    <!-- 对话面板 -->
+    <div class="mem-panel">
+        <h3>💬 记忆对话</h3>
+        <div class="hint">检索走 agentic_search（namespace=AATF）。发送时会自动注明所选日期，检索会向该时间窗聚焦。</div>
+        <div class="chat-log" id="chatLog">
+            <div class="chat-bubble assistant">试着问：「所选日期里有哪些讲记忆或提示注入的论文？给标题和链接」——论文卡片在右边，也可以直接点下载。</div>
+        </div>
+        <div class="chat-input-row">
+            <textarea id="chatInput" placeholder="Enter 发送 / Shift+Enter 换行"></textarea>
+            <button class="send-btn" id="sendBtn">发送</button>
+        </div>
+        <div class="status-line" id="chatStatus"></div>
+    </div>
+
+    <!-- 论文面板 -->
+    <div class="mem-panel">
+        <h3>🧾 论文清单</h3>
+        <div class="hint">直接解析自抽取后的 brief JSON——确定性文本，链接不会缺失或编造。</div>
+        <div class="toolbar-row">
+            <span class="status-line" id="papersStatus"></span>
+        </div>
+        <div id="paperList"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const API = "/api/v1/llmmemory";
+const state = { dates: [], selected: new Set(), papers: {}, chatHistory: [] };
+
+function esc(s) {
+    const d = document.createElement("div");
+    d.textContent = s == null ? "" : String(s);
+    return d.innerHTML;
+}
+function showErr(msg) {
+    const b = document.getElementById("errBox");
+    b.textContent = "⚠ " + msg;
+    b.style.display = "block";
+    clearTimeout(showErr._t);
+    showErr._t = setTimeout(() => { b.style.display = "none"; }, 8000);
+}
+function detail(x) {
+    const d = x && x.detail;
+    if (typeof d === "string") return d;
+    if (d && d.detail) return String(d.detail);
+    if (d && typeof d === "object" && d.error) return String(d.error);
+    return JSON.stringify(x || "unknown error").slice(0, 300);
+}
+
+// ---------- dates ----------
+
+async function fetchDates() {
+    try {
+        const r = await fetch(`${API}/dates`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(detail(d));
+        state.dates = d.dates || [];
+        renderDates();
+        fetchPapersForSelected();
+    } catch (e) { showErr("读取日期列表失败：" + e.message); }
+}
+
+function renderDates() {
+    const box = document.getElementById("dateList");
+    box.innerHTML = "";
+    for (const d of state.dates) {
+        const row = document.createElement("label");
+        row.className = "date-row";
+        const st = d.loaded ? `<span class="badge loaded">${d.papers || 0} 篇</span>`
+                   : d.failed ? `<span class="badge failed">失败</span>`
+                              : `<span class="badge unloaded">未加载</span>`;
+        row.innerHTML = `
+            <input type="checkbox" ${d.loaded ? "checked" : ""} data-date="${d.date}">
+            <span>${d.date}</span>${st}`;
+        const cb = row.querySelector("input");
+        cb.onchange = () => { cb.checked ? state.selected.add(d.date) : state.selected.delete(d.date);
+                              renderPapers(); };
+        if (!d.loaded) {
+            const btn = document.createElement("button");
+            btn.className = "load-btn";
+            btn.textContent = "加载";
+            btn.onclick = (ev) => { ev.preventDefault(); loadDate(d.date, btn); };
+            row.appendChild(btn);
+        }
+        box.appendChild(row);
+    }
+}
+
+async function loadDate(date, btn) {
+    btn.disabled = true; btn.textContent = "…";
+    try {
+        const r = await fetch(`${API}/load`, { method: "POST",
+            headers: {"Content-Type": "application/json"}, body: JSON.stringify({ dates: [date] }) });
+        const d = await r.json();
+        if (!r.ok) throw new Error(detail(d));
+        pollLoad(d.job_id, btn);
+    } catch (e) { showErr(e.message); btn.disabled = false; btn.textContent = "加载"; }
+}
+
+function pollLoad(jobId, btn) {
+    const t = setInterval(async () => {
+        let job;
+        try {
+            const r = await fetch(`${API}/load/progress/${jobId}`);
+            job = await r.json();
+            if (!r.ok) throw new Error(detail(job));
+        } catch (e) { clearInterval(t); showErr("加载进度查询失败：" + e.message);
+                     if (btn) { btn.disabled = false; btn.textContent = "加载"; } return; }
+        const p = job.index ? `${job.index}/${job.total}` : "";
+        document.getElementById("papersStatus").textContent = `加载 ${job.current || ""} … ${p}`;
+        if (job.done) {
+            clearInterval(t);
+            if (btn) { btn.disabled = false; btn.textContent = "加载"; }
+            document.getElementById("papersStatus").textContent =
+                job.errors && job.errors.length ? "加载完成（有警告：\n" + job.errors.join("\n") : "加载完成";
+            fetchDates();
+        }
+    }, 2000);
+}
+
+// ---------- papers ----------
+
+async function fetchPapersForSelected() {
+    const dates = [...state.selected].sort();
+    if (!dates.length) { state.papers = {}; renderPapers(); return; }
+    document.getElementById("papersStatus").textContent = "读取论文清单…";
+    try {
+        const r = await fetch(`${API}/papers?dates=${dates.join(",")}`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(detail(d));
+        state.papers = {};
+        for (const e of (d.dates || [])) state.papers[e.date] = e;
+        document.getElementById("papersStatus").textContent = "";
+        renderPapers();
+    } catch (e) {
+        document.getElementById("papersStatus").textContent = "论文清单读取失败（日期未加载？）";
+    }
+}
+
+function paperCard(p, date) {
+    const div = document.createElement("div");
+    div.className = "paper-card";
+    const links = [];
+    if (p.abs) links.push(`<button class="dl" data-url="${esc(p.pdf || p.abs)}">⬇ 下载</button>
+                           <a href="${esc(p.abs)}" target="_blank">arXiv ↗</a>`);
+    else if (p.url) links.push(`<a href="${esc(p.url)}" target="_blank">原文 ↗</a>`);
+    div.innerHTML = `
+        <div class="title">${esc(p.title)}</div>
+        ${p.digest ? `<div class="digest">${esc(p.digest)}</div>` : ""}
+        <div class="actions">${links.join(" ")}</div>`;
+    div.querySelectorAll("button.dl").forEach(b => {
+        b.onclick = () => downloadPaper(b, b.dataset.url);
+    });
+    return div;
+}
+
+async function downloadPaper(btn, url) {
+    btn.disabled = true; btn.textContent = "下载中…";
+    try {
+        const r = await fetch(`${API}/download`, { method: "POST",
+            headers: {"Content-Type": "application/json"}, body: JSON.stringify({ url }) });
+        const d = await r.json();
+        if (!r.ok) throw new Error(detail(d));
+        btn.classList.add("ok");
+        btn.textContent = "✓ 已就位";
+        const go = document.createElement("a");
+        go.href = "/data"; go.target = "_blank";
+        go.textContent = "去索引/深读 ↗";
+        go.style.color = "var(--accent-primary,#4f7cff)";
+        btn.parentElement.appendChild(go);
+    } catch (e) {
+        btn.disabled = false; btn.textContent = "重试";
+        const s = document.createElement("span");
+        s.className = "status-line"; s.textContent = " ✗ " + e.message;
+        btn.parentElement.appendChild(s);
+        setTimeout(() => s.remove(), 6000);
+    }
+}
+
+function renderPapers() {
+    const box = document.getElementById("paperList");
+    box.innerHTML = "";
+    const dates = [...state.selected].sort().reverse();
+    let shown = 0;
+    for (const d of dates) {
+        const e = state.papers[d];
+        if (!e) continue;
+        const head = document.createElement("div");
+        head.className = "date-group-head";
+        head.textContent = `▸ ${d}`;
+        box.appendChild(head);
+        for (const p of (e.radar || []).slice(0, 40)) box.appendChild(paperCard(p, d)), shown++;
+        const sig = (e.signals || []).slice(0, 25);
+        for (const p of sig) box.appendChild(paperCard(p, d)), shown++;
+    }
+    if (!shown) {
+        box.innerHTML = `<div class="status-line">勾选左侧已加载的日期即可看到论文清单。</div>`;
+    }
+}
+
+// ---------- chat ----------
+
+const log = () => document.getElementById("chatLog");
+
+function addBubble(role, html, cite) {
+    const b = document.createElement("div");
+    b.className = "chat-bubble " + role;
+    b.innerHTML = html + (cite ? `<span class="cite">${esc(cite)}</span>` : "");
+    log().appendChild(b);
+    log().scrollTop = log().scrollHeight;
+    return b;
+}
+
+function scopePrefix() {
+    const dates = [...state.selected].sort();
+    return dates.length ? `（检索范围限定：${dates.join("、")}）` : "";
+}
+
+async function sendChat() {
+    const input = document.getElementById("chatInput");
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    const q = scopePrefix() + "\n" + text;
+    addBubble("user", esc(text));
+    const think = addBubble("assistant", "检索记忆中<span class='dots'></span>");
+    document.getElementById("sendBtn").disabled = true;
+    document.getElementById("chatStatus").textContent = "agentic 检索 + 生成回复中，可能需要 30-60 秒";
+    try {
+        const r = await fetch(`${API}/chat`, { method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ message: q, history: state.chatHistory }) });
+        const d = await r.json();
+        if (!r.ok) throw new Error(detail(d));
+        pollChat(d.job_id, think);
+    } catch (e) {
+        think.innerHTML = "出错了：" + esc(e.message);
+        document.getElementById("sendBtn").disabled = false;
+        document.getElementById("chatStatus").textContent = "";
+    }
+}
+
+function pollChat(jobId, bubble) {
+    const t = setInterval(async () => {
+        let job;
+        try {
+            const r = await fetch(`${API}/chat/progress/${jobId}`);
+            job = await r.json();
+            if (!r.ok) throw new Error(detail(job));
+        } catch (e) { clearInterval(t); bubble.innerHTML = "进度查询失败：" + esc(e.message);
+                     document.getElementById("sendBtn").disabled = false;
+                     document.getElementById("chatStatus").textContent = ""; return; }
+        if (!job.done) return;
+        clearInterval(t);
+        document.getElementById("sendBtn").disabled = false;
+        document.getElementById("chatStatus").textContent = "";
+        const res = job.result || {};
+        if (job.error) { bubble.innerHTML = "出错了：" + esc(job.error); return; }
+        const n = (res.retrieved_memories || []).length;
+        bubble.innerHTML = linkify(res.reply || "（空回复）") + `<span class="cite">引用了 ${n} 条记忆</span>`;
+        state.chatHistory.push({ role: "user", content: bubble.dataset.raw || bubble.textContent });
+        state.chatHistory.push({ role: "assistant", content: res.reply || "" });
+        if (state.chatHistory.length > 20) state.chatHistory.splice(0, state.chatHistory.length - 20);
+    }, 1500);
+}
+
+function linkify(s) {
+    return esc(s)
+        .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,
+                '<a href="$2" target="_blank" rel="noopener">$1</a>')
+        .replace(/(https?:\/\/[^\s<]+)/g,
+                (m0) => m0.includes("target") ? m0
+                    : `<a href="${m0}" target="_blank" rel="noopener">${m0}</a>`);
+}
+
+// ---------- wiring ----------
+
+document.getElementById("sendBtn").onclick = sendChat;
+document.getElementById("chatInput").addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); sendChat(); }
+});
+document.getElementById("selectAllLoaded").onclick = () => {
+    state.selected = new Set(state.dates.filter(d => d.loaded).map(d => d.date));
+    renderDates(); fetchPapersForSelected();
+};
+document.getElementById("clearSel").onclick = () => {
+    state.selected.clear(); renderDates(); renderPapers();
+};
+
+fetchDates();
+</script>
+{% endblock %}
