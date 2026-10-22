@@ -54,12 +54,19 @@ async def initialize_chat(request: ChatInitRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ChatClearRequest(BaseModel):
+    """清空聊天历史请求（session_id 缺省时作用于最近活跃会话）"""
+    session_id: Optional[str] = None
+
+
 @router.post("/clear")
-async def clear_chat():
-    """清空聊天历史"""
+async def clear_chat(request: Optional[ChatClearRequest] = None):
+    """清空指定会话的聊天历史"""
     try:
         from ...services.chat_service import chat_service
-        chat_service.reset()
+
+        session_id = request.session_id if request else None
+        chat_service.reset(session_id=session_id)
 
         return {
             "status": "success",
@@ -72,13 +79,15 @@ async def clear_chat():
 
 
 @router.get("/load-more-messages")
-async def load_more_messages(offset: int = 0, limit: int = 20):
+async def load_more_messages(offset: int = 0, limit: int = 20,
+                            session_id: Optional[str] = None):
     """
     加载更多历史消息（用于分页加载）
 
     Args:
         offset: 偏移量（已加载的消息数）
         limit: 每次加载的消息数（默认20）
+        session_id: 目标会话ID，缺省时取最近活跃会话
 
     Returns:
         {
@@ -90,7 +99,9 @@ async def load_more_messages(offset: int = 0, limit: int = 20):
     try:
         from ...services.chat_service import chat_service
 
-        result = chat_service.load_more_messages(offset=offset, limit=limit)
+        result = chat_service.load_more_messages(
+            offset=offset, limit=limit, session_id=session_id
+        )
 
         return {
             "status": "success",

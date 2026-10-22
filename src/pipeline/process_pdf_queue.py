@@ -34,7 +34,7 @@ PDF_DIR = Path(DATA_ROOT) / "pdf"
 QUESTIONS_PDF = [
     # 这些问题的定位是"大致知道论文在做什么"，不是"替代读论文"——详细程度
     # 控制在几段话以内，而不是要求"不要省略细节/尽可能全面"。这样做有两个
-    # 直接好处：(1) report UI 上更好展示；(2) 写入 memory 时，这段文本本身
+    # 直接好处：(1) 摘要卡片上更好展示；(2) 写入 memory 时，这段文本本身
     # 还会被 ingest 管线再浓缩一次成 abstract/keywords，源头信息量越大对
     # 这道工序越是浪费，并不会让最终检索到的摘要更详细。真正需要深挖细节
     # 时，chat 里的 deep_dive_document 会直接查询 AgenticReader 的原始索引。
@@ -153,7 +153,7 @@ async def process_item(item: dict, provider: str, registry: dict) -> None:
         item["artifacts"]["memory_ingested"] = True
         item["artifacts"]["memory_chunks_added"] = memory_report.get("chunks_added", 0)
     except Exception as e:
-        # memory 写入失败不阻断整条流程——摘要已经落盘，report 页面照常可用，
+        # memory 写入失败不阻断整条流程——摘要已经落盘，简报页照常显示"已完成"，
         # 只是暂时搜不到。留空 memory_ingested，下次跑批处理时会被
         # sync_memory_ingest 的补灌逻辑捡起来重试。
         print(f"  [{doc_name}] ⚠️  memory 写入失败（不影响本条完成）: {e}")

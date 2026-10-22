@@ -20,13 +20,14 @@ Note:
 import asyncio
 import logging
 from typing import Any, Optional, List, Dict
-from langchain_openai import AzureOpenAIEmbeddings, OpenAIEmbeddings
 from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, MessagesPlaceholder
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables.history import RunnableWithMessageHistory
 
-from src.config.settings import LLM_EMBEDDING_CONFIG
+# get_embeddings() 里的 provider / 模型名解析全部走 settings 的这两个函数，
+# 本模块不再直接读 LLM_EMBEDDING_CONFIG 的任何键。
+from src.config.settings import get_embedding_provider
 from src.config.prompts import SYSTEM_PROMPT_CONFIG
 from src.config.constants import SessionHistoryConfig
 
@@ -254,13 +255,25 @@ class LLMBase:
             self.provider = provider.lower()
             self._validate_provider()
             logger.info(f"Provider updated to: {self.provider}")
-        
-        # 重新初始化模型
+            # 切换了 provider，清掉旧 provider 的实例缓存，
+            # 否则 _get_provider() 仍会命中旧 provider 的实例。
+            self._provider_instances.clear()
+
+        # 重新初始化模型。
+        # 注意：chat_model / embedding_model 是只读的懒加载 property（没有 setter），
+        # 对外赋值会直接抛 AttributeError；这里写它们背后真正的缓存字段
+        # _chat_model / _embedding_model，property 之后读到的就是新 provider 的模型。
+        self._chat_model = None
+        self._embedding_model = None
         try:
-            self.chat_model = self.get_chat_model(**config_updates)
-            self.embedding_model = self.get_embedding_model(**config_updates)
+            self._chat_model = self.get_chat_model(**config_updates)
+            self._embedding_model = self.get_embedding_model(**config_updates)
             logger.info("Models reinitialized with new configuration")
         except Exception as e:
+            # 构造失败时把缓存留在 None，后续经 property 懒加载时重新尝试，
+            # 不会让调用方继续拿到上一个 provider 的旧模型。
+            self._chat_model = None
+            self._embedding_model = None
             logger.error(f"Failed to reinitialize models: {e}")
             raise
 
@@ -773,37 +786,32 @@ class LLMBase:
 def get_embeddings(**kwargs):
     """
     获取全局嵌入模型实例
-    
-    根据配置返回对应的嵌入模型（Azure OpenAI 或 OpenAI）
-    
+
+    根据配置返回对应的嵌入模型（azure / openai / ollama / gemini），实现细节
+    全部交给对应的 Provider，与 LLMBase.get_embedding_model() 共用同一份配置
+    读取逻辑（settings.get_embedding_model_name / get_embedding_provider），
+    避免各处各读一个键名导致配置被静默忽略。
+
     Args:
         **kwargs: 传递给嵌入模型的额外参数
-        
+
     Returns:
-        嵌入模型实例（AzureOpenAIEmbeddings 或 OpenAIEmbeddings）
+        嵌入模型实例
     """
-    provider = LLM_EMBEDDING_CONFIG.get("provider", "openai").lower()
-    
-    if provider == "azure":
-        return AzureOpenAIEmbeddings(
-            openai_api_key=kwargs.get("openai_api_key", LLM_EMBEDDING_CONFIG.get("api_key")),
-            openai_api_version=kwargs.get("openai_api_version", LLM_EMBEDDING_CONFIG.get("api_version")),
-            azure_endpoint=kwargs.get("azure_endpoint", LLM_EMBEDDING_CONFIG.get("azure_endpoint")),
-            deployment=kwargs.get("deployment", LLM_EMBEDDING_CONFIG.get("deployment")),
-            model=kwargs.get("model", LLM_EMBEDDING_CONFIG.get("model")),
-            max_retries=kwargs.get("max_retries", 5)
+    provider = get_embedding_provider()
+
+    provider_classes = {
+        "azure": AzureLLMProvider,
+        "openai": OpenAILLMProvider,
+        "ollama": OllamaLLMProvider,
+        "gemini": GeminiLLMProvider,
+    }
+    provider_class = provider_classes.get(provider)
+    if provider_class is None:
+        logger.error(
+            f"未知的嵌入模型 provider: {provider}，"
+            f"支持的取值: {sorted(provider_classes)}，默认使用 OpenAI"
         )
-    elif provider == "openai":
-        return OpenAIEmbeddings(
-            openai_api_key=kwargs.get("openai_api_key", LLM_EMBEDDING_CONFIG.get("openai_api_key")),
-            model=kwargs.get("model", LLM_EMBEDDING_CONFIG.get("openai_model", "text-embedding-ada-002")),
-            max_retries=kwargs.get("max_retries", 5)
-        )
-    else:
-        # 默认使用 OpenAI
-        logger.warning(f"未知的嵌入模型 provider: {provider}，默认使用 OpenAI")
-        return OpenAIEmbeddings(
-            openai_api_key=kwargs.get("openai_api_key", LLM_EMBEDDING_CONFIG.get("openai_api_key")),
-            model=kwargs.get("model", LLM_EMBEDDING_CONFIG.get("openai_model", "text-embedding-ada-002")),
-            max_retries=kwargs.get("max_retries", 5)
-        )
+        provider_class = OpenAILLMProvider
+
+    return provider_class().get_embedding_model(**kwargs)

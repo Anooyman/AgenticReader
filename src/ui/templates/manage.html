@@ -589,6 +589,9 @@
                     <button class="btn btn-primary" onclick="dataManager.batchIndexPdfs()" id="pending-batch-index-btn" style="display: none;">
                         🔄 批量索引 (<span id="pending-selected-count">0</span>)
                     </button>
+                    <button class="btn btn-danger" onclick="dataManager.confirmDeletePendingPdfs()" id="pending-batch-delete-btn" style="display: none;">
+                        🗑️ 删除源文件 (<span id="pending-delete-count">0</span>)
+                    </button>
                 </div>
 
                 <div id="pending-loading" class="loading" style="display: none;">
@@ -746,5 +749,5 @@
 <script src="/static/js/utils.js?v=5"></script>
 <script src="/static/js/api.js?v=5"></script>
 <script src="/static/js/ui-components.js?v=5"></script>
-<script src="/static/js/manage.js?v=6"></script>
+<script src="/static/js/manage.js?v=7"></script>
 {% endblock %}

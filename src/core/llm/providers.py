@@ -21,7 +21,11 @@ from langchain_community.embeddings import OllamaEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from google.api_core.client_options import ClientOptions
 
-from src.config.settings import LLM_CONFIG, LLM_EMBEDDING_CONFIG
+from src.config.settings import (
+    LLM_CONFIG,
+    LLM_EMBEDDING_CONFIG,
+    get_embedding_model_name,
+)
 
 
 class LLMProviderBase(ABC):
@@ -77,7 +81,7 @@ class AzureLLMProvider(LLMProviderBase):
             openai_api_version=kwargs.get("openai_api_version", LLM_EMBEDDING_CONFIG.get("api_version")),
             azure_endpoint=kwargs.get("azure_endpoint", LLM_EMBEDDING_CONFIG.get("azure_endpoint")),
             deployment=kwargs.get("deployment", LLM_EMBEDDING_CONFIG.get("deployment")),
-            model=kwargs.get("model", LLM_EMBEDDING_CONFIG.get("model")),
+            model=kwargs.get("model", get_embedding_model_name("azure")),
             max_retries=kwargs.get("max_retries", 5)
         )
 
@@ -115,7 +119,10 @@ class OpenAILLMProvider(LLMProviderBase):
         """
         return OpenAIEmbeddings(
             openai_api_key=kwargs.get("openai_api_key", LLM_EMBEDDING_CONFIG.get("openai_api_key")),
-            model=kwargs.get("model", LLM_EMBEDDING_CONFIG.get("openai_model", "text-embedding-ada-002")),
+            # 模型名统一从 settings.get_embedding_model_name() 取（键
+            # openai_embedding_model / env OPENAI_EMBEDDING_MODEL）；这里以前读的是
+            # "openai_model"，settings 里没有这个键，配置被静默忽略。
+            model=kwargs.get("model", get_embedding_model_name("openai")),
             max_retries=kwargs.get("max_retries", 5)
         )
 
@@ -151,7 +158,7 @@ class OllamaLLMProvider(LLMProviderBase):
         """
         return OllamaEmbeddings(
             base_url=kwargs.get("base_url", LLM_EMBEDDING_CONFIG.get("ollama_base_url", "http://localhost:11434")),
-            model=kwargs.get("model", LLM_EMBEDDING_CONFIG.get("ollama_model", "llama3")),
+            model=kwargs.get("model", get_embedding_model_name("ollama")),
         )
 
 
@@ -196,7 +203,7 @@ class GeminiLLMProvider(LLMProviderBase):
         
         config = {
             "google_api_key": kwargs.get("google_api_key", LLM_EMBEDDING_CONFIG.get("gemini_api_key")),
-            "model": kwargs.get("model", LLM_EMBEDDING_CONFIG.get("gemini_embedding_model", "text-embedding-004"))
+            "model": kwargs.get("model", get_embedding_model_name("gemini"))
         }
         
         if base_url:

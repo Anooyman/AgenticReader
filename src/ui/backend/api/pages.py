@@ -1,13 +1,10 @@
 """页面路由"""
 
-import json
-
 from fastapi import APIRouter, Request
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 
 from ..config import TEMPLATES_DIR
-from src.pipeline.qa_labels import QA_LABELS
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -41,15 +38,6 @@ async def data_management(request: Request):
 async def structure_editor(request: Request):
     """文档结构编辑器页面"""
     return templates.TemplateResponse("structure_editor.html", {"request": request})
-
-
-@router.get("/report", response_class=HTMLResponse)
-async def report_page(request: Request):
-    """论文/文章摘要卡片浏览页面"""
-    return templates.TemplateResponse("report.html", {
-        "request": request,
-        "qa_labels_json": json.dumps(QA_LABELS, ensure_ascii=False),
-    })
 
 
 @router.get("/briefs", response_class=HTMLResponse)

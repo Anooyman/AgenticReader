@@ -18,6 +18,19 @@ from .utils import IndexingUtils
 logger = logging.getLogger(__name__)
 
 
+def _route_on_error(next_node: str):
+    """
+    错误短路路由工厂：state 中存在 error 时直接跳到 register 节点
+    （register 内部有守卫，不会把失败文档注册为 completed），否则走正常下一节点
+    """
+    def router(state: IndexingState) -> str:
+        if state.get("error"):
+            logger.warning(f"⚠️ [Graph] 检测到错误，跳过后续生成类节点，直达 register: {state['error']}")
+            return "register"
+        return next_node
+    return router
+
+
 class IndexingAgent(AgentBase):
     """
     索引构建Agent
@@ -128,13 +141,20 @@ class IndexingAgent(AgentBase):
         workflow.add_node("generate_brief_summary", self.nodes.generate_brief_summary)
         workflow.add_node("register", self.nodes.register_document)
 
-        # 添加边 - 线性流程，每个节点内部根据标志决定是否跳过
+        # 添加边 - 线性流程，每个节点内部根据标志决定是否跳过；
+        # 高风险节点（parse/extract/chunk/process/build）后加错误短路：
+        # state 有 error 时跳过剩余生成类节点直达 register（register 内有守卫）
         workflow.add_edge("check_cache", "parse")
-        workflow.add_edge("parse", "extract_structure")
-        workflow.add_edge("extract_structure", "chunk")
-        workflow.add_edge("chunk", "process_chapters")
-        workflow.add_edge("process_chapters", "build_index")
-        workflow.add_edge("build_index", "generate_brief_summary")
+        workflow.add_conditional_edges("parse", _route_on_error("extract_structure"),
+                                        {"extract_structure": "extract_structure", "register": "register"})
+        workflow.add_conditional_edges("extract_structure", _route_on_error("chunk"),
+                                        {"chunk": "chunk", "register": "register"})
+        workflow.add_conditional_edges("chunk", _route_on_error("process_chapters"),
+                                        {"process_chapters": "process_chapters", "register": "register"})
+        workflow.add_conditional_edges("process_chapters", _route_on_error("build_index"),
+                                        {"build_index": "build_index", "register": "register"})
+        workflow.add_conditional_edges("build_index", _route_on_error("generate_brief_summary"),
+                                        {"generate_brief_summary": "generate_brief_summary", "register": "register"})
         workflow.add_edge("generate_brief_summary", "register")
         workflow.add_edge("register", END)
 
@@ -171,10 +191,13 @@ class IndexingAgent(AgentBase):
         workflow.add_node("generate_brief_summary", self.nodes.generate_brief_summary)
         workflow.add_node("register", self.nodes.register_document)
 
-        # 线性流程
-        workflow.add_edge("chunk", "process_chapters")
-        workflow.add_edge("process_chapters", "build_index")
-        workflow.add_edge("build_index", "generate_brief_summary")
+        # 线性流程（与主图一致：节点后加错误短路，有 error 直达 register）
+        workflow.add_conditional_edges("chunk", _route_on_error("process_chapters"),
+                                        {"process_chapters": "process_chapters", "register": "register"})
+        workflow.add_conditional_edges("process_chapters", _route_on_error("build_index"),
+                                        {"build_index": "build_index", "register": "register"})
+        workflow.add_conditional_edges("build_index", _route_on_error("generate_brief_summary"),
+                                        {"generate_brief_summary": "generate_brief_summary", "register": "register"})
         workflow.add_edge("generate_brief_summary", "register")
         workflow.add_edge("register", END)
 

@@ -16,7 +16,10 @@ from pathlib import Path
 from typing import Optional
 import os
 
-from src.agents.indexing import IndexingAgent
+# 注意：IndexingAgent 依赖 src.agents（会连带拉起 langgraph），为避免
+# core -> agents 的模块级循环 import 边，这里不做模块级 import：
+# 需要时由 _create_indexing_agent() 在函数体内延迟 import，
+# 也可由调用方通过 agent_factory 参数注入自定义工厂。
 from src.core.document_management import DocumentRegistry
 
 # 获取 DATA_ROOT，如果导入失败则使用默认值
@@ -43,6 +46,21 @@ logger = logging.getLogger(__name__)
 
 # 调试信息
 logger.debug(f"DATA_ROOT 路径: {DATA_ROOT}")
+
+
+def _default_indexing_agent_factory(provider: str, pdf_preset: str):
+    """
+    默认的 IndexingAgent 工厂：延迟 import，保证模块级不依赖 src.agents。
+
+    Args:
+        provider: LLM 提供商
+        pdf_preset: PDF 转图片质量预设
+
+    Returns:
+        IndexingAgent 实例
+    """
+    from src.agents.indexing import IndexingAgent  # 延迟 import：断开 core -> agents 模块级边
+    return IndexingAgent(provider=provider, pdf_preset=pdf_preset)
 
 
 def print_section(title: str):
@@ -106,7 +124,8 @@ async def index_pdf_document(
     pdf_name: str,
     force_reindex: bool = False,
     provider: str = 'openai',
-    pdf_preset: str = 'high'
+    pdf_preset: str = 'high',
+    agent_factory=None
 ) -> bool:
     """
     索引 PDF 文档
@@ -116,6 +135,9 @@ async def index_pdf_document(
         force_reindex: 是否强制重新索引
         provider: LLM 提供商 ('azure', 'openai', 'ollama', 'gemini')
         pdf_preset: PDF 转图片质量预设 ('fast', 'balanced', 'high', 'ultra')
+        agent_factory: 可选的 agent 工厂，形如 factory(provider=..., pdf_preset=...)
+            -> agent 实例。为 None 时在函数体内延迟 import 默认的 IndexingAgent，
+            保持既有调用方（无需传参）的行为不变
 
     Returns:
         bool: 是否成功
@@ -153,7 +175,8 @@ async def index_pdf_document(
         logger.info("\n🔧 初始化 IndexingAgent...")
         logger.info(f"   Provider: {provider}")
         logger.info(f"   PDF Preset: {pdf_preset}")
-        indexing_agent = IndexingAgent(provider=provider, pdf_preset=pdf_preset)
+        factory = agent_factory or _default_indexing_agent_factory
+        indexing_agent = factory(provider=provider, pdf_preset=pdf_preset)
         logger.info("✅ IndexingAgent 初始化完成")
 
         # 调用 graph 进行索引
@@ -186,7 +209,8 @@ async def index_pdf_document(
 
             return True
         else:
-            logger.warning(f"⚠️  索引未完成")
+            error_msg = result.get("error")
+            logger.warning(f"⚠️  索引未完成" + (f": {error_msg}" if error_msg else ""))
             return False
 
     except Exception as e:

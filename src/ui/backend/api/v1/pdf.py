@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 from ...config import PDF_DIR, PDF_IMAGE_DIR
+from src.utils.path_guard import safe_path
 
 router = APIRouter()
 
@@ -14,6 +15,12 @@ router = APIRouter()
 async def view_pdf(doc_name: str):
     """查看PDF文件"""
     try:
+        # 目录穿越防护
+        try:
+            safe_path(PDF_DIR, doc_name)
+        except ValueError as guard_e:
+            raise HTTPException(status_code=400, detail=f"非法文档名: {guard_e}")
+
         # 支持带 .pdf 和不带 .pdf 后缀
         pdf_path = PDF_DIR / doc_name
         if not pdf_path.exists():
@@ -39,6 +46,12 @@ async def view_pdf(doc_name: str):
 async def get_pdf_images(doc_name: str) -> Dict[str, Any]:
     """获取PDF图片列表"""
     try:
+        # 目录穿越防护
+        try:
+            safe_path(PDF_IMAGE_DIR, doc_name)
+        except ValueError as guard_e:
+            raise HTTPException(status_code=400, detail=f"非法文档名: {guard_e}")
+
         pdf_image_dir = PDF_IMAGE_DIR / doc_name
 
         if not pdf_image_dir.exists():
@@ -85,7 +98,12 @@ async def get_pdf_images(doc_name: str) -> Dict[str, Any]:
 async def get_pdf_image(doc_name: str, filename: str):
     """获取单个PDF图片"""
     try:
-        image_path = PDF_IMAGE_DIR / doc_name / filename
+        # 目录穿越防护：doc_name 与 filename 都需限制在图片目录内
+        try:
+            doc_dir = safe_path(PDF_IMAGE_DIR, doc_name)
+            image_path = safe_path(doc_dir, filename)
+        except ValueError as guard_e:
+            raise HTTPException(status_code=400, detail=f"非法路径: {guard_e}")
 
         if not image_path.exists():
             raise HTTPException(status_code=404, detail=f"图片不存在: {filename}")

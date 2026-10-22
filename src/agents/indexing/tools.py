@@ -715,6 +715,17 @@ class IndexingTools:
             doc_json_folder = os.path.join(self.agent.json_data_path, doc_name)
             chunks_path = os.path.join(doc_json_folder, "chunks.json")
 
+            # 失败传播：图内节点出错时如实返回失败，而不是报"重建完成"
+            if result_state.get("error") or not result_state.get("is_complete", False):
+                error_msg = result_state.get("error") or "重建流程未完成（is_complete=False）"
+                logger.error(f"❌ [Rebuild] 重建失败: {error_msg}")
+                return {
+                    "success": False,
+                    "doc_name": doc_name,
+                    "error": error_msg,
+                    "status": "error"
+                }
+
             logger.info(f"✅ [Rebuild] 重建完成！")
             logger.info(f"   📊 章节数: {len(result_state.get('agenda_data_list', []))}")
             logger.info(f"   📁 生成文件: {len(result_state.get('generated_files', {}).get('summaries', []))} 个摘要")

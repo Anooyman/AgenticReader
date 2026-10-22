@@ -1,11 +1,12 @@
 """QA 维度 key -> 中文展示标签的唯一定义处。
 
-Python 侧统一 `from src.pipeline.qa_labels import QA_LABELS`；前端由
-pages.py 渲染 report.html 时注入 window.QA_LABELS，不再自带副本。
+Python 侧统一 `from src.pipeline.qa_labels import QA_LABELS`。原来由
+report 页面经 pages.py 注入 window.QA_LABELS 供前端渲染，该页面已下线，
+现在只有 Python 侧使用。
 
 与 src/memory/adapters/ai_research.py 里的同名映射保持一致——两处都需要
-（这里给 report/render_report 用，memory 那边给 chunk 分段用），修改维度名
-时要同步改两处。
+（这里给 render_report 用，memory 那边给 chunk 分段用），修改维度名时要
+同步改两处。
 """
 
 QA_LABELS = {

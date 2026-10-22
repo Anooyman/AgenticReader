@@ -1,7 +1,8 @@
 """
 AnswerAgent Workflow节点方法
 
-ReAct循环架构：plan → execute → evaluate → (循环或结束) → generate
+单轮确定性架构：rewrite_query → plan → execute → evaluate → generate
+（不再回环到 plan 做二次规划，evaluate 仅作终止标记）
 """
 
 from __future__ import annotations
@@ -278,7 +279,7 @@ class AnswerNodes:
 
     async def plan(self, state: AnswerState) -> AnswerState:
         """
-        ReAct循环 - Plan节点（确定性逻辑）
+        Plan 节点（确定性逻辑，无 LLM 参与）
 
         用户通过 enabled_tools 控制使用哪些工具，plan 节点只做：
         1. 初始化状态字段
@@ -288,7 +289,7 @@ class AnswerNodes:
         iteration = state.get("current_iteration", 0)
 
         logger.info("=" * 80)
-        logger.info(f"🧠 [Plan] ========== 迭代 {iteration}: 工具规划 ==========")
+        logger.info("🧠 [Plan] ========== 工具规划 ==========")
         logger.info("=" * 80)
 
         user_query = state["user_query"]
@@ -303,7 +304,8 @@ class AnswerNodes:
             message=f"正在分析查询: {user_query[:30]}..."
         )
 
-        # 初始化状态字段（首次迭代）
+        # 初始化状态字段
+        # （current_iteration / max_iterations 仅作兼容保留，不再驱动多轮规划）
         if "thoughts" not in state:
             state["thoughts"] = []
         if "tool_calls" not in state:
@@ -416,7 +418,7 @@ class AnswerNodes:
 
     async def execute_tools(self, state: AnswerState) -> AnswerState:
         """
-        ReAct循环 - Execute节点
+        Execute 节点
 
         执行 plan 节点决定的工具调用。
         """
@@ -509,35 +511,29 @@ class AnswerNodes:
 
     async def evaluate(self, state: AnswerState) -> AnswerState:
         """
-        ReAct循环 - Evaluate节点
+        Evaluate 节点
 
-        评估是否已有足够信息回答用户问题。
+        评估是否已有足够信息回答用户问题，设置 is_complete 终止标记。
+        在当前单轮架构下，该节点后直接进入 generate，不再回环到 plan，
+        因此不再依赖 current_iteration / max_iterations 做迭代终止判断
+        （这两个字段仅保留以兼容旧代码引用）。
         """
         logger.info("=" * 80)
         logger.info("📊 [Evaluate] ========== 评估完整性 ==========")
         logger.info("=" * 80)
 
-        current_iteration = state.get("current_iteration", 0)
-        max_iterations = state.get("max_iterations", 3)
         tool_results = state.get("tool_results", [])
 
-        # 终止条件1：达到最大迭代次数
-        if current_iteration >= max_iterations:
-            logger.info(f"⏹️  [Evaluate] 达到最大迭代次数 ({max_iterations})，停止")
-            state["is_complete"] = True
-            return state
-
-        # 终止条件2：所有工具调用都失败
+        # 终止条件1：所有工具调用都失败
         if tool_results:
             all_failed = all(not r.get("success", False) for r in tool_results)
             if all_failed:
-                logger.warning(f"⚠️ [Evaluate] 所有工具调用都失败，停止迭代")
+                logger.warning(f"⚠️ [Evaluate] 所有工具调用都失败，进入生成")
                 state["is_complete"] = True
                 return state
 
-        # 终止条件3：有成功的工具结果（默认一轮成功即足够）
+        # 终止条件2：有成功的工具结果（单轮架构下一轮成功即足够）
         # 对于大多数文档检索场景，一轮检索已足够
-        # 如果需要更多信息，plan节点会在下一轮判断
         has_success = any(r.get("success", False) for r in tool_results)
         if has_success:
             # 检查最近一轮的结果是否有实质内容
@@ -552,27 +548,15 @@ class AnswerNodes:
 
             if has_content:
                 logger.info(f"✅ [Evaluate] 有充足的工具结果，准备生成答案")
-                state["is_complete"] = True
-                return state
             else:
-                logger.info(f"🔄 [Evaluate] 工具成功但内容不足，继续迭代")
-                # 不标记完成，让 plan 节点再次决策
-                return state
+                logger.info(f"ℹ️  [Evaluate] 工具成功但内容较少，单轮架构下直接进入 generate")
+            state["is_complete"] = True
+            return state
 
         # 没有工具结果（不应该到这里，但安全起见）
         logger.info(f"⚠️ [Evaluate] 无工具结果，标记完成")
         state["is_complete"] = True
         return state
-
-    # ==================== Router: should_continue ====================
-
-    def should_continue(self, state: AnswerState) -> str:
-        """evaluate 节点后的路由"""
-        if state.get("is_complete", False):
-            logger.info("🔀 [Route] evaluate → generate（完成）")
-            return "finish"
-        logger.info("🔀 [Route] evaluate → plan（继续迭代）")
-        return "continue"
 
     # ==================== Node 4: generate_answer ====================
 

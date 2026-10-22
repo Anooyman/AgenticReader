@@ -1,10 +1,12 @@
 import logging
 import os
 import hashlib
-from typing import List, Dict, Optional, Any, Callable, Set
+from typing import List, Dict, Optional, Any, Callable
 
 from langchain.docstore.document import Document
 from langchain_community.vectorstores import FAISS
+
+from src.config.constants import RetrievalDedupConfig
 
 # 注意：不再继承 LLMBase，改用组合模式（依赖注入）
 
@@ -40,7 +42,13 @@ class VectorDBClient:
         self.vector_db: Optional[FAISS] = None
 
         # 用于存储已检索文档的哈希值，防止重复检索
-        self._retrieved_doc_hashes: Set[str] = set()
+        # 结构：doc_hash -> 最近一次命中的对话轮次号
+        # 仅保留最近 RETRIEVAL_DEDUP_WINDOW 轮的记录，更早的记录自动淘汰，
+        # 避免多轮对话中检索空间被去重集合单调收窄
+        self._retrieved_doc_hashes: Dict[str, int] = {}
+
+        # 当前对话轮次（由检索链路在检索前同步进来，默认第 0 轮）
+        self._current_turn: int = 0
 
         # 尝试自动加载已存在的向量数据库
         # 检查 index.faiss 文件是否存在（而不仅仅是目录）
@@ -246,7 +254,8 @@ class VectorDBClient:
         field_name: Optional[str] = None,
         field_value: Optional[Any] = None,
         fetch_k: Optional[int] = None,
-        enable_dedup: bool = True
+        enable_dedup: bool = True,
+        conversation_turn: Optional[int] = None
     ) -> List[tuple]:
         """
         使用元数据过滤进行向量检索
@@ -259,6 +268,9 @@ class VectorDBClient:
             fetch_k (int, optional): 过滤前获取的文档数量。如果使用过滤器但未指定，
                                      默认为 k*4 和 100 中的较大值，以确保有足够的候选文档
             enable_dedup (bool): 是否启用去重过滤，默认 True
+            conversation_turn (int, optional): 当前对话轮次。传入后会用它更新
+                                     去重窗口（更老的命中记录会被淘汰）；
+                                     不传则沿用客户端已有的轮次
 
         Returns:
             List[tuple]: 检索结果列表，每个元素为 (Document, score) 格式
@@ -275,6 +287,11 @@ class VectorDBClient:
             raise ValueError("向量数据库未加载，请先调用 load_vector_db() 或 build_vector_db()")
 
         try:
+            # 检查当前对话轮次：如果上层显式传入，则同步进来
+            # （轮次变化时会自动淘汰超出窗口的旧去重记录）
+            if conversation_turn is not None:
+                self.set_current_turn(conversation_turn)
+
             # 构建过滤器列表
             filters = []
 
@@ -349,31 +366,54 @@ class VectorDBClient:
 
         except Exception as e:
             logger.error(f"元数据过滤检索失败: {e}")
-            # 如果是维度不匹配等严重错误，直接抛出
+            # 维度不匹配 / 参数非法等严重错误一律上抛，不做任何降级
             if isinstance(e, (ValueError, AssertionError)):
                 raise
-            # 其他错误时执行普通检索作为备选
-            logger.info("执行备选普通检索")
-            try:
-                return self.vector_db.similarity_search_with_score(query, k=k)
-            except AssertionError as ae:
-                # 备选检索也失败，说明是维度问题
-                if hasattr(self.vector_db, 'index') and hasattr(self.vector_db.index, 'd'):
-                    stored_dim = self.vector_db.index.d
-                    test_embedding = self.embedding_model.embed_query("test")
-                    current_dim = len(test_embedding)
 
-                    error_msg = (
-                        f"❌ Embedding维度不匹配！\n"
-                        f"向量数据库维度: {stored_dim}\n"
-                        f"当前Embedding模型维度: {current_dim}\n"
-                        f"数据库路径: {self.db_path}\n\n"
-                        f"请删除旧的向量数据库并重新索引文档，或使用与索引时相同的embedding模型。"
-                    )
-                    logger.error(error_msg)
-                    raise ValueError(error_msg) from ae
-                else:
-                    raise
+            # 兜底策略（防御性）：
+            #   1) 字段过滤（type / pdf_name / doc_id 等）必须保留——它决定结果归属，
+            #      一旦丢失，调用方拿到的就是未经筛选的噪声；
+            #   2) 去重过滤只是"尽力而为"，允许在降级时放宽（仅影响重复率，不影响归属）；
+            #   3) 若既没有字段过滤、也没有去重可放宽，"兜底"就等价于
+            #      similarity_search_with_score(query, k)——完全无过滤的检索，
+            #      会被调用方误当成正常结果，因此直接抛原始异常交上层处理。
+            if not (field_name and field_value is not None):
+                logger.error(
+                    f"❌ 过滤检索失败且无字段过滤可保留（field_name={field_name}），"
+                    f"拒绝无过滤兜底，抛出原始异常由上层处理"
+                )
+                raise
+            # 若本次就没启用去重，则降级路径与正常路径参数完全一致，
+            # 重试只是白跑一遍——同样抛原始异常，由上层决定重试或降级策略。
+            if not enable_dedup:
+                logger.error(
+                    f"❌ 过滤检索失败且本次未启用去重，无放宽空间"
+                    f"（{field_name}={field_value}），拒绝无意义重试，抛出原始异常"
+                )
+                raise
+
+            # 唯一的降级形态：保留字段过滤、放宽去重，并明确标记——
+            # 调用方即便把返回值当"正常"，也应能从日志看到「降级」告警。
+            logger.warning(
+                f"⚠️ [降级检索] 组合过滤检索失败，降级为「仅保留字段过滤 "
+                f"{field_name}={field_value}」的检索（去重被放宽，非正常结果，"
+                f"原始异常: {e}）"
+            )
+            try:
+                metadata_filter = self.make_metadata_filter(field_name, field_value)
+                fallback_fetch_k = fetch_k if fetch_k is not None else max(k * 4, 100)
+                results = self.vector_db.similarity_search_with_score(
+                    query, k=k, filter=metadata_filter, fetch_k=fallback_fetch_k
+                )
+                logger.warning(
+                    f"⚠️ [降级检索] 完成，返回 {len(results)} 个结果"
+                    f"（字段过滤仍生效，但去重未生效，请勿按正常去重结果使用）"
+                )
+                return results
+            except Exception as fallback_error:
+                # 保留字段过滤后仍然失败，说明检索本身不可用，不再兜底
+                logger.error(f"❌ 降级检索同样失败: {fallback_error}，抛出原始异常")
+                raise
 
     def search_by_pdf_name(
         self,
@@ -381,7 +421,8 @@ class VectorDBClient:
         pdf_name: str,
         k: int = 99,
         fetch_k: Optional[int] = None,
-        enable_dedup: bool = True
+        enable_dedup: bool = True,
+        conversation_turn: Optional[int] = None
     ) -> List[tuple]:
         """
         按PDF名称过滤进行检索的便利方法
@@ -392,6 +433,7 @@ class VectorDBClient:
             k (int): 返回结果数量，默认99
             fetch_k (int, optional): 过滤前获取的文档数量
             enable_dedup (bool): 是否启用去重过滤，默认 True
+            conversation_turn (int, optional): 当前对话轮次，透传给底层检索
 
         Returns:
             List[tuple]: 检索结果列表
@@ -400,7 +442,8 @@ class VectorDBClient:
             query=query, k=k,
             field_name="pdf_name", field_value=pdf_name,
             fetch_k=fetch_k,
-            enable_dedup=enable_dedup
+            enable_dedup=enable_dedup,
+            conversation_turn=conversation_turn
         )
 
     def search_by_title(
@@ -409,7 +452,8 @@ class VectorDBClient:
         doc_type: str = "title",
         k: int = 1,
         fetch_k: Optional[int] = None,
-        enable_dedup: bool = True
+        enable_dedup: bool = True,
+        conversation_turn: Optional[int] = None
     ) -> List[tuple]:
         """
         按标题检索文档的便利方法
@@ -421,6 +465,7 @@ class VectorDBClient:
             fetch_k (int, optional): 过滤前获取的文档数量。如果未指定，
                                      默认为 k*4 和 100 中的较大值
             enable_dedup (bool): 是否启用去重过滤，默认 True
+            conversation_turn (int, optional): 当前对话轮次，透传给底层检索
 
         Returns:
             List[tuple]: 检索结果列表
@@ -429,7 +474,8 @@ class VectorDBClient:
             query=title, k=k,
             field_name="type", field_value=doc_type,
             fetch_k=fetch_k,
-            enable_dedup=enable_dedup
+            enable_dedup=enable_dedup,
+            conversation_turn=conversation_turn
         )
 
     def _compute_document_hash(self, content: str) -> str:
@@ -448,52 +494,131 @@ class VectorDBClient:
             return ""
         return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
+    def set_current_turn(self, turn: int) -> None:
+        """
+        设置当前对话轮次
+
+        轮次变化时会自动淘汰超出窗口的旧去重记录，
+        因此对话再久去重集合也不会无限增长、导致检索空间单调收窄。
+
+        Args:
+            turn (int): 当前对话轮次（从 0 开始）
+        """
+        if not isinstance(turn, int) or turn < 0:
+            logger.debug(f"忽略非法的对话轮次值: {turn!r}")
+            return
+
+        if turn < self._current_turn:
+            # 轮次回退意味着这是一个新的对话会话：整体清空去重历史
+            logger.info(
+                f"🔄 检测到对话轮次回退（{self._current_turn} → {turn}），"
+                f"按新会话清空检索去重历史"
+            )
+            self._retrieved_doc_hashes.clear()
+            self._current_turn = turn
+            return
+
+        if turn == self._current_turn:
+            return
+
+        self._current_turn = turn
+        logger.debug(f"🔄 检索去重轮次更新为第 {turn} 轮")
+        self._prune_expired_dedup_records()
+
+    def _prune_expired_dedup_records(self) -> int:
+        """
+        淘汰超出窗口（最近 RETRIEVAL_DEDUP_WINDOW 轮）的旧去重记录
+
+        记录本身按命中轮次单调递增，因此可从队首连续淘汰。
+
+        Returns:
+            int: 被淘汰的记录数量
+        """
+        window = max(int(getattr(RetrievalDedupConfig, "WINDOW", 5)), 1)
+        cutoff_turn = self._current_turn - window + 1
+        if cutoff_turn <= 0:
+            return 0
+
+        removed = 0
+        for doc_hash in list(self._retrieved_doc_hashes.keys()):
+            if self._retrieved_doc_hashes[doc_hash] < cutoff_turn:
+                # 该记录已超出窗口：后续轮次会重新把它视为“未检索过”
+                del self._retrieved_doc_hashes[doc_hash]
+                removed += 1
+            else:
+                # 轮次递增序列，后续都不会再落入过期区间
+                break
+
+        if removed:
+            logger.info(
+                f"🧹 检索去重窗口淘汰：第 {self._current_turn} 轮，"
+                f"丢弃 {removed} 条超出 {window} 轮窗口的旧命中记录，"
+                f"剩余 {len(self._retrieved_doc_hashes)} 条"
+            )
+        return removed
+
     def is_document_retrieved(self, content: str) -> bool:
         """
-        检查文档是否已被检索过
+        检查文档在当前去重窗口内是否已被检索过
 
         Args:
             content (str): 文档内容
 
         Returns:
-            bool: True 表示已检索过，False 表示未检索过
+            bool: True 表示窗口内已检索过，False 表示窗口内未检索过
         """
         if not content:
             return False
         doc_hash = self._compute_document_hash(content)
-        return doc_hash in self._retrieved_doc_hashes
+        hit_turn = self._retrieved_doc_hashes.get(doc_hash)
+        if hit_turn is None:
+            return False
+
+        # 超出窗口的记录不再视为“已检索过”（正常已由淘汰逻辑清理，这里兜底）
+        window = max(int(getattr(RetrievalDedupConfig, "WINDOW", 5)), 1)
+        if self._current_turn - hit_turn >= window:
+            self._retrieved_doc_hashes.pop(doc_hash, None)
+            return False
+        return True
 
     def mark_document_as_retrieved(self, content: str) -> None:
         """
-        将文档标记为已检索
+        将文档标记为已检索（记录为当前对话轮次）
 
         Args:
             content (str): 文档内容
         """
         if content:
             doc_hash = self._compute_document_hash(content)
-            self._retrieved_doc_hashes.add(doc_hash)
-            logger.debug(f"文档已标记为已检索 (hash: {doc_hash[:8]}...)")
+            # 重新命中时移到末尾，保证淘汰时队首始终是最早命中的记录
+            self._retrieved_doc_hashes.pop(doc_hash, None)
+            self._retrieved_doc_hashes[doc_hash] = self._current_turn
+            logger.debug(f"文档已标记为已检索 (轮次: {self._current_turn}, hash: {doc_hash[:8]}...)")
+            self._prune_expired_dedup_records()
 
     def reset_retrieval_history(self) -> None:
         """
         重置检索历史
 
-        清除所有已检索文档的哈希记录，允许在新的查询会话中重新检索相同的文档。
-        建议在开始新的用户查询会话时调用此方法。
+        清除所有已检索文档的轮次记录并复位轮次计数，允许在新的查询会话中
+        重新检索相同的文档。
+        建议在新会话开始 / 切换文档 / 清空对话历史时调用此方法。
         """
         count = len(self._retrieved_doc_hashes)
         self._retrieved_doc_hashes.clear()
-        logger.info(f"✅ 已重置检索历史，清除了 {count} 个文档哈希记录")
+        self._current_turn = 0
+        logger.info(f"✅ 已重置检索历史，清除了 {count} 个文档哈希记录（轮次归零）")
 
     def get_retrieval_stats(self) -> Dict[str, int]:
         """
         获取检索统计信息
 
         Returns:
-            Dict[str, int]: 包含已检索文档数量的统计信息
+            Dict[str, int]: 包含已检索文档数量、当前轮次与去重窗口的统计信息
         """
         return {
-            "retrieved_documents_count": len(self._retrieved_doc_hashes)
+            "retrieved_documents_count": len(self._retrieved_doc_hashes),
+            "current_turn": self._current_turn,
+            "dedup_window": max(int(getattr(RetrievalDedupConfig, "WINDOW", 5)), 1)
         }
 

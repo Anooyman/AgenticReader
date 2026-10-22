@@ -1078,9 +1078,12 @@ class ChatApp {
         document.getElementById('send-btn').disabled = true;
 
         // Send message with tool/doc context
+        // session_id：服务端按它把消息写入对应的会话文件，缺省时服务端
+        // 会退回到"最近活跃会话"（兼容旧客户端）。
         this.ws.send(JSON.stringify({
             type: 'user_message',
             message: message,
+            session_id: this.sessionId || null,
             enabled_tools: this.enabledTools.length > 0 ? this.enabledTools : null,
             selected_docs: this.selectedDocs
         }));
@@ -1677,7 +1680,20 @@ class ChatApp {
 
     async clearChat() {
         try {
-            await API.chat.clear();
+            // 直接带 session_id 请求：清空的是当前会话的历史，而不是服务端
+            // "最近活跃会话"（api.js 的 API.chat.clear() 不带会话ID，此处保留
+            // 兼容但仍显式指定会话，避免多会话时清空错文件）。
+            const res = await fetch('/api/v1/chat/clear', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: this.sessionId || null })
+            });
+            if (!res.ok) {
+                const error = await res.json().catch(() => ({}));
+                throw new Error(error.detail || '清空失败');
+            }
+            await res.json();
+
             document.getElementById('messages').innerHTML = '<div class="welcome"><div style="font-size: 4rem; margin-bottom: 1rem;">✨</div><h3>对话已清空</h3><p>可以开始新的对话了</p></div>';
             // 重置分页状态
             this.loadedMessageCount = 0;
@@ -1742,9 +1758,11 @@ class ChatApp {
                 loadMoreBtn.innerHTML = '<button disabled>⏳ 加载中...</button>';
             }
 
-            // 调用API加载更多消息
+            // 调用API加载更多消息（显式带 session_id，避免服务端回退到
+            // "最近活跃会话"时取错会话的历史）
             const response = await fetch(
-                `/api/v1/chat/load-more-messages?offset=${this.loadedMessageCount}&limit=20`
+                `/api/v1/chat/load-more-messages?offset=${this.loadedMessageCount}&limit=20` +
+                (this.sessionId ? `&session_id=${encodeURIComponent(this.sessionId)}` : '')
             );
 
             if (!response.ok) {

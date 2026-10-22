@@ -50,6 +50,10 @@ class RetrievalAgent(AgentBase):
         # 检索缓存字典（提升性能，避免重复检索）
         self.retrieval_data_dict: Dict[str, Any] = {}
 
+        # 当前对话轮次（由 initialize 节点从 state 同步，用于检索去重窗口）
+        # None 表示尚未获知轮次，此时不会向向量库下发轮次
+        self.current_conversation_turn = None
+
         # 持久化状态（跨多轮检索保留 ReAct 历史）
         # 保留：thoughts, actions, observations, retrieved_content 等
         # 用于：基于历史优化查询、避免重复检索

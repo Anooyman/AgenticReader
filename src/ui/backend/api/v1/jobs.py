@@ -1,4 +1,4 @@
-"""后台任务查询/重试 API——供 briefs/report 页面轮询处理进度。"""
+"""后台任务查询/重试 API——供 briefs 页面轮询处理进度。"""
 from fastapi import APIRouter, HTTPException
 
 from src.ui.backend.services import job_runner

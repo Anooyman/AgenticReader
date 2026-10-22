@@ -49,16 +49,6 @@ async def post_load(body: dict):
     return {"requested": len(item_ids), "queued": len(jobs), "jobs": jobs}
 
 
-@router.post("/render-report")
-async def post_render_report(body: dict):
-    coverage_date = (body or {}).get("coverage_date")
-    if not coverage_date:
-        raise HTTPException(status_code=400, detail="coverage_date is required")
-    job = await job_runner.enqueue("render_report", coverage_date,
-                                   title=f"生成 {coverage_date} 的报告")
-    return {"job": job}
-
-
 @router.post("/sync-memory")
 async def post_sync_memory():
     """把所有还没入库的摘要补灌进 memory。

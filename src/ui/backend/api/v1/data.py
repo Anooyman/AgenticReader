@@ -16,6 +16,7 @@ from ...config import (
     PDF_IMAGE_DIR, OUTPUT_DIR, DATA_DIR
 )
 from src.core.document_management import DocumentRegistry
+from src.utils.path_guard import safe_path
 from ...services.task_service import task_manager
 
 router = APIRouter()
@@ -50,6 +51,7 @@ class DocumentDetail(BaseModel):
     vector_db_size_mb: float = 0.0
     images_size_mb: float = 0.0
     summary_size_mb: float = 0.0
+    pdf_size_mb: float = 0.0
     total_size_mb: float = 0.0
 
     # 文件存在状态
@@ -57,6 +59,7 @@ class DocumentDetail(BaseModel):
     has_vector_db: bool = False
     has_images: bool = False
     has_summary: bool = False
+    has_pdf: bool = False
 
     # 时间信息
     created_at: str
@@ -73,12 +76,18 @@ class SessionStats(BaseModel):
 
 class DeletePartsRequest(BaseModel):
     """删除部分数据的请求"""
-    parts: List[str]  # ["json", "vector_db", "images", "summary", "all"]
+    parts: List[str]  # ["json", "vector_db", "images", "summary", "pdf", "all"]
 
 
 class BatchDeleteRequest(BaseModel):
     """批量删除请求"""
     doc_names: List[str]
+    delete_source: bool = False  # 是否同时删除本地源 PDF 文件
+
+
+class PendingPDFDeleteRequest(BaseModel):
+    """删除未索引 PDF 源文件的请求"""
+    filenames: List[str]
 
 
 class PendingPDF(BaseModel):
@@ -118,6 +127,38 @@ def get_dir_size(path: Path) -> float:
     return total_size / (1024 * 1024)  # Convert to MB
 
 
+def get_source_pdf_path(doc_name_base: str, doc_info: Optional[Dict] = None) -> Optional[Path]:
+    """
+    定位文档的本地源 PDF 文件
+
+    优先使用 data/pdf/{name}.pdf（上传/索引时使用的目录），
+    其次回退到注册表里记录的 doc_path（可能是外部路径）。
+
+    Args:
+        doc_name_base: 文档名称（不含 .pdf 扩展名）
+        doc_info: 注册表中的文档信息（可选）
+
+    Returns:
+        存在的源文件路径，找不到则返回 None
+    """
+    candidates = []
+    if PDF_DIR.exists():
+        candidates.append(PDF_DIR / f"{doc_name_base}.pdf")
+    if doc_info:
+        doc_path = doc_info.get("doc_path")
+        if doc_path:
+            candidates.append(Path(doc_path))
+
+    for path in candidates:
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+
+    return None
+
+
 def get_document_data_sizes(doc_name: str, doc_info: Dict) -> Dict[str, float]:
     """
     获取文档各部分数据大小
@@ -137,10 +178,12 @@ def get_document_data_sizes(doc_name: str, doc_info: Dict) -> Dict[str, float]:
         "vector_db_size_mb": 0.0,
         "images_size_mb": 0.0,
         "summary_size_mb": 0.0,
+        "pdf_size_mb": 0.0,
         "has_json": False,
         "has_vector_db": False,
         "has_images": False,
-        "has_summary": False
+        "has_summary": False,
+        "has_pdf": False
     }
 
     # JSON data (in json_data/{doc_name_base}/ directory)
@@ -169,6 +212,12 @@ def get_document_data_sizes(doc_name: str, doc_info: Dict) -> Dict[str, float]:
             if summary_file.exists():
                 sizes["summary_size_mb"] += get_dir_size(summary_file)
                 sizes["has_summary"] = True
+
+    # Source PDF file (in pdf/ directory or registered doc_path)
+    source_pdf = get_source_pdf_path(doc_name_base, doc_info)
+    if source_pdf is not None:
+        sizes["pdf_size_mb"] = get_dir_size(source_pdf)
+        sizes["has_pdf"] = True
 
     return sizes
 
@@ -324,6 +373,7 @@ async def get_documents_detailed():
                 vector_db_size_mb=sizes["vector_db_size_mb"],
                 images_size_mb=sizes["images_size_mb"],
                 summary_size_mb=sizes["summary_size_mb"],
+                pdf_size_mb=sizes["pdf_size_mb"],
                 total_size_mb=(
                     sizes["json_size_mb"] +
                     sizes["vector_db_size_mb"] +
@@ -336,6 +386,7 @@ async def get_documents_detailed():
                 has_vector_db=sizes["has_vector_db"],
                 has_images=sizes["has_images"],
                 has_summary=sizes["has_summary"],
+                has_pdf=sizes["has_pdf"],
 
                 # 时间信息
                 created_at=doc.get("created_at", ""),
@@ -425,6 +476,86 @@ async def get_pending_pdfs():
 
     except Exception as e:
         print(f"❌ 获取待索引PDF列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/pdfs")
+async def delete_pdf_source_files(request: PendingPDFDeleteRequest):
+    """
+    直接删除 data/pdf/ 下的 PDF 源文件（用于清理未索引或遗留的文件）
+
+    出于安全考虑：
+    - 只接受 data/pdf/ 目录内的文件名（禁止路径穿越）
+    - 仍被索引的文档不会在此删除，需通过文档的"完全删除"处理
+
+    Args:
+        request: 要删除的文件名列表
+
+    Returns:
+        删除结果
+    """
+    if not request.filenames:
+        raise HTTPException(status_code=400, detail="未指定要删除的文件")
+
+    try:
+        registry = DocumentRegistry()
+        indexed_names = set()
+        for doc in registry.list_all():
+            name = doc.get("doc_name", "")
+            indexed_names.add(name if name.endswith(".pdf") else f"{name}.pdf")
+
+        pdf_root = PDF_DIR.resolve()
+        deleted_items = []
+        failed_items = []
+        freed_space_mb = 0.0
+
+        for filename in request.filenames:
+            raw = str(filename).strip()
+
+            # 禁止目录穿越 / 子路径
+            if not raw or '/' in raw or '\\' in raw or raw.startswith('.'):
+                failed_items.append(f"{filename}: 非法文件名")
+                continue
+
+            candidate = raw if raw.lower().endswith(".pdf") else f"{raw}.pdf"
+            file_path = PDF_DIR / candidate
+
+            try:
+                if not file_path.is_file():
+                    failed_items.append(f"{candidate}: 文件不存在")
+                    continue
+                if pdf_root not in file_path.resolve().parents:
+                    failed_items.append(f"{candidate}: 不在 PDF 目录内")
+                    continue
+            except OSError as e:
+                failed_items.append(f"{candidate}: {e}")
+                continue
+
+            if candidate in indexed_names:
+                failed_items.append(f"{candidate}: 文档仍处于索引状态，请使用文档的“完全删除”")
+                continue
+
+            try:
+                size = file_path.stat().st_size / (1024 * 1024)
+                file_path.unlink()
+                deleted_items.append(f"{candidate} ({size:.2f} MB)")
+                freed_space_mb += size
+                print(f"✓ 已删除 PDF 源文件: {file_path}")
+            except Exception as e:
+                failed_items.append(f"{candidate}: {e}")
+
+        return {
+            "status": "success" if not failed_items else "partial",
+            "deleted": deleted_items,
+            "failed": failed_items,
+            "count": len(deleted_items),
+            "freed_mb": round(freed_space_mb, 2)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ 删除 PDF 源文件失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -588,6 +719,13 @@ async def delete_document_parts(doc_name: str, request: DeletePartsRequest):
         registry = DocumentRegistry()
         doc_info = registry.get_by_name(doc_name)
 
+        # 目录穿越防护：doc_name 会派生出多个数据目录路径，
+        # 统一校验名称不越过 DATA_DIR，杜绝通过 "../" 等操作删除数据目录外的内容
+        try:
+            safe_path(DATA_DIR, doc_name)
+        except ValueError as guard_e:
+            raise HTTPException(status_code=400, detail=f"非法文档名: {guard_e}")
+
         # 注意：即使Registry中没有记录，也继续尝试删除文件
         # 这样可以清理孤立的文件（Registry已被删除但文件还在的情况）
 
@@ -600,9 +738,12 @@ async def delete_document_parts(doc_name: str, request: DeletePartsRequest):
 
         parts = request.parts
 
-        # 如果包含 "all"，则删除所有部分
+        # 如果包含 "all"，则删除所有派生数据
+        # 注意："all" 不包含本地源 PDF 文件，需显式指定 "pdf"
         if "all" in parts:
-            parts = ["json", "vector_db", "images", "summary", "registry"]
+            parts = ["json", "vector_db", "images", "summary", "registry"] + (
+                ["pdf"] if "pdf" in parts else []
+            )
 
         # 删除 JSON 数据
         if "json" in parts:
@@ -654,6 +795,21 @@ async def delete_document_parts(doc_name: str, request: DeletePartsRequest):
                             freed_space_mb += size
                         except Exception as e:
                             failed_items.append(f"摘要 ({ext}): {e}")
+
+        # 删除本地源 PDF 文件（需显式指定 "pdf"，"all" 不包含它）
+        if "pdf" in parts:
+            source_pdf = get_source_pdf_path(doc_name_base, doc_info)
+            if source_pdf is not None:
+                try:
+                    size = get_dir_size(source_pdf)
+                    source_pdf.unlink()
+                    deleted_items.append(f"源 PDF 文件 ({size:.2f} MB)")
+                    freed_space_mb += size
+                    print(f"✓ 已删除源 PDF 文件: {source_pdf}")
+                except Exception as e:
+                    failed_items.append(f"源 PDF 文件: {e}")
+            else:
+                print(f"ℹ️  未找到 {doc_name_base} 的源 PDF 文件，跳过")
 
         # 如果删除了所有部分，则从注册表和元数据向量数据库中删除
         if "registry" in parts or set(parts) >= {"json", "vector_db", "images", "summary"}:
@@ -732,11 +888,24 @@ async def batch_delete_documents(request: BatchDeleteRequest):
 
         for doc_name in request.doc_names:
             try:
+                # 逐条做目录穿越校验，非法名称直接记为失败（不静默跳过、不删除）
+                try:
+                    safe_path(DATA_DIR, doc_name)
+                except ValueError as guard_e:
+                    results["failed"] += 1
+                    results["details"].append({
+                        "doc_name": doc_name,
+                        "status": "failed",
+                        "reason": f"非法文档名: {guard_e}"
+                    })
+                    continue
+
                 # 直接调用 delete_document_parts，不预检查
                 # 这样可以删除孤立文件（Registry 中无记录但文件存在）
+                parts = ["all", "pdf"] if request.delete_source else ["all"]
                 delete_result = await delete_document_parts(
                     doc_name,
-                    DeletePartsRequest(parts=["all"])
+                    DeletePartsRequest(parts=parts)
                 )
 
                 results["success"] += 1

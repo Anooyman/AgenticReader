@@ -6,7 +6,8 @@ from pydantic import BaseModel
 import json
 from pathlib import Path
 
-from ...config import JSON_DATA_DIR, PDF_DIR
+from ...config import JSON_DATA_DIR, PDF_DIR, DATA_DIR
+from src.utils.path_guard import safe_path
 from ...services.task_service import task_manager
 
 router = APIRouter()
@@ -31,6 +32,12 @@ async def get_structure(doc_name: str) -> Dict[str, Any]:
     """
     try:
         # Strip .pdf extension if present to get base name for folder lookup
+        # 目录穿越防护
+        try:
+            safe_path(DATA_DIR, doc_name)
+        except ValueError as guard_e:
+            raise HTTPException(status_code=400, detail=f"非法文档名: {guard_e}")
+
         doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
 
         # 构建 structure.json 路径
@@ -106,6 +113,12 @@ async def update_structure(
     """
     try:
         # Strip .pdf extension if present to get base name for folder lookup
+        # 目录穿越防护
+        try:
+            safe_path(DATA_DIR, doc_name)
+        except ValueError as guard_e:
+            raise HTTPException(status_code=400, detail=f"非法文档名: {guard_e}")
+
         doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
 
         # 构建路径
@@ -240,6 +253,12 @@ async def rebuild_from_structure(
     """
     try:
         # Strip .pdf extension if present to get base name for folder lookup
+        # 目录穿越防护
+        try:
+            safe_path(DATA_DIR, doc_name)
+        except ValueError as guard_e:
+            raise HTTPException(status_code=400, detail=f"非法文档名: {guard_e}")
+
         doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
 
         # 验证文档存在
@@ -304,6 +323,12 @@ async def delete_chapter(
     """
     try:
         # Strip .pdf extension if present to get base name for folder lookup
+        # 目录穿越防护
+        try:
+            safe_path(DATA_DIR, doc_name)
+        except ValueError as guard_e:
+            raise HTTPException(status_code=400, detail=f"非法文档名: {guard_e}")
+
         doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
 
         # 读取当前结构

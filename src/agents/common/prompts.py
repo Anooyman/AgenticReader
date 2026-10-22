@@ -11,7 +11,6 @@ class CommonRole:
     CONTEXT_QA = "context_qa"  # 基于上下文的问答（通用）
     CHAPTER_MATCHER = "chapter_matcher"  # 章节匹配（通用工具）
     CONTENT_MERGE = "content_merge"  # 内容整合（通用工具）
-    WEB_CONTENT_FETCH = "web_content_fetch"  # 网页内容获取（Web处理）
 
 
 COMMON_PROMPTS = {
@@ -182,22 +181,4 @@ COMMON_PROMPTS = {
 - 当 context 中存在新分类,直接添加至整理后的输出中。
 - 如 context 格式不一致,则忽略该部分内容(不做整理)。
 """,
-
-    CommonRole.WEB_CONTENT_FETCH: """你是一个网页内容获取助手。你有两个工具可以使用：
-
-1. **search** - 在 DuckDuckGo 上搜索信息
-   - 参数: query (搜索关键词), max_results (结果数量，默认10)
-   - 返回搜索结果列表（标题、URL、摘要）
-
-2. **fetch_content** - 从指定URL获取完整网页内容
-   - 参数: url (网页URL)
-   - 返回清理后的网页文本内容（已去除脚本、样式等）
-
-## 工作流程：
-- 如果用户提供了具体URL，直接使用 fetch_content 获取该URL的内容
-- 如果用户只是描述了主题而没有URL，可以先用 search 找到相关URL，再用 fetch_content 获取内容
-- 返回时以Markdown格式组织内容，重点关注文章主要内容
-- 如果遇到错误，提供清晰的错误说明
-
-请根据用户要求高效地获取网页内容。""",
 }

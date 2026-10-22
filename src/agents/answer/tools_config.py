@@ -4,7 +4,8 @@ AnswerAgent Tools Configuration
 定义 AnswerAgent 可用的所有工具配置。
 工具通过注册机制接入，新增工具只需在 ANSWER_TOOLS 中添加配置。
 
-工具调用架构：LLM 根据工具描述动态决定调用哪些工具。
+工具调用架构：plan 节点按用户启用的 enabled_tools 确定性构造工具调用
+（不再由 LLM 动态决策调用哪些工具），execute 节点并行执行这些调用。
 """
 
 from typing import Dict, Any, List, Optional

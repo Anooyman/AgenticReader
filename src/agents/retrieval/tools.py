@@ -61,7 +61,8 @@ class RetrievalTools:
                 k=3,
                 field_name="type",
                 field_value="context",
-                enable_dedup=True
+                enable_dedup=True,
+                conversation_turn=getattr(self.agent, "current_conversation_turn", 0)
             )
             logger.info(f"🔍 [Tool:search_by_context] 向量检索返回: {len(doc_res) if doc_res else 0} 个结果")
 
@@ -322,7 +323,8 @@ class RetrievalTools:
                         doc_res = self.agent.vector_db_client.search_by_title(
                             title,
                             doc_type="title",
-                            enable_dedup=True
+                            enable_dedup=True,
+                            conversation_turn=getattr(self.agent, "current_conversation_turn", 0)
                         )
 
                         if doc_res and len(doc_res) > 0:

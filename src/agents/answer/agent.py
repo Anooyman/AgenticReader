@@ -1,12 +1,15 @@
 """
-Answer Agent - 用户对话接口Agent（工具调用架构）
+Answer Agent - 用户对话接口Agent（确定性工具规划架构）
 
-工作流程（ReAct循环）：
+工作流程（单轮确定性流水线，非 ReAct）：
 0. rewrite_query - 根据对话历史改写查询，补全上下文
-1. plan - LLM决定调用哪些工具
+1. plan - 按用户启用的工具确定性构造工具调用（无 LLM 决策）
 2. execute - 执行工具调用
-3. evaluate - 评估是否有足够信息
+3. evaluate - 判断内容是否足够（仅作终止标记，不再回环到 plan）
 4. generate - 生成最终答案
+
+图结构：
+    rewrite_query → plan → (execute → evaluate → generate | generate) → END
 
 工具：
 - retrieve_documents: 统一文档检索（单文档/多文档/自动选择）
@@ -28,16 +31,18 @@ logger = logging.getLogger(__name__)
 
 class AnswerAgent(AgentBase):
     """
-    对话Agent（工具调用架构）
+    对话Agent（确定性工具规划架构）
 
     工作流程：
-    rewrite_query → plan → execute_tools → evaluate → (循环或结束) → generate → END
+    rewrite_query → plan → execute_tools → evaluate → generate → END
+    （plan 若判无需工具则直接 → generate）
 
     特点：
     - 上下文查询改写：根据历史对话补全省略、指代
-    - LLM动态决策调用哪些工具
+    - plan 节点按 enabled_tools 确定性构造工具调用，不再依赖 LLM 动态规划
+    - 单轮架构：evaluate 之后直接进入 generate，不再回环到 plan 做二次规划
     - 新工具通过注册即可接入
-    - current_doc/manual_selected_docs 作为上下文提示传给LLM
+    - current_doc/manual_selected_docs 作为上下文提示传给 generate
     """
 
     def __init__(self, doc_name: str = None, provider: str = 'openai', progress_callback=None):
@@ -74,14 +79,14 @@ class AnswerAgent(AgentBase):
 
     def build_graph(self) -> StateGraph:
         """
-        构建ReAct循环工作流
+        构建单轮确定性工作流
 
-        rewrite_query → plan → execute → evaluate → (循环或结束) → generate → END
+        rewrite_query → plan → (execute → evaluate → generate | generate) → END
 
         - rewrite_query: 根据对话历史改写查询，补全上下文
-        - plan: LLM决定调用哪些工具（或不调用）
+        - plan: 按 enabled_tools 确定性构造工具调用（无 LLM 决策）
         - execute: 并行执行工具调用
-        - evaluate: 评估是否有足够信息
+        - evaluate: 判断内容是否充分，仅作终止标记
         - generate: 生成最终答案
         """
         workflow = StateGraph(AnswerState)
@@ -112,15 +117,8 @@ class AnswerAgent(AgentBase):
         # execute → evaluate
         workflow.add_edge("execute", "evaluate")
 
-        # evaluate → plan（继续迭代）或 generate（完成）
-        workflow.add_conditional_edges(
-            "evaluate",
-            self.nodes.should_continue,
-            {
-                "continue": "plan",
-                "finish": "generate"
-            }
-        )
+        # evaluate → generate（单轮架构：评估完成后直接进入生成，不再回环到 plan）
+        workflow.add_edge("evaluate", "generate")
 
         # generate → END
         workflow.add_edge("generate", END)
@@ -305,6 +303,14 @@ class AnswerAgent(AgentBase):
         elapsed = time.time() - start_time
         logger.info(f"✅ 历史已重置: {success_count}/{len(tasks)} 个session，耗时: {elapsed:.3f}秒")
         self.conversation_turns.clear()
+
+        # 同步清空检索去重历史（含轮次计数），让新会话可以重新检索同一批文档
+        for retrieval_agent in self.retrieval_agents.values():
+            vdb_client = getattr(retrieval_agent, "vector_db_client", None)
+            if vdb_client is not None:
+                vdb_client.reset_retrieval_history()
+            if hasattr(retrieval_agent, "current_conversation_turn"):
+                retrieval_agent.current_conversation_turn = 0
 
     # ==================== 查询接口 ====================
 

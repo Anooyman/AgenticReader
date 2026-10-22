@@ -22,8 +22,14 @@ class ChatService:
         self.enabled_tools: List[str] = []
         self.selected_docs: Optional[list] = None
         self.session_manager = SessionManager()
+        # 最近一次活跃会话，仅用于 /sessions/current 之类的默认展示；
+        # 真正的持久化写入一律按显式 session_id 定位（见 chat/reset）。
         self.current_session: Optional[Dict] = None
         self.progress_callback = None
+
+        # 按 session_id 注册的进度回调：多会话共享本单例时，避免回调被后到
+        # 的连接/请求覆写（websocket 侧注册/注销，chat 调用时查表取用）。
+        self._progress_callbacks: Dict[str, Any] = {}
 
         # 仅用于校验手动选择的文档是否存在（AnswerAgent 实例缓存池，避免
         # 重复创建）；真正的问答走 Orchestrator，见 chat()。
@@ -49,6 +55,8 @@ class ChatService:
         try:
             self.enabled_tools = enabled_tools or []
             self.selected_docs = selected_docs
+            # 兼容旧调用方：self.progress_callback 仍保留为默认回调，但更优
+            # 先级是按 session_id 注册的字典回调（见 _resolve_progress_callback）。
             self.progress_callback = progress_callback
 
             print(f"🔧 初始化聊天服务: enabled_tools={self.enabled_tools}, selected_docs={self.selected_docs}, session_id={session_id}")
@@ -96,6 +104,13 @@ class ChatService:
                 self.current_session["enabled_tools"] = self.enabled_tools
                 self.current_session["selected_docs"] = self.selected_docs
                 print(f"✅ 创建/加载会话: {self.current_session['session_id']}")
+
+            # 进度回调按会话ID注册（而不是只存全局字段），这样后续 chat/进度
+            # 输出一定落在本会话上，不会被另一个连接的 initialize 覆盖。
+            if progress_callback and self.current_session:
+                self.register_progress_callback(
+                    self.current_session.get("session_id"), progress_callback
+                )
 
             # AnswerAgent 现在只用于校验用户手动选择的文档是否存在
             # （真正的问答走 Orchestrator，deep_dive_document 子 agent 内部
@@ -152,15 +167,32 @@ class ChatService:
         user_query: str,
         progress_callback=None,
         enabled_tools: Optional[List[str]] = None,
-        selected_docs: Optional[list] = None
+        selected_docs: Optional[list] = None,
+        session_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """处理聊天消息——统一走 Orchestrator（是否检索 memory/深挖原文由
-        LLM 自行判断，见 src/agents/orchestrator）。"""
+        LLM 自行判断，见 src/agents/orchestrator）。
+
+        Args:
+            session_id: 目标会话ID。显式传入时所有持久化写入都按该 id 定位，
+                不再依赖 self.current_session；缺省时回退到最近活跃会话，
+                以兼容旧客户端。
+        """
         try:
-            if not self.current_session:
+            # 解析目标会话：显式 session_id 优先，缺省回退最近活跃会话
+            session_id = session_id or (
+                self.current_session.get("session_id") if self.current_session else None
+            )
+            if not session_id:
                 return {"answer": "会话未初始化，请先初始化。", "references": []}
 
+            session = self.session_manager.load_session(session_id)
+            if not session:
+                return {"answer": f"会话不存在或已被删除: {session_id}", "references": []}
+
+            # 兼容旧调用方：显式回调注册到该会话名下，供后续进度查表使用
             if progress_callback:
+                self.register_progress_callback(session_id, progress_callback)
                 self.progress_callback = progress_callback
 
             # 使用本次消息的工具/文档设置（如果提供），否则用初始化时的
@@ -176,7 +208,9 @@ class ChatService:
             # deep_dive_document；跨文档/纯对话模式下留空，只能靠 search_memory。
             doc_name = current_docs[0] if current_docs and len(current_docs) == 1 else None
 
-            session_id = self.current_session["session_id"]
+            # Orchestrator 自己管理对话历史，这里从会话文件里取（在保存本次
+            # 用户消息之前读取，避免在 messages 里重复出现这条消息）。
+            history = self.session_manager.get_session_history_for_llm(session)
 
             # 保存用户消息
             self.session_manager.save_message(
@@ -185,15 +219,12 @@ class ChatService:
                 content=user_query
             )
 
-            # Orchestrator 自己管理对话历史，这里从 session 文件里取（不含
-            # 刚保存的这条用户消息，避免在 messages 里重复出现）。
-            history = self.session_manager.get_session_history_for_llm(self.current_session)
-
             async def on_progress(stage: str, detail: str):
-                if not self.progress_callback:
+                cb = self._resolve_progress_callback(session_id)
+                if not cb:
                     return
                 data = {"agent": "orchestrator", "stage": stage, "message": detail}
-                cb_result = self.progress_callback(data)
+                cb_result = cb(data)
                 if cb_result is not None:
                     await cb_result
 
@@ -246,13 +277,35 @@ class ChatService:
             traceback.print_exc()
             return {"answer": f"处理失败: {str(e)}", "references": []}
 
-    def reset(self):
-        """重置聊天服务"""
-        if not self.current_session:
+    def register_progress_callback(self, session_id: Optional[str], callback) -> None:
+        """按会话ID注册进度回调（websocket 连接建立/收到带会话ID的消息时调用）"""
+        if not session_id or callback is None:
+            return
+        self._progress_callbacks[str(session_id)] = callback
+
+    def unregister_progress_callback(self, session_id: Optional[str]) -> None:
+        """注销某个会话的进度回调（websocket 断开时调用）"""
+        if session_id:
+            self._progress_callbacks.pop(str(session_id), None)
+
+    def _resolve_progress_callback(self, session_id: Optional[str]):
+        """取该会话的进度回调；查不到时回退到全局 progress_callback"""
+        cb = None
+        if session_id:
+            cb = self._progress_callbacks.get(str(session_id))
+        return cb or self.progress_callback
+
+    def reset(self, session_id: Optional[str] = None):
+        """重置指定会话的消息历史
+
+        Args:
+            session_id: 要清空的历史会话ID；缺省时作用于最近活跃会话。
+        """
+        if not session_id:
+            session_id = self.current_session.get("session_id") if self.current_session else None
+        if not session_id:
             print("⚠️ 没有活跃的会话，无需重置")
             return
-
-        session_id = self.current_session.get("session_id")
 
         # 清空 session 文件中的消息
         session = self.session_manager.load_session(session_id)
@@ -264,14 +317,15 @@ class ChatService:
             session_path = self.session_manager._get_session_path(session_id)
             self.session_manager._save_session_file(session_path, session)
 
-            self.current_session = session
-        else:
-            if self.current_session:
-                self.current_session["messages"] = []
-                self.current_session["message_count"] = 0
-                self.current_session["updated_at"] = datetime.now().isoformat()
+            # 仅当重置的是最近活跃会话时才同步 current_session
+            if self.current_session and self.current_session.get("session_id") == session_id:
+                self.current_session = session
+        elif self.current_session and self.current_session.get("session_id") == session_id:
+            self.current_session["messages"] = []
+            self.current_session["message_count"] = 0
+            self.current_session["updated_at"] = datetime.now().isoformat()
 
-        print("✅ 聊天服务已重置")
+        print(f"✅ 聊天服务已重置（session_id={session_id}）")
 
     def get_current_session(self) -> Optional[Dict]:
         """获取当前会话信息"""
@@ -284,18 +338,23 @@ class ChatService:
     def delete_session(self, session_id: str):
         """删除指定会话"""
         self.session_manager.delete_session(session_id)
+        # 该会话已不存在，顺带清掉它的进度回调，避免残留引用
+        self.unregister_progress_callback(session_id)
         if self.current_session and self.current_session["session_id"] == session_id:
             self.current_session = None
             self.enabled_tools = []
             self.selected_docs = None
 
-    def load_more_messages(self, offset: int = 0, limit: int = 20) -> Dict[str, Any]:
-        """加载更多历史消息"""
-        if not self.current_session:
+    def load_more_messages(self, offset: int = 0, limit: int = 20,
+                           session_id: Optional[str] = None) -> Dict[str, Any]:
+        """加载更多历史消息（session_id 缺省时取最近活跃会话）"""
+        if not session_id:
+            session_id = self.current_session.get("session_id") if self.current_session else None
+        if not session_id:
             return {"messages": [], "total": 0, "has_more": False}
 
         return self.session_manager.get_messages_range(
-            session_id=self.current_session["session_id"],
+            session_id=session_id,
             offset=offset,
             limit=limit
         )

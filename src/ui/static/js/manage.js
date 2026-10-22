@@ -475,6 +475,12 @@ class DataManager {
                                 ${doc.has_summary ? doc.summary_size_mb.toFixed(2) + ' MB' : '-'}
                             </span>
                         </div>
+                        <div class="data-stat" style="grid-column: 1 / -1;">
+                            <span class="stat-label">📁 源 PDF（data/pdf）</span>
+                            <span class="stat-value ${doc.has_pdf ? 'has-data' : 'no-data'}">
+                                ${doc.has_pdf ? doc.pdf_size_mb.toFixed(2) + ' MB' : '-'}
+                            </span>
+                        </div>
                     </div>
                 </div>
                 <div class="document-actions">
@@ -1012,6 +1018,7 @@ class DataManager {
         const doc = this.documents.find(d => d.doc_name === docName);
         const modal = document.getElementById('delete-modal');
         const title = doc?.title || docName;
+        const pdfSize = doc?.has_pdf ? doc.pdf_size_mb.toFixed(2) + ' MB' : '';
 
         document.getElementById('modal-title').textContent = '确认删除文档';
         document.getElementById('modal-message').innerHTML = `
@@ -1019,11 +1026,21 @@ class DataManager {
             <p style="color: var(--text-muted); font-size: 0.875rem;">
                 这将删除：JSON 数据、向量数据库、图片、摘要文件和注册表记录
             </p>
-            <p style="color: #dc3545; font-weight: 600;">此操作不可恢复！</p>
+            <label style="display: block; margin: 1rem 0 0.25rem; padding: 0.6rem 0.75rem; border: 1px solid var(--border-light, #e0e0e0); border-radius: 0.4rem; cursor: pointer;">
+                <input type="checkbox" id="delete-source-pdf-cb" style="margin-right: 0.5rem;">
+                同时删除本地 PDF 源文件 <span style="color: var(--text-muted); font-size: 0.875rem;">(data/pdf/，${pdfSize || '未找到'})</span>
+            </label>
+            <p style="color: var(--text-muted); font-size: 0.8rem; margin: 0.35rem 0 0;">
+                ⚠️ 不勾选时源 PDF 会保留，并重新出现在“待索引PDF”列表中。
+            </p>
+            <p style="color: #dc3545; font-weight: 600; margin-top: 0.75rem;">此操作不可恢复！</p>
         `;
 
         const confirmBtn = document.getElementById('confirm-delete-btn');
-        confirmBtn.onclick = () => this.deleteDocument(docName, ['all']);
+        confirmBtn.onclick = () => {
+            const withSource = document.getElementById('delete-source-pdf-cb')?.checked;
+            this.deleteDocument(docName, withSource ? ['all', 'pdf'] : ['all']);
+        };
 
         modal.style.display = 'flex';
     }
@@ -1040,7 +1057,8 @@ class DataManager {
             {value: 'json', label: 'JSON 数据', has: doc.has_json, size: doc.json_size_mb},
             {value: 'vector_db', label: '向量数据库', has: doc.has_vector_db, size: doc.vector_db_size_mb},
             {value: 'images', label: '图片', has: doc.has_images, size: doc.images_size_mb},
-            {value: 'summary', label: '摘要文件', has: doc.has_summary, size: doc.summary_size_mb}
+            {value: 'summary', label: '摘要文件', has: doc.has_summary, size: doc.summary_size_mb},
+            {value: 'pdf', label: '源 PDF 文件 (data/pdf)', has: doc.has_pdf, size: doc.pdf_size_mb}
         ];
 
         document.getElementById('modal-message').innerHTML = `
@@ -1055,6 +1073,9 @@ class DataManager {
             </div>
             <p style="color: var(--text-muted); font-size: 0.875rem; margin-top: 1rem;">
                 💡 提示：删除后可以重新生成相应的数据
+            </p>
+            <p style="color: #d97706; font-size: 0.8125rem; margin: 0.35rem 0 0;">
+                ⚠️ 勾选“源 PDF 文件”将删除唯一的原始文件，无法重新生成，请谨慎操作。
             </p>
         `;
 
@@ -1079,7 +1100,15 @@ class DataManager {
         this.closeModal();
 
         // Show processing notification
-        const partsText = parts.includes('all') ? '所有数据' : parts.join(', ');
+        const partLabels = {
+            json: 'JSON',
+            vector_db: '向量库',
+            images: '图片',
+            summary: '摘要',
+            pdf: '源PDF',
+            all: '所有数据'
+        };
+        const partsText = parts.map(p => partLabels[p] || p).join('、');
         this.showSuccess(`正在删除 ${docName} (${partsText})...`, 2000);
 
         // Perform deletion in background
@@ -1558,16 +1587,39 @@ class DataManager {
             return;
         }
 
-        const confirm = window.confirm(
-            `确定要完全删除 ${docNames.length} 个文档吗？\n\n这将删除：JSON 数据、向量数据库、图片、摘要文件和注册表记录\n\n此操作不可恢复！`
-        );
-        if (!confirm) return;
+        const modal = document.getElementById('delete-modal');
+        document.getElementById('modal-title').textContent = '确认批量删除';
+        document.getElementById('modal-message').innerHTML = `
+            <p>确定要完全删除选中的 <strong>${docNames.length}</strong> 个文档吗？</p>
+            <p style="color: var(--text-muted); font-size: 0.875rem;">
+                这将删除：JSON 数据、向量数据库、图片、摘要文件和注册表记录
+            </p>
+            <label style="display: block; margin: 1rem 0 0.25rem; padding: 0.6rem 0.75rem; border: 1px solid var(--border-light, #e0e0e0); border-radius: 0.4rem; cursor: pointer;">
+                <input type="checkbox" id="batch-delete-source-pdf-cb" style="margin-right: 0.5rem;">
+                同时删除本地 PDF 源文件 <span style="color: var(--text-muted); font-size: 0.875rem;">(data/pdf/)</span>
+            </label>
+            <p style="color: var(--text-muted); font-size: 0.8rem; margin: 0.35rem 0 0;">
+                ⚠️ 不勾选时源 PDF 会保留，并重新出现在“待索引PDF”列表中。
+            </p>
+            <p style="color: #dc3545; font-weight: 600; margin-top: 0.75rem;">此操作不可恢复！</p>
+        `;
 
+        const confirmBtn = document.getElementById('confirm-delete-btn');
+        confirmBtn.onclick = () => {
+            const deleteSource = document.getElementById('batch-delete-source-pdf-cb')?.checked;
+            this.closeModal();
+            this.performBatchDelete(docNames, deleteSource);
+        };
+
+        modal.style.display = 'flex';
+    }
+
+    async performBatchDelete(docNames, deleteSource = false) {
         try {
             const response = await fetch('/api/v1/data/documents', {
                 method: 'DELETE',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({doc_names: docNames})
+                body: JSON.stringify({doc_names: docNames, delete_source: deleteSource})
             });
 
             if (!response.ok) throw new Error('Failed to batch delete documents');
@@ -1637,6 +1689,9 @@ class DataManager {
                     </div>
                     <button class="btn btn-primary" onclick="dataManager.indexPdf('${pdf.filename}')" style="margin-left: 1rem;">
                         🔄 索引
+                    </button>
+                    <button class="btn btn-danger" onclick="dataManager.confirmDeletePendingPdf('${pdf.filename}')" style="margin-left: 0.5rem;" title="删除本地 PDF 源文件">
+                        🗑️
                     </button>
                 </div>
             `).join('');
@@ -1771,6 +1826,8 @@ class DataManager {
         // Update button visibility and count
         const batchIndexBtn = document.getElementById('pending-batch-index-btn');
         const countSpan = document.getElementById('pending-selected-count');
+        const batchDeleteBtn = document.getElementById('pending-batch-delete-btn');
+        const deleteCountSpan = document.getElementById('pending-delete-count');
 
         if (batchIndexBtn && countSpan) {
             if (count > 0) {
@@ -1778,6 +1835,15 @@ class DataManager {
                 countSpan.textContent = count;
             } else {
                 batchIndexBtn.style.display = 'none';
+            }
+        }
+
+        if (batchDeleteBtn && deleteCountSpan) {
+            if (count > 0) {
+                batchDeleteBtn.style.display = 'inline-block';
+                deleteCountSpan.textContent = count;
+            } else {
+                batchDeleteBtn.style.display = 'none';
             }
         }
 
@@ -1878,6 +1944,94 @@ class DataManager {
 
         // 刷新待索引列表
         await this.loadPendingPdfs();
+    }
+
+    // ==================== Pending PDF Source File Deletion ====================
+
+    confirmDeletePendingPdf(filename) {
+        const pdf = this.pendingPdfs.find(p => p.filename === filename);
+        const sizeText = pdf ? `（${pdf.size_mb.toFixed(2)} MB）` : '';
+
+        const modal = document.getElementById('delete-modal');
+        document.getElementById('modal-title').textContent = '删除 PDF 源文件';
+        document.getElementById('modal-message').innerHTML = `
+            <p>确定要删除 <strong>${filename}</strong>${sizeText} 吗？</p>
+            <p style="color: var(--text-muted); font-size: 0.875rem;">
+                该文件尚未索引，删除后无法再对此文件进行索引。
+            </p>
+            <p style="color: #dc3545; font-weight: 600;">此操作不可恢复！</p>
+        `;
+
+        const confirmBtn = document.getElementById('confirm-delete-btn');
+        confirmBtn.onclick = () => {
+            this.closeModal();
+            this.deletePdfSourceFiles([filename]);
+        };
+
+        modal.style.display = 'flex';
+    }
+
+    confirmDeletePendingPdfs() {
+        const checkboxes = document.querySelectorAll('.pending-checkbox:checked');
+        const filenames = Array.from(checkboxes).map(cb => cb.dataset.filename);
+
+        if (filenames.length === 0) {
+            this.showError('请先选择要删除的PDF文件');
+            return;
+        }
+
+        const modal = document.getElementById('delete-modal');
+        document.getElementById('modal-title').textContent = '批量删除 PDF 源文件';
+        document.getElementById('modal-message').innerHTML = `
+            <p>确定要删除选中的 <strong>${filenames.length}</strong> 个 PDF 源文件吗？</p>
+            <div style="max-height: 10rem; overflow-y: auto; margin: 0.75rem 0; padding: 0.5rem 0.75rem; background: var(--bg-secondary); border-radius: 0.4rem; font-size: 0.8125rem;">
+                ${filenames.map(f => `<div>📄 ${f}</div>`).join('')}
+            </div>
+            <p style="color: var(--text-muted); font-size: 0.875rem;">
+                这些文件尚未索引，删除后无法再对它们进行索引。
+            </p>
+            <p style="color: #dc3545; font-weight: 600;">此操作不可恢复！</p>
+        `;
+
+        const confirmBtn = document.getElementById('confirm-delete-btn');
+        confirmBtn.onclick = () => {
+            this.closeModal();
+            this.deletePdfSourceFiles(filenames);
+        };
+
+        modal.style.display = 'flex';
+    }
+
+    async deletePdfSourceFiles(filenames) {
+        try {
+            const response = await fetch('/api/v1/data/pdfs', {
+                method: 'DELETE',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filenames})
+            });
+
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(result.detail || 'Failed to delete PDF source files');
+            }
+
+            if (result.count > 0) {
+                this.showSuccess(`已删除 ${result.count} 个 PDF 文件，释放 ${result.freed_mb.toFixed(2)} MB 空间`);
+            }
+
+            (result.failed || []).forEach(msg => this.showError(msg));
+
+            await this.loadAllData();
+
+            const selectAllText = document.getElementById('pending-select-all-text');
+            if (selectAllText) {
+                selectAllText.textContent = '☑️ 全选';
+            }
+            this.updatePendingSelectionUI();
+        } catch (error) {
+            console.error('Error deleting PDF source files:', error);
+            this.showError('删除失败: ' + error.message);
+        }
     }
 
     // ==================== Chapter Management ====================

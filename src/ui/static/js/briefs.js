@@ -226,18 +226,6 @@
     loadJobs();
   });
 
-  document.getElementById('render-report-btn').addEventListener('click', async () => {
-    const coverageDate = dateSelect.value;
-    if (!coverageDate) return;
-    await fetch('/api/v1/briefs/render-report', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ coverage_date: coverageDate }),
-    });
-    alert('报告生成任务已排队');
-    loadJobs();
-  });
-
   document.getElementById('sync-memory-btn').addEventListener('click', async () => {
     await fetch('/api/v1/briefs/sync-memory', { method: 'POST' });
     alert('补灌任务已排队');

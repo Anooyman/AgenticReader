@@ -6,8 +6,9 @@ from pydantic import BaseModel
 import shutil
 from pathlib import Path
 
-from ...config import PDF_DIR, JSON_DATA_DIR, VECTOR_DB_DIR, PDF_IMAGE_DIR, OUTPUT_DIR
+from ...config import PDF_DIR, JSON_DATA_DIR, VECTOR_DB_DIR, PDF_IMAGE_DIR, OUTPUT_DIR, DATA_DIR
 from src.core.document_management import DocumentRegistry
+from src.utils.path_guard import safe_path
 
 router = APIRouter()
 
@@ -81,26 +82,86 @@ async def get_available_pdfs() -> List[str]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# 上传单文件大小上限（100MB），超出返回 413
+MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+
+
+def _sanitize_upload_filename(raw_filename: Optional[str]) -> str:
+    """
+    清洗 multipart 传入的原始文件名，返回可安全落盘的名称。
+
+    - 仅取 basename，剥离任何目录部分，杜绝绝对路径（pathlib 拼接会丢弃基目录）
+      以及 ../ 之类的目录穿越
+    - 拒绝空名与以点开头的名称
+    - 保留 .pdf 后缀校验（大小写不敏感）
+    """
+    name = Path(raw_filename or "").name
+    if not name:
+        raise HTTPException(status_code=400, detail="非法文件名")
+    if name.startswith("."):
+        raise HTTPException(status_code=400, detail="非法文件名")
+    if not name.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="只支持PDF文件")
+    return name
+
+
 @router.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)) -> Dict[str, Any]:
     """上传PDF文件"""
     try:
-        if not file.filename.endswith('.pdf'):
-            raise HTTPException(status_code=400, detail="只支持PDF文件")
+        # 1) 文件名消毒：只保留 basename，拒绝空名/点开头/非 .pdf
+        filename = _sanitize_upload_filename(file.filename)
 
         # 保存文件
         PDF_DIR.mkdir(parents=True, exist_ok=True)
-        file_path = PDF_DIR / file.filename
+        # 2) 复用 path_guard.safe_path 做目录越界校验（其内部会剥离 .pdf 后缀），
+        #    取校验后所在目录 + 原始文件名拼接，落盘位置仍为 data/pdf/原始文件名，
+        #    保持「相对目录 + data/pdf + 原始文件名」的既有约定不变
+        try:
+            guarded = safe_path(PDF_DIR, filename)
+        except ValueError as guard_e:
+            raise HTTPException(status_code=400, detail=f"非法文件名: {guard_e}")
+        file_path = guarded.parent / filename
 
         if file_path.exists():
-            raise HTTPException(status_code=409, detail=f"文件已存在: {file.filename}")
+            raise HTTPException(status_code=409, detail=f"文件已存在: {filename}")
 
-        with file_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # 3) 优先用 Content-Length 快速拒绝超限请求
+        content_length = file.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="文件超过100MB限制")
+            except ValueError:
+                pass
+
+        written = 0
+        try:
+            with file_path.open("wb") as buffer:
+                # 4) 读取前 5 字节断言 %PDF- 魔数
+                header = await file.read(5)
+                if len(header) < 5 or not header.startswith(b"%PDF-"):
+                    raise HTTPException(status_code=400, detail="文件不是有效的PDF")
+                buffer.write(header)
+                written += len(header)
+
+                # 流式写入并计数，超过上限立即中断
+                while True:
+                    chunk = await file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > MAX_UPLOAD_BYTES:
+                        raise HTTPException(status_code=413, detail="文件超过100MB限制")
+                    buffer.write(chunk)
+        except HTTPException:
+            # 校验未通过或超限：清理可能已创建的半成品文件，再向上抛出
+            file_path.unlink(missing_ok=True)
+            raise
 
         return {
             "status": "success",
-            "filename": file.filename,
+            "filename": filename,
             "message": "文件上传成功"
         }
 
@@ -188,6 +249,12 @@ async def delete_document(doc_name: str) -> Dict[str, Any]:
     """
     try:
         registry = DocumentRegistry()
+
+        # 目录穿越防护：doc_name 派生出各数据目录路径，校验其不越过 DATA_DIR
+        try:
+            safe_path(DATA_DIR, doc_name)
+        except ValueError as guard_e:
+            raise HTTPException(status_code=400, detail=f"非法文档名: {guard_e}")
 
         # Strip .pdf extension for correct path lookups
         doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name

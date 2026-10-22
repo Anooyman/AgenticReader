@@ -6,13 +6,33 @@ Reader 并行处理模块
 
 import asyncio
 import logging
+import uuid
 from typing import Any, Dict, List, Tuple
 
 from src.utils.async_utils import run_async, parallel_process_with_filter
-from src.agents.indexing.prompts import IndexingRole
-from src.agents.common.prompts import CommonRole
+
+# IndexingRole / CommonRole 仅作为函数参数的默认值使用，为缩短本模块被导入时的
+# 依赖链（agents prompts 模块较重），改为函数体内延迟导入。
+# 请勿在模块级恢复这两条 import。
 
 logger = logging.getLogger(__name__)
+
+
+def _drop_llm_session(llm_client: Any, session_id: str) -> None:
+    """
+    一次性 LLM 调用结束后回收该 session 的消息历史。
+
+    与 memory/llm_condense.py 的 message_histories.pop 先例一致：这些调用
+    在语义上都是独立的一次性请求（不是多轮对话），调用结束即删除条目，
+    既保证章节之间零历史共享，也防止 message_histories 字典无限增长。
+    """
+    histories = getattr(llm_client, "message_histories", None)
+    if histories is None:
+        return
+    try:
+        histories.pop(session_id, None)
+    except Exception as e:
+        logger.warning(f"回收会话 {session_id} 失败: {e}")
 
 
 class ChapterProcessor:
@@ -36,8 +56,8 @@ class ChapterProcessor:
     async def process_chapters_summary_and_refactor(
         self,
         agenda_data_list: List[Dict[str, Any]],
-        summary_role: Any = IndexingRole.CONTENT_SUMMARY,
-        refactor_role: Any = CommonRole.CONTENT_MERGE
+        summary_role: Any = None,
+        refactor_role: Any = None
     ) -> List[Tuple[str, str, str, Any, Any]]:
         """
         并行处理章节的总结和重构
@@ -54,7 +74,15 @@ class ChapterProcessor:
         Returns:
             List[Tuple[title, summary, refactor_content, pages, data]]
         """
-        async def process_single_chapter(agenda_data: Dict[str, Any]) -> Tuple[str, str, str, Any, Any]:
+        # 默认值延迟求值：避免模块级依赖 agents prompts
+        if summary_role is None:
+            from src.agents.indexing.prompts import IndexingRole
+            summary_role = IndexingRole.CONTENT_SUMMARY
+        if refactor_role is None:
+            from src.agents.common.prompts import CommonRole
+            refactor_role = CommonRole.CONTENT_MERGE
+
+        async def process_single_chapter(chapter_index: int, agenda_data: Dict[str, Any]) -> Tuple[str, str, str, Any, Any]:
             import time
             title = agenda_data.get("title")
             data = agenda_data.get("data")
@@ -70,10 +98,24 @@ class ChapterProcessor:
 
             logger.info(f"📡 [并发章节] 发送2个并行请求 (summary + refactor) - {title} - {time.strftime('%H:%M:%S.%f')[:-3]}")
 
-            # 禁用 LLM 历史总结，改用长度截断（章节处理不需要保留历史上下文）
+            # 每个调用使用唯一的 session_id（章节索引 + uuid 后缀），避免固定
+            # "summary"/"refactor" 两个 session 被所有章节共享导致跨章节历史
+            # 互相污染，且在超过 DEFAULT 上限后被静默截断
+            summary_session = f"summary_{chapter_index}_{uuid.uuid4().hex[:8]}"
+            refactor_session = f"refactor_{chapter_index}_{uuid.uuid4().hex[:8]}"
+
+            async def call_and_cleanup(role: Any, prompt: str, session_id: str):
+                try:
+                    return await self.llm_client.async_call_llm_chain(
+                        role, prompt, session_id, enable_llm_summary=False
+                    )
+                finally:
+                    # 一次性调用，结束后立即回收 session，防止历史累积/字典膨胀
+                    _drop_llm_session(self.llm_client, session_id)
+
             summary, refactor_content = await asyncio.gather(
-                self.llm_client.async_call_llm_chain(summary_role, summary_prompt, "summary", enable_llm_summary=False),
-                self.llm_client.async_call_llm_chain(refactor_role, refactor_prompt, "refactor", enable_llm_summary=False)
+                call_and_cleanup(summary_role, summary_prompt, summary_session),
+                call_and_cleanup(refactor_role, refactor_prompt, refactor_session)
             )
 
             logger.info(f"✅ [并发章节] 章节处理完成: {title} - {time.strftime('%H:%M:%S.%f')[:-3]}")
@@ -85,8 +127,8 @@ class ChapterProcessor:
         logger.info(f"⏰ 启动时间: {time.strftime('%H:%M:%S.%f')[:-3]}")
 
         results = await parallel_process_with_filter(
-            agenda_data_list,
-            process_single_chapter,
+            list(enumerate(agenda_data_list)),
+            lambda pair: process_single_chapter(pair[0], pair[1]),
             self.max_concurrent
         )
 
@@ -95,7 +137,7 @@ class ChapterProcessor:
     async def process_detail_summaries(
         self,
         chapters: List[Dict[str, Any]],
-        answer_role: Any = CommonRole.CONTEXT_QA
+        answer_role: Any = None
     ) -> List[Tuple[str, str]]:
         """
         并行生成详细摘要
@@ -107,7 +149,12 @@ class ChapterProcessor:
         Returns:
             List[Tuple[title, answer]]
         """
-        async def process_single_summary(chapter_data: Dict[str, Any]) -> Tuple[str, str]:
+        # 默认值延迟求值：避免模块级依赖 agents prompts
+        if answer_role is None:
+            from src.agents.common.prompts import CommonRole
+            answer_role = CommonRole.CONTEXT_QA
+
+        async def process_single_summary(chapter_index: int, chapter_data: Dict[str, Any]) -> Tuple[str, str]:
             title = chapter_data['title']
             context_data = chapter_data['context_data']
             query = chapter_data['query']
@@ -120,18 +167,23 @@ class ChapterProcessor:
                 f"===== \n\nContext data: {context_data}"
             )
             
+            # 每次调用唯一 session_id 并在结束后回收：原先固定 "answer" 会与
+            # PDF 聊天会话共用同一历史，造成并发调用间互相污染
+            session_id = f"detail_{chapter_index}_{uuid.uuid4().hex[:8]}"
             try:
                 answer = await self.llm_client.async_call_llm_chain(
-                    answer_role, input_prompt, "answer"
+                    answer_role, input_prompt, session_id
                 )
                 return (title, answer if answer and answer.strip() else "")
             except Exception as e:
                 logger.error(f"生成标题 '{title}' 的摘要时出错: {e}")
                 return (title, "")
+            finally:
+                _drop_llm_session(self.llm_client, session_id)
         
         results = await parallel_process_with_filter(
-            chapters,
-            process_single_summary,
+            list(enumerate(chapters)),
+            lambda pair: process_single_summary(pair[0], pair[1]),
             self.max_concurrent
         )
         
@@ -141,8 +193,8 @@ class ChapterProcessor:
 def run_parallel_chapter_processing(
     llm_client: Any,
     agenda_data_list: List[Dict[str, Any]],
-    summary_role: Any = IndexingRole.CONTENT_SUMMARY,
-    refactor_role: Any = CommonRole.CONTENT_MERGE,
+    summary_role: Any = None,
+    refactor_role: Any = None,
     max_concurrent: int = 5
 ) -> List[Tuple[str, str, str, Any, Any]]:
     """
@@ -184,7 +236,7 @@ def run_parallel_chapter_processing(
 def run_parallel_detail_summaries(
     llm_client: Any,
     chapters: List[Dict[str, Any]],
-    answer_role: Any = CommonRole.CONTEXT_QA,
+    answer_role: Any = None,
     max_concurrent: int = 5
 ) -> List[Tuple[str, str]]:
     """

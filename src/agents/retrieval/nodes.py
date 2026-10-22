@@ -128,6 +128,12 @@ class RetrievalNodes:
             doc_name_from_state = state.get('doc_name')
             self.agent.current_doc = doc_name_from_state or self.agent.current_doc
 
+            # 同步当前对话轮次给向量库去重窗口
+            # （去重记录只保留最近 N 轮，更早的自动淘汰，避免检索空间单调收窄）
+            conversation_turn = state.get("conversation_turn", 0) or 0
+            self.agent.current_conversation_turn = conversation_turn
+            logger.info(f"🔧 [Initialize|{self._doc_tag()}] 对话轮次: {conversation_turn}")
+
             logger.info(f"🔧 [Initialize|{self._doc_tag()}] 配置信息:")
             logger.info(f"🔧 [Initialize|{self._doc_tag()}]   - 文档名称: {self.agent.current_doc or '多文档模式'}")
             logger.info(f"🔧 [Initialize|{self._doc_tag()}]   - 查询内容: {state['query']}")
@@ -142,6 +148,10 @@ class RetrievalNodes:
                     logger.info(f"🔄 [Initialize|{self._doc_tag()}] 文档名称变化，重新创建VectorDBClient")
                     self.agent.vector_db_client = self.agent.utils.create_vector_db_client(doc_name_from_state)
                     self.agent.current_doc = doc_name_from_state
+
+            # 把当前对话轮次同步给去重窗口（新客户端会在这里完成对齐）
+            if self.agent.vector_db_client:
+                self.agent.vector_db_client.set_current_turn(conversation_turn)
 
             # ============ 状态持久化：恢复之前的检索历史 ============
             if self.agent.persistent_state:

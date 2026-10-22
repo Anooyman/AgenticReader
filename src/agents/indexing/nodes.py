@@ -784,6 +784,14 @@ class IndexingNodes:
                 logger.warning("章节摘要为空，无法构建索引")
                 state["status"] = "error"
                 state["error"] = "章节摘要为空"
+
+                # 与异常分支保持一致：在 registry 标记失败，避免半成品被注册
+                self.agent.doc_registry.update_stage_status(
+                    doc_name=doc_name,
+                    stage_name="build_index",
+                    status="failed",
+                    output_files=[]
+                )
                 return state
 
             # 构建 Document 列表
@@ -983,6 +991,22 @@ class IndexingNodes:
         logger.info(f"📋 [Register] 文档名称: {state['doc_name']}")
 
         doc_name = state["doc_name"]
+
+        # 失败守卫：任一上游节点设置过 error 时，不得把半成品注册为可检索状态
+        if state.get("error"):
+            logger.error(f"❌ [Register] 上游节点处理失败，跳过注册（不会标记为 completed）: {state['error']}")
+            state["is_complete"] = False
+            state["status"] = "error"
+
+            # 在 registry 中标记 register 阶段失败（status 支持 pending/completed/failed）
+            self.agent.doc_registry.update_stage_status(
+                doc_name=doc_name,
+                stage_name="register",
+                status="failed",
+                output_files=[]
+            )
+
+            return state
 
         try:
             # 获取生成的文件信息

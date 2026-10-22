@@ -3,12 +3,31 @@
 import uvicorn
 import sys
 import os
+import logging
 from pathlib import Path
 
 # 添加项目根目录到 sys.path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+# 默认只监听本机回环地址，避免局域网/外部直接访问（本地应用无需完整鉴权）
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8000
+# 视为「仅本机」的地址集合，其余地址会打 WARNING
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def resolve_host() -> str:
+    """解析监听地址：默认 127.0.0.1，可用环境变量 HOST 覆盖；非本机地址打 WARNING"""
+    host = (os.environ.get("HOST") or "").strip() or DEFAULT_HOST
+    if host.lower() not in LOCAL_HOSTS:
+        logging.warning(
+            "检测到非本机监听地址 HOST=%s：服务将暴露给局域网/外部网络，"
+            "本应用按本地应用设计，没有鉴权，请确认这是预期行为",
+            host,
+        )
+    return host
 
 
 def setup_windows_optimizations():
@@ -67,8 +86,17 @@ if __name__ == "__main__":
     # 应用平台优化
     setup_windows_optimizations()
 
-    print("🌐 服务器地址: http://localhost:8000")
-    print("📊 API 文档: http://localhost:8000/docs")
+    host = resolve_host()
+    try:
+        port = int(os.environ.get("PORT") or DEFAULT_PORT)
+    except ValueError:
+        print(f"⚠️  PORT 配置无效，使用默认端口 {DEFAULT_PORT}")
+        port = DEFAULT_PORT
+
+    display_host = "localhost" if host.lower() in ("127.0.0.1", "localhost", "::1") else host
+
+    print(f"🌐 服务器地址: http://{display_host}:{port}")
+    print(f"📊 API 文档: http://{display_host}:{port}/docs")
     print()
     print("💡 按 Ctrl+C 停止服务器")
     print("=" * 60)
@@ -77,8 +105,8 @@ if __name__ == "__main__":
     try:
         uvicorn.run(
             "src.ui.backend.app:app",
-            host="0.0.0.0",
-            port=8000,
+            host=host,
+            port=port,
             reload=True,
             reload_excludes=["*.pyc", "__pycache__", ".venv/*", ".git/*", "*.egg-info"],
             log_level="info"

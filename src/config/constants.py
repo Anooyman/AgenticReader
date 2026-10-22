@@ -3,6 +3,8 @@ LLMReader 项目常量配置
 常量定义文件，用于集中管理项目中的各种配置常量，避免硬编码魔术数字
 """
 
+import os
+
 # === 处理限制常量 ===
 class ProcessingLimits:
     """处理过程中的各种限制常量"""
@@ -28,6 +30,27 @@ class ProcessingLimits:
     # 建议值：5-20，根据 LLM 上下文窗口大小调整
 
     # 注意：会话历史相关配置（max_messages, max_tokens）已移至 SessionHistoryConfig
+
+
+# === 检索去重窗口配置 ===
+class RetrievalDedupConfig:
+    """检索去重窗口配置
+
+    去重记录以「文档哈希 -> 最近命中的对话轮次」的形式保存，
+    只保留最近 N 轮对话的命中记录，更早的记录自动丢弃。
+    这样对话再久，检索空间也不会因去重集合无限增长而单调收窄；
+    需要早期内容时应通过「关键信息摘要 + 再次检索」获得，
+    而不是依赖去重集合永久记住所有已检索文档。
+
+    可通过环境变量 RETRIEVAL_DEDUP_WINDOW 覆盖（非法值回退默认 5）。
+    """
+
+    DEFAULT_WINDOW = 5
+
+    try:
+        WINDOW = int(os.environ.get("RETRIEVAL_DEDUP_WINDOW", DEFAULT_WINDOW))
+    except (TypeError, ValueError):
+        WINDOW = DEFAULT_WINDOW
 
 
 # === 文件和路径常量 ===
