@@ -32,6 +32,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 显式「跳过」标记：脚本式测试没有 pytest.skip，用一个哨兵值区分「通过 / 跳过 / 失败」，
+# 避免把「因缺配置没跑成」误记成通过。
+SKIP = "SKIPPED"
+
 
 def print_section(title):
     """打印分隔线和标题"""
@@ -80,12 +84,48 @@ def test_provider_initialization():
         return False
 
 
+def provider_skip_reason(provider: str):
+    """
+    检查某个 provider 的凭据是否齐备。
+
+    返回 None 表示配置齐全、可以真实测试；返回字符串表示应当「显式跳过」的原因。
+    这样缺配置时是明确的 SKIP，而不是把异常吞掉后照常打印「测试通过」（假绿）。
+    """
+    from src.config.settings import LLM_CONFIG, LLM_EMBEDDING_CONFIG
+
+    if provider == "openai":
+        if not (LLM_CONFIG.get("openai_api_key") or os.getenv("OPENAI_API_KEY")):
+            return "OPENAI_API_KEY 未配置"
+        return None
+
+    if provider == "azure":
+        # chat 侧读 LLM_CONFIG（CHAT_*），embedding 侧读 LLM_EMBEDDING_CONFIG；
+        # update_provider_config 会同时构造两者，所以四项都要有值。
+        missing = [name for name, value in (
+            ("CHAT_API_KEY", LLM_CONFIG.get("api_key")),
+            ("CHAT_AZURE_ENDPOINT", LLM_CONFIG.get("azure_endpoint")),
+            ("CHAT_DEPLOYMENT_NAME", LLM_CONFIG.get("deployment_name")),
+            ("EMBEDDING_API_KEY", LLM_EMBEDDING_CONFIG.get("api_key")),
+        ) if not value]
+        if missing:
+            return "缺少 " + ", ".join(missing)
+        return None
+
+    # 其它 provider 不做凭据预判，按「配置齐全」处理，交给实际调用去验证
+    return None
+
+
 def test_provider_switching():
-    """测试2：Provider 动态切换"""
+    """测试2：Provider 动态切换（真实断言，不吞异常）"""
     print_section("测试2：Provider 动态切换")
 
     try:
-        # 先创建一个 OpenAI client
+        # 起始 provider：openai。凭据缺失时显式跳过，而不是硬跑一次算「通过」
+        reason = provider_skip_reason("openai")
+        if reason:
+            print(f"⏭️ SKIP: openai provider 未配置（{reason}），跳过动态切换测试")
+            return SKIP
+
         print("📌 初始化为 OpenAI Provider...")
         llm_client = LLMBase(provider="openai")
 
@@ -93,22 +133,41 @@ def test_provider_switching():
         print(f"✅ 初始 Provider: {initial_info['provider']}")
         print(f"   - Chat Model: {initial_info['chat_model_type']}")
 
-        # 尝试切换到其他provider（如果可用）
+        assert initial_info["provider"] == "openai", \
+            f"切换前 provider 应为 openai，实际为 {initial_info['provider']}"
+        # provider 实例缓存应当只含 openai，没有别的 provider 混进来
+        assert set(llm_client._provider_instances) == {"openai"}, \
+            f"provider 实例缓存异常: {set(llm_client._provider_instances)}"
+
+        # 切换目标 provider 的凭据要先确认；没有就显式 SKIP（见 provider_skip_reason）
+        reason = provider_skip_reason("azure")
+        if reason:
+            print(f"\n⏭️ SKIP: Azure 未配置（{reason}），跳过切换验证——未验证不代表通过")
+            return SKIP
+
         print("\n📌 尝试切换到 Azure Provider...")
+        llm_client.update_provider_config(provider="azure")
+        updated_info = llm_client.get_provider_info()
 
-        try:
-            llm_client.update_provider_config(provider="azure")
-            updated_info = llm_client.get_provider_info()
+        print(f"✅ 切换成功！")
+        print(f"   - 新 Provider: {updated_info['provider']}")
+        print(f"   - 新 Chat Model: {updated_info['chat_model_type']}")
+        print(f"   - 新 Embedding Model: {updated_info['embedding_model_type']}")
 
-            print(f"✅ 切换成功！")
-            print(f"   - 新 Provider: {updated_info['provider']}")
-            print(f"   - 新 Chat Model: {updated_info['chat_model_type']}")
+        # 真实断言：不只是 provider 字段变了，底层模型实例也要真的换成 azure
+        assert updated_info["provider"] == "azure", \
+            f"切换后 provider 应为 azure，实际为 {updated_info['provider']}"
+        assert "azure" in updated_info["chat_model_type"].lower(), \
+            f"chat model 未随 provider 切换: {updated_info['chat_model_type']}"
+        assert "azure" in updated_info["embedding_model_type"].lower(), \
+            f"embedding model 未随 provider 切换: {updated_info['embedding_model_type']}"
+        # 旧 provider 的实例缓存必须被清掉，否则「切换」只是字符串上的
+        assert "openai" not in llm_client._provider_instances, \
+            f"旧 provider 实例缓存未清理: {set(llm_client._provider_instances)}"
+        assert type(llm_client._chat_model).__name__ == updated_info["chat_model_type"], \
+            "懒加载缓存 _chat_model 与 provider_info 报告的类型不一致"
 
-        except Exception as e:
-            print(f"⚠️  切换到 Azure 失败: {e}")
-            print("   提示: Azure 可能未配置，这是正常的")
-
-        print("\n✅ 测试2通过：Provider 切换功能正常！")
+        print("\n✅ 测试2通过：Provider 切换功能正常（provider 字段 + 模型实例均已生效）！")
         return True
 
     except Exception as e:
@@ -225,20 +284,32 @@ def main():
     # 汇总结果
     print_section("测试汇总")
 
-    passed = sum(1 for _, result in results if result)
+    passed = sum(1 for _, result in results if result is True)
+    skipped = sum(1 for _, result in results if result is SKIP)
     total = len(results)
 
     for test_name, result in results:
-        status = "✅ 通过" if result else "❌ 失败"
+        if result is True:
+            status = "✅ 通过"
+        elif result is SKIP:
+            status = "⏭️ 跳过"
+        else:
+            status = "❌ 失败"
         print(f"{status} - {test_name}")
 
-    print(f"\n总计: {passed}/{total} 测试通过")
+    failed = total - passed - skipped
+    print(f"\n总计: {passed}/{total} 通过（跳过 {skipped}，失败 {failed}）")
 
-    if passed == total:
-        print("\n🎉 所有测试通过！")
-    else:
-        print(f"\n⚠️  有 {total - passed} 个测试失败")
+    if failed:
+        print("\n❌ 存在失败的测试，请查看上面的错误信息")
+        return 1
+    if skipped:
+        print("\n⚠️  有测试因缺少 provider 配置被跳过，补上环境变量后重跑以覆盖")
+        return 0
+    print("\n🎉 所有测试通过！")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    # 脚本语义：有失败时非零退出，方便 CI / 其它脚本判断（跳过的测试不算失败）
+    sys.exit(main())

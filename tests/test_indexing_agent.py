@@ -18,7 +18,8 @@ from typing import List
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.agents.indexing import IndexingAgent, DocumentRegistry
+from src.agents.indexing import IndexingAgent
+from src.core.document_management import DocumentRegistry
 from src.config.settings import PDF_PATH
 
 # 配置日志
