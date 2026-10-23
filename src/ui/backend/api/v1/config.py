@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import Optional, Dict, Any
 
 from ...config import DATA_DIR
+from src.utils.json_io import write_json_atomic
 
 router = APIRouter()
 
@@ -54,9 +55,7 @@ def load_config() -> Dict[str, Any]:
 def save_config(config: Dict[str, Any]):
     """保存配置到文件"""
     try:
-        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
+        write_json_atomic(CONFIG_FILE, config)
         print(f"✅ 配置已保存到文件: {CONFIG_FILE}")
     except Exception as e:
         print(f"❌ 保存配置文件失败: {e}")

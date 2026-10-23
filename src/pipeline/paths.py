@@ -8,9 +8,15 @@
 STATE_DIR/SUMMARIES_DIR/OUTPUT_DIR 沿用 data/ 下的子目录（与 AgenticReader
 其余数据目录同级），不再是独立仓库自己的 state/、output/。
 """
-import json
 import os
 from pathlib import Path
+
+# re-export：实现已下沉到 src/utils/json_io.py（与 path_guard 同层），以消除
+# core/document_management → pipeline 的模块级反向依赖；既有调用方
+# （registry/queue_store/job_runner/chat_ingest/process_*/generate_qa_brief/
+# sync_memory_ingest）继续 `from src.pipeline.paths import write_json_atomic`
+# 零改动。
+from src.utils.json_io import write_json_atomic  # noqa: F401
 
 from src.config.settings import DATA_ROOT
 
@@ -22,16 +28,3 @@ OUTPUT_DIR = PROJECT_ROOT / DATA_ROOT / "output" / "pipeline"
 # 每日研究简报的本地目录（沿用 ai-research-pipeline 原有的环境变量名，
 # 方便熟悉旧项目的人直接迁移习惯）。
 BRIEFS_DIR = Path(os.environ.get("BRIEFS_DIR", str(Path.home() / "Desktop" / "AATF-Intelligence-Briefs")))
-
-
-def write_json_atomic(path: Path, data) -> None:
-    """先写 .tmp 再原子替换——进程在写入途中被杀时，原文件保持完好，
-    不会留下半截 JSON。queue/summary 的落盘统一用这一个实现。
-
-    注意它只防"写到一半崩溃"，不防"两个进程同时改"——后者要靠
-    queue_transaction 的锁，两者互补。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    tmp_path.replace(path)

@@ -15,8 +15,10 @@ from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime
 import uuid
 
-# 原子落盘复用 pipeline 的实现（tmp + os.replace），与 queue_store 同一套范式
-from src.pipeline.paths import write_json_atomic
+# 原子落盘（tmp + os.replace），与 queue_store/registry 同一套范式。
+# 实现放在 src/utils/json_io（与 path_guard 同层）——从 pipeline.paths 导入会形成
+# core→pipeline 反向依赖，只为一行函数不值得。
+from src.utils.json_io import write_json_atomic
 
 try:
     import fcntl  # POSIX 下才有：跨进程排他锁

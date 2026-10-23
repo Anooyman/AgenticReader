@@ -547,9 +547,9 @@ class SearchUtils:
             "answer": answer
         }
 
-        # 保存到文件
-        with open(cache_file, 'w', encoding='utf-8') as f:
-            json.dump(cache_data, f, ensure_ascii=False, indent=2)
+        # 保存到文件（原子落盘，与状态文件同一范式）
+        from src.utils.json_io import write_json_atomic
+        write_json_atomic(cache_file, cache_data)
 
         logger.info(f"💾 [Cache] 搜索结果已保存: {cache_file}")
         logger.info(f"   - 查询: {query[:50]}...")
@@ -596,9 +596,9 @@ class SearchUtils:
             "metadata": metadata or {}
         }
 
-        # 保存
-        with open(json_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # 保存（原子落盘）
+        from src.utils.json_io import write_json_atomic
+        write_json_atomic(json_file, data)
 
         logger.info(f"💾 [WebContent] URL 内容已保存: {json_file}")
         logger.info(f"   - URL: {url}")

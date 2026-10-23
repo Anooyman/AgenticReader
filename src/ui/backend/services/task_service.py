@@ -1,11 +1,12 @@
 """后台任务管理服务"""
 
-import asyncio
 from typing import Dict, Any, Optional
 from datetime import datetime
 import json
 from pathlib import Path
 import uuid
+
+from src.utils.json_io import write_json_atomic
 
 
 class TaskManager:
@@ -31,13 +32,27 @@ class TaskManager:
             self.tasks = {}
 
     def _save_tasks(self):
-        """保存任务到文件"""
+        """保存任务到文件（原子落盘，tmp + os.replace）"""
         try:
-            self.tasks_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.tasks_file, 'w', encoding='utf-8') as f:
-                json.dump(self.tasks, f, ensure_ascii=False, indent=2)
+            write_json_atomic(self.tasks_file, self.tasks)
         except Exception as e:
             print(f"保存任务历史失败: {e}")
+
+    def recover_interrupted(self) -> int:
+        """进程重启后把残留的 running 任务标记为 interrupted。
+
+        后台索引/重建任务是 asyncio 协程，进程死了它们就永远不会再被更新；
+        留在 running 会让前端任务面板一直转圈。启动时调一次。返回修复条数。"""
+        fixed = 0
+        for task in self.tasks.values():
+            if task.get("status") == "running":
+                task["status"] = "interrupted"
+                task["updated_at"] = datetime.now().isoformat()
+                fixed += 1
+        if fixed:
+            self._save_tasks()
+            print(f"♻️ 启动恢复：{fixed} 个残留 running 任务已标记为 interrupted")
+        return fixed
 
     def create_task(self, task_type: str, filename: str, **extra) -> str:
         """
@@ -78,23 +93,6 @@ class TaskManager:
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """获取任务状态"""
         return self.tasks.get(task_id)
-
-    def get_running_tasks(self) -> list:
-        """获取所有运行中的任务"""
-        return [
-            task for task in self.tasks.values()
-            if task["status"] == "running"
-        ]
-
-    def get_recent_completed_tasks(self, limit: int = 10) -> list:
-        """获取最近完成的任务"""
-        completed = [
-            task for task in self.tasks.values()
-            if task["status"] in ["completed", "failed"]
-        ]
-        # 按完成时间排序
-        completed.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
-        return completed[:limit]
 
     def complete_task(self, task_id: str, success: bool = True, error: str = None):
         """标记任务完成"""

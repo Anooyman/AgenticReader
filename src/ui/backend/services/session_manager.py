@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 import logging
 
+from src.utils.json_io import write_json_atomic
+
 logger = logging.getLogger(__name__)
 
 
@@ -104,10 +106,17 @@ class SessionManager:
             return None
 
     def _save_session_file(self, session_path: Path, session_data: Dict):
-        """保存会话文件"""
+        """保存会话文件（原子落盘：tmp + os.replace）。
+
+        写侧走 write_json_atomic 与本仓库状态文件范式一致（registry/queue_store）：
+        WS 车道与 chat_ingest 车道会同读同一 session JSON，进程中途被杀不能留
+        半截文件。读侧 _load_session_file 保持容错（坏文件返回 None 不炸启动）。
+
+        本方法是同步函数、跑在事件循环线程里——同步块内部不会被其它协程打断，
+        因此单进程内的读-改-写交错已被事件循环串行化；跨进程防护留给
+        write_json_atomic 的原子替换语义。"""
         try:
-            with open(session_path, 'w', encoding='utf-8') as f:
-                json.dump(session_data, f, ensure_ascii=False, indent=2)
+            write_json_atomic(session_path, session_data)
         except Exception as e:
             logger.error(f"保存会话文件失败 {session_path}: {e}")
             raise

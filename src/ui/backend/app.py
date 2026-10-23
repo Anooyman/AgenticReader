@@ -34,9 +34,11 @@ async def lifespan(app: FastAPI):
     print(f"📁 项目根目录: {PROJECT_ROOT}")
 
     from .services import job_runner, chat_ingest
+    from .services.task_service import task_manager
 
     job_runner.init()
     await job_runner.recover_on_startup()
+    task_manager.recover_interrupted()
 
     tasks = [
         asyncio.create_task(job_runner.run_forever()),

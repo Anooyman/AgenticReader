@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from src.agents.retrieval import RetrievalAgent
 from src.core.document_management import DocumentRegistry
-from src.config.settings import VECTOR_DB_PATH
+from src.config.constants import PathConstants
 
 # 配置日志
 logging.basicConfig(
@@ -390,7 +390,7 @@ def main():
     logger.info(f"   - 查询数量: {len(query_list)}")
     logger.info(f"   - LLM Provider: {provider}")
     logger.info(f"   - 最大迭代次数: {max_iterations}")
-    logger.info(f"   - 向量数据库路径: {VECTOR_DB_PATH}")
+    logger.info(f"   - 向量数据库路径: {PathConstants.DATA_ROOT}/{PathConstants.VECTOR_DB_DIR}")
 
     # 运行异步批处理
     try:

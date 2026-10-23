@@ -140,7 +140,6 @@ DATA_ROOT = PathConstants.DATA_ROOT
 PDF_IMAGE_PATH = f"{DATA_ROOT}/{PathConstants.PDF_IMAGE_DIR}"
 JSON_DATA_PATH = f"{DATA_ROOT}/{PathConstants.JSON_DATA_DIR}"
 PDF_PATH = f"{DATA_ROOT}/{PathConstants.PDF_DIR}"
-VECTOR_DB_PATH = f"{DATA_ROOT}/{PathConstants.VECTOR_DB_DIR}"
 
 # PDF转图片质量配置 - 使用常量定义
 PDF_IMAGE_CONFIG = {
