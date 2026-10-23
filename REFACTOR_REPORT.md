@@ -291,6 +291,15 @@ utils   → config 3
 
 ## 10. 重构路线图
 
+> **执行状态（截至本轮重构收尾）**：P0 全部完成（提交 af5708b / d5f7291 / UI-F1 /
+> 81c7fe2），P1 的 1–3 完成（4a2b1fc 原子写、d4c056c 路径 helper+D2/D3、
+> e90fb2c provider 单入口），R1 检索单入口（retrieval/agent.py `retrieve()`）与
+> R2 索引单入口（`index_document()`）也已落地。累计净删约 9,200 行，修复 3 个
+> 真实缺陷（D1/D2/D3）+ 1 个并发缺陷（write_json_atomic 固定 .tmp 名多线程抢写，
+> 冒烟测试中抓到并修复）。P1-4 的"JSON 清洗 4→1、`_send_progress` 3→1"与
+> P1-5 部分决策、全部 P2/P3 未动，列为下一轮候选。CLAUDE.md 已同步实况
+> （9fc8fcb）。
+
 ### P0 — 纯删除（半天，零风险，≈ -6,400 行）
 
 | 动作 | 净删 | 验证 |
@@ -307,13 +316,21 @@ utils   → config 3
 
 ### P1 — 收口（1-2 天，≈ -1,200 行，风险中低）
 
-1. `provider` 单入口，删 14 处硬编码；`/config` 生效。
-2. `write_json_atomic` + `flock` 下沉 `src/utils/json_io.py`，4 份写 JSON 全改。
-3. `get_vector_db_path()` / `get_output_dir()` helper，修 D2/D3。
-4. JSON 清洗 4 → 1、`_send_progress` 3 → 1、`helpers.py` 9 个死函数删除。
-5. `_session_cache`、三个空配置开关、`GET /documents/index`/`upload` 的去留决策。
+1. ✅ `provider` 单入口，删 14 处硬编码；`/config` 生效。（e90fb2c：
+   `settings.resolve_provider()`，Orchestrator 解析一次下发子 agent，
+   `IndexRequest` 默认值也改走链）
+2. ✅ `write_json_atomic` + `flock` 下沉 `src/utils/json_io.py`，4 份写 JSON 全改。
+   （4a2b1fc：session/task/app_config/search_cache 全部原子化，`paths.py` 留
+   re-export；顺带修掉 core→pipeline 反向依赖与 task_service 启动恢复）
+3. ✅ `get_vector_db_path()` / `get_output_dir()` helper，修 D2/D3。（d4c056c）
+4. ◐ `helpers.py` 9 个死函数已删（d5f7291）；JSON 清洗 4→1、`_send_progress`
+   3→1 未做——两处都是纯收敛不修 bug，且动 answer/retrieval/search 热点路径，
+   建议与 P2-3（AnswerAgent 图退化）同轮做，避免同文件反复动。
+5. ◐ `GET /documents/index` 误列为 GET 的疑虑已随 R2 消除（`documents.py` 现
+   调 `index_document()`）；`_session_cache` 与三个空配置开关保留（低风险、
+   有注释），`/sessions/current/info` 无消费者但删除需要单独授权——留待决策。
 
-### P2 — 结构（3-5 天，风险中）
+### P2 — 结构（3-5 天，风险中）——未动，下一轮候选
 
 1. `index_document_service()` / `delete_document_service()`：4 份索引、3 份删除收敛；`documents.py` 只留 `list`（并修 D1）。
 2. `VectorDBClient`/`MetadataVectorDB` 按 `(path, mtime)` 进程级缓存 + `get_embeddings` `lru_cache`。
@@ -321,7 +338,7 @@ utils   → config 3
 4. 前端共享层：`api.js` 唯一出口 + `ui-feedback.js` + `pdf-viewer.js`；`data.py` 按 documents/storage/ops 拆三模块。
 5. 模板内联 3,200 行外链化。
 
-### P3 — 按需（不阻塞）
+### P3 — 按需（不阻塞）——未动
 
 - 抓取栈二选一（保留 `scraper/`，把 `search` 内部的 `SimpleMCPClient` 归并过去）。
 - `process_pdf_queue` / `process_web_queue` 抽 `pipeline/common.py`。
