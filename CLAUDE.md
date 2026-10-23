@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 本文档按当前代码实地重写（旧版与本仓库已严重脱节）。关键更正：`DocumentRegistry` 在 `src/core/document_management/registry.py`（不是 `src/agents/indexing/doc_registry.py`）；`src/config/prompts/` 下只剩 `metadata_prompts.py`（PlanAgent/ExecutorAgent/MemoryAgent/AgentType 均不存在）；`src/config/tools/` 目录不存在；`src/core/processing/` 只剩 `text_splitter.py`；UI 服务层是 `session_manager.py`（无 `data_service.py`）；PDFReader/WebReader 类不存在；memory 子系统已实际接入（非 planned）。
+> 本文档按当前代码实地重写（旧版与本仓库已严重脱节）。关键更正：`DocumentRegistry` 在 `src/core/document_management/registry.py`（不是 `src/agents/indexing/doc_registry.py`）；`src/config/prompts/` 下只剩 `metadata_prompts.py`（PlanAgent/ExecutorAgent/MemoryAgent/AgentType 均不存在）；`src/config/tools/` 目录不存在；`src/core/processing/`、`src/config/app_settings.py`、`src/services/mcp_client.py`、`src/services/duckduckgo_mcp_server.py`、`src/ui/backend/api/v1/chapters.py`、`src/ui/static/js/dashboard.js` 等历史孤儿模块已在重构中删除；UI 服务层是 `session_manager.py`（无 `data_service.py`）；PDFReader/WebReader 类不存在；memory 子系统已实际接入（非 planned）。
 
 ## Project Overview
 
@@ -90,37 +90,33 @@ src/
 │   ├── settings.py           # LLM_CONFIG / LLM_EMBEDDING_CONFIG / MCP_CONFIG / 路径
 │   ├── constants.py          # ProcessingLimits / RetrievalDedupConfig / PathConstants 等
 │   ├── model_overrides.py    # AGENT_MODEL_OVERRIDES：每 agent 单独指定模型
-│   ├── app_settings.py       # 可选的 Pydantic 配置层（settings.py 里 try-import）
 │   └── prompts/              # 仅 metadata_prompts.py（+惰性 SYSTEM_PROMPT_CONFIG 聚合）
 ├── core/
 │   ├── document_management/  # registry.py(DocumentRegistry) / indexer.py / manager.py
 │   ├── llm/                  # client.py(LLMBase) / providers.py(azure|openai|ollama|gemini) / history.py
 │   ├── parallel/             # indexing.py(ChapterProcessor 等) / retrieval.py(ParallelRetrievalCoordinator)
-│   ├── processing/           # 仅 text_splitter.py
 │   └── vector_db/            # vector_db_client.py(FAISS+轮次去重) / metadata_db.py
 ├── memory/                   # LanceDB 长期记忆（见 "Memory System"）
 │   └── adapters/             # ai_research / webapp_chat / chunking / base
 ├── pipeline/                 # 每日简报批处理（briefs_parser / queue_store / process_pdf_queue /
 │                             #   process_web_queue / sync_* / generate_qa_brief / render_report / paths）
 ├── services/
-│   ├── mcp_client.py         # MCPClient：stdio/sse/http 客户端 + 工具循环
-│   ├── duckduckgo_mcp_server.py  # 本地 FastMCP "ddg-search" server（脚本）
 │   └── scraper/              # Playwright 网页抓取器包：core(browser/downloader/extractor/
-│                             #   fallback/retry/anti_detection) / storage / mcp_server(可作 stdio MCP 启动)
+│                             #   anti_detection) / storage / mcp_server(可作 stdio MCP 启动)
 ├── ui/
 │   ├── run_server.py         # 启动入口：HOST/PORT env、reload、Windows 优化
 │   ├── backend/
 │   │   ├── app.py            # FastAPI 应用 + lifespan（job_runner + chat_ingest 两车道）
 │   │   ├── config.py         # CORS_ORIGINS env、默认只放行 localhost 来源
 │   │   ├── api/pages.py      # 7 个页面路由；api/websocket.py /ws/chat
-│   │   ├── api/v1/           # documents chat pdf chapters structure config
+│   │   ├── api/v1/           # documents chat pdf structure config
 │   │   │                     #   sessions data briefs jobs memory speech llmmemory
 │   │   └── services/         # session_manager chat_service chat_ingest job_runner
 │   │                         #   memory_browse task_service briefs_data
 │   ├── templates/            # base dashboard chat config manage structure_editor briefs memory
-│   └── static/               # css/ + js/（api/chat/dashboard/manage/config/structure_editor/briefs）
+│   └── static/               # css/ + js/（api/chat-enhancer/chat/manage/config/structure_editor/briefs）
 └── utils/                    # path_guard(safe_path 防目录穿越)、helpers、validators、
-                              #   config_validator、async_utils、performance_monitor 等
+                              #   async_utils、json_io(write_json_atomic 唯一实现)
 ```
 
 各 agent 包遵循同一套结构：`agent.py / nodes.py / tools.py / utils.py / state.py / prompts.py`，agent 类继承 `AgentBase`，nodes 等模块通过构造参数持有 agent 实例（依赖注入）。
@@ -142,7 +138,7 @@ src/
 | `src/ui/backend/services/session_manager.py:93` | 会话落盘为 `data/sessions/{session_id}.json` 平铺文件（旧 mode 子目录自动迁移） |
 | `src/config/settings.py:134-162` | embedding provider/模型名/环境变量的**唯一**读取入口 `get_embedding_provider()/get_embedding_model_name()` |
 | `src/config/model_overrides.py` | 各 Agent 单独换模型的调优入口（按 AgentBase 的 name 查表） |
-| `src/utils/path_guard.py:43` | `safe_path()`：所有按 doc_name 拼数据目录的 API 都要过它（documents/pdf/structure/chapters/data 五个模块已在用） |
+| `src/utils/path_guard.py:43` | `safe_path()`：所有按 doc_name 拼数据目录的 API 都要过它（documents/pdf/structure/data 等模块已在用） |
 
 ## Key Data Structures
 
@@ -150,16 +146,16 @@ Agent 状态全部是 TypedDict（各 agent 包内 `state.py`），直接喂给 
 
 **IndexingState**：`doc_name / doc_path / doc_type("pdf"|"url") / pdf_data_list(逐页解析结果) /
 agenda_dict(目录 {title:[pages]}) / has_toc / stage_status(缓存跳过分) / agenda_data_list(章节数据) /
-chapter_summaries + chapter_refactors / vector_db_docs / brief_summary / generated_files /
+chapter_summaries + chapter_refactors / brief_summary / generated_files /
 index_path / status / error / is_complete`。`error` 被置位即触发各节点的 `_route_on_error` 短路。
 
 **AnswerState**：`user_query / rewritten_query(rewrite_query 节点产物) / enabled_tools /
-selected_docs / thoughts / tool_calls([{tool,args}]) / tool_results([{tool,args,result,success}]) /
+selected_docs / tool_calls([{tool,args}]) / tool_results([{tool,args,result,success}]) /
 final_answer / is_complete / error`（`current_iteration/max_iterations` 仅为兼容保留字段，单轮架构
 不再有多轮回环）。
 
 **RetrievalState**（ReAct 循环用）：`query / rewritten_query / doc_name(None=多文档) /
-thoughts / actions / observations / current_tool / retrieved_content / intermediate_summary /
+actions / observations / current_tool / retrieved_content / intermediate_summary /
 reason(evaluate 输出) / final_summary / selected_pages / is_complete`。
 
 **SearchState**：`query / use_case / detected_use_case / search_engine_results / selected_urls /
@@ -176,11 +172,13 @@ output_files, updated_at}}`。CLI 与 UI 都只信 `index_path` 存在且向量�
 - **LangGraph StateGraph + TypedDict 状态**：每个 agent 图在 `build_graph()` 编译；state 即 agent 包的 `state.py`。
 - **确定性与 ReAct 的分工**：AnswerAgent 的 plan 是纯代码按 `enabled_tools` 生成工具调用（工具名见 `src/agents/answer/tools_config.py` 的 `ANSWER_TOOLS`：`retrieve_documents` / `search_web`）；RetrievalAgent、Orchestrator、`src/memory/search.agentic_search` 才是 LLM 自主决策的 ReAct 循环。
 - **core/config 与 agents 的模块级 import 已断开**：`src/core/**` 与 `src/config/**` 现在**零处**在模块级 import `src.agents`——全部延迟到函数体内（例如 `src/core/document_management/indexer.py:62`、`src/core/parallel/indexing.py:79-82`、`src/config/prompts/__init__.py` 的 `_build_system_prompt_config()` 惰性聚合各 agent prompts）。新增这类 import 时务必保持函数级，否则会重新拖上 langgraph 依赖链。
-- **并发写 JSON 状态文件的统一范式**：`write_json_atomic()`（`src/pipeline/paths.py`，tmp+os.replace）+ 独立 `.lock` 文件的 flock 事务，DocumentRegistry 与 pipeline queue_store 共用同一套实现；POSIX 下 fcntl，Windows 退化进程内锁（见 registry.py 注释）。
+- **并发写 JSON 状态文件的统一范式**：`write_json_atomic()`（唯一实现在 `src/utils/json_io.py`，tmp+os.replace，tmp 名带 pid+tid 防多线程抢写；`src/pipeline/paths.py` 保留 re-export 兼容）+ 独立 `.lock` 文件的 flock 事务，DocumentRegistry、pipeline queue_store、会话/任务/app_config 落盘共用同一套；POSIX 下 fcntl，Windows 退化进程内锁（见 registry.py 注释）。
 - **并发检索**：`src/core/parallel/`——索引期 ChapterProcessor 并行章节摘要/重构，检索期 ParallelRetrievalCoordinator 多文档并行调 RetrievalAgent。
 - **检索去重是"按轮次窗口"而非永久黑名单**：`RetrievalDedupConfig`（`src/config/constants.py:36-53`，默认 5 轮，env `RETRIEVAL_DEDUP_WINDOW` 可覆盖），超窗记录自动淘汰。
 - **Orchestrator 的护栏**：`MAX_ITERATIONS=15`、累计上下文 >120k 字符强制收尾、整轮工具全错连续 2 次提前收尾、900s 墙钟预算（`src/agents/orchestrator/agent.py:32-41`）。多个 tool_calls 一律 `asyncio.gather` 并行。
-- **Provider 默认值**：代码默认一律是 `openai`（AgentBase / LLMBase / `load_config()` 三处一致）。
+- **Provider 单一入口**：代码兜底默认一律是 `openai`（AgentBase / LLMBase / `load_config()`），
+  但"这次用哪个 provider"的决定权统一收在 `settings.resolve_provider()`——见 Env Variables
+  的 Provider 一节；新增构造点不要自己写死字面量。
 
 ## Data Flow
 
@@ -199,7 +197,7 @@ CLI: main.py [i] → core/document_management/indexer.py index_pdf_document()
 ```
 
 ### 对话
-- **CLI**（`main.py`）：四种绑定模式最终都调 `AnswerAgent.query()` / graph.ainvoke——单文档、跨文档自动选档（DocumentSelector 按 registry 的 brief_summary 选）、跨文档手动选档、通用模式；网络搜索模式 [w] 直接调 `SearchAgent.search()`（provider 在 main.py:744 写死 "openai"）。
+- **CLI**（`main.py`）：四种绑定模式最终都调 `AnswerAgent.query()` / graph.ainvoke——单文档、跨文档自动选档（DocumentSelector 按 registry 的 brief_summary 选）、跨文档手动选档、通用模式；网络搜索模式 [w] 直接调 `SearchAgent.search()`（provider 走 `settings.resolve_provider(None)`：app_config.json → env `PROVIDER` → openai）。
 - **UI**：`/ws/chat` 或 `/api/v1/chat/initialize` → `chat_service.chat()` → **Orchestrator.ask()**。Orchestrator 的 LLM 自主决定调用 `search_memory`（同进程直调 `src.memory.search.agentic_search`，namespace 缺省全部）和/或 `deep_dive_document`（调 AnswerAgent 深挖某 doc 原文）。会话消息经 SessionManager 存 `data/sessions/{id}.json`，消息带 `agents_used` 展示标签。
 - **SearchAgent**（`src/agents/search/`）：双 use case——搜索引擎检索（DuckDuckGo MCP 搜索 → 选 URL → web_scraper MCP 爬取）或 URL 分析（直接爬取；内容超阈值自动调 IndexingAgent 索引后转文档对话式回答，策略字段 `index_then_chat`/`direct_chat`）。
 
@@ -224,19 +222,22 @@ BRIEFS_DIR 下 HTML（env BRIEFS_DIR，默认 ~/Desktop/AATF-Intelligence-Briefs
   1. 管线：`process_pdf_queue`/`process_web_queue` 处理完即调 `ingest_source()`；`src/pipeline/sync_memory_ingest.py` 补历史欠账。
   2. **chat_ingest 车道**（`src/ui/backend/services/chat_ingest.py`）：与 job_runner 并行的独立后台任务，周期扫描 `data/sessions/` 把"有新内容 + 已静默一段时间 + 至少一轮完整问答"的会话写入 `webapp-chat`；水位线记 `data/pipeline/chat_ingest_state.json`；按 chunk 内容 hash 幂等去重。
 - **读取路径**：Orchestrator 的 `search_memory` 子 agent → `agentic_search()`（semantic/keyword/keywords-pool/list-by-source 四工具的 ReAct 循环，MAX_ITERATIONS=4）。
-- **浏览/管理 API**：`/api/v1/memory/*`（overview / namespace 列表 / item / search / 删除），供 `/data` 页 Memory tab 使用，实现是 `services/memory_browse.py` 同进程直调。
+- **浏览/管理 API**：`/api/v1/memory/*`（overview / namespace 列表 / search / 删除——含 item、
+  namespace、按 source 三种 DELETE；单条 item 的 GET 读取端点已删），供 `/data` 页 Memory tab
+  使用，实现是 `services/memory_browse.py` 同进程直调。
 - **LLM-Memory 桥**：`/api/v1/llmmemory/*` 是对**外部** LLM-Memory webui（env `LLM_MEMORY_URL`，默认 `http://127.0.0.1:8765`）的透明 HTTP 代理，供 `/memory` 页简报管线用——与本仓库的 src/memory 是两套东西，别混。
 - **Embedding 维度**：LanceDB 建表需要固定维度，`src/memory/config.py` 维护模型名→维度映射表；配置缺失只 warning 并按默认 1536 建表。改 embedding 模型名务必走 `settings.get_embedding_model_name()`。
 
 ## MCP Services
 
-`MCP_CONFIG`（`src/config/settings.py:22-62`）当前启用的条目：
-- `"ddg-search"`：`sys.executable src/services/duckduckgo_mcp_server.py` 启动的本地 FastMCP server（注释解释了为何必须用解释器绝对路径）。
+`MCP_CONFIG`（`src/config/settings.py`）当前启用的条目：
 - `"duckduckgo"`：`uvx duckduckgo-mcp-server`（SearchAgent 的 web_search 用它，需单独安装 uvx/该包）。
 - `"web_scraper"`：`sys.executable -m scraper.mcp_server.server`，env `PYTHONPATH=src/services`——即 `src/services/scraper/` 自带的 Playwright 抓取 MCP server。
-- Playwright 官方 MCP 的配置在 settings.py 里是**注释掉**的（历史选项，当前不走它）。
+- 历史的 `"ddg-search"` 本地脚本条目（`src/services/duckduckgo_mcp_server.py`）与 `mcp_server_fetch` 注释条目已随重构删除。
 
-`src/services/mcp_client.py` 的 MCPClient 支持 stdio/sse/streamable-http 三种传输，工具调用循环模式与 Orchestrator 相同。
+MCP 客户端实现是 `src/agents/search/utils.py` 里的 `SimpleMCPClient`（stdio 传输，
+`mcp` 库的 ClientSession；历史上的 `src/services/mcp_client.py` 已删除——它只被
+SearchAgent 用到 stdio 一种传输，薄封装就地维护即可）。
 
 ## Environment Variables
 
@@ -255,9 +256,17 @@ BRIEFS_DIR 下 HTML（env BRIEFS_DIR，默认 ~/Desktop/AATF-Intelligence-Briefs
 - `LLM_MEMORY_URL`：外部 LLM-Memory webui 地址（/memory 页桥接）
 
 **Provider 配置来源——CLI 与 UI 的差异**：
-- CLI（main.py）：无配置文件。AnswerAgent 用 AgentBase 默认 `openai`；搜索模式的 SearchAgent 在 `main.py:744` 写死 `provider="openai"`。要换 provider 只能改代码调用处；模型名由 env 变量 + `model_overrides.py` 控制。
-- UI：`data/config/app_config.json` 持久化 provider/pdf_preset/log_level 等（`/api/v1/config` 读写，默认 provider `openai`），chat_service 从这里取 provider 并缓存 AnswerAgent 实例。
-- 两者共用同一套 env 变量做凭据/模型名配置。
+- **唯一入口**：`settings.resolve_provider(provider)` / `get_default_provider()`
+  （`src/config/settings.py`）。优先级：显式传参 > `data/config/app_config.json`
+  的 provider > env `PROVIDER` > `"openai"`。所有此前写死 "openai" 的链路
+  （chat_ingest、job_runner、memory 搜索 API、process_web_queue、Orchestrator
+  及其子 agent、CLI 搜索、IndexRequest）都已改走这个入口。
+- UI：`/config` 页 → `/api/v1/config` 读写 `app_config.json`；chat_service 把
+  load_config() 的 provider 传给 `Orchestrator.ask(provider=...)`，ask 解析一次
+  并下发给 deep_dive_document / search_memory 子 agent——一次提问全链路同一个
+  provider；AnswerAgent 校验实例按 provider 缓存，换配置自然失效。
+- CLI（main.py）：无 UI 配置时按 env `PROVIDER` 回退；模型名由 env 变量 +
+  `model_overrides.py` 控制。
 
 ## REST API Quick Reference（当前全部实际路由）
 
@@ -271,17 +280,16 @@ Health:  GET /health                  # app.py 内联定义
 documents: GET /list /available-pdfs | POST /upload /index | DELETE /{doc_name}
 chat:      POST /initialize /clear    | GET  /load-more-messages
 sessions:  GET /list /current/info /{id} | DELETE /{id} | PATCH /{id}/rename
-pdf:       GET /view/{doc_name} /images/{doc_name} /image/{doc_name}/{filename}
-chapters:  GET /documents/{doc_name}/chapters
-structure: GET|PUT /{doc_name} | POST /{doc_name}/rebuild | DELETE /{doc_name}/chapter/{title}
+pdf:       GET /view/{doc_name}                   # 页面图（专用 images/image 路由已删，走 view 降级）
+structure: GET|PUT /{doc_name} | POST /{doc_name}/rebuild
 config:    GET "" | POST /provider /system /reset       # 落 data/config/app_config.json
 data:      GET /overview /documents /documents/{name}/summary /documents/pending
-           /cache/{type} /sessions/stats /tasks /tasks/{task_id}
+           /sessions/stats /tasks/{task_id}
            POST /documents/{name}/index  DELETE /pdfs /documents/{name}/parts /documents
-           DELETE /cache/{type}  POST /cleanup/smart?days=N /backup /reset
+           POST /cleanup/smart?days=N
 briefs:    GET /dates /cards  | POST /load /sync-memory # 数据层 services/briefs_data.py
 jobs:      GET "" | POST /{job_id}/retry /cancel        # 任务账本见 job_runner + webapp_jobs.json
-memory:    GET /overview /namespace/{ns} /item/{id} / POST /search
+memory:    GET /overview /namespace/{ns} / POST /search
            DELETE /item/{id} /namespace/{ns}/source/{source_id} /namespace/{ns}
 speech:    POST /transcribe /synthesize
 llmmemory: GET /dates /papers ... 等                    # 外部 webui 透传代理（见上节）
@@ -292,8 +300,8 @@ llmmemory: GET /dates /papers ... 等                    # 外部 webui 透传�
 - FastAPI + Jinja2 + 原生 ES6 JS，无框架；WebSocket `/ws/chat` 实时对话，REST 做初始化/历史分页。
 - **UI 聊天走 Orchestrator 而非 AnswerAgent**：`enabled_tools`/`selected_docs` 只是透传给会话上下文的元数据，真正的工具决策在 Orchestrator 的 ReAct 循环里；`agents_used` 由子 agent name 映射成展示标签（MemorySearch/DeepDive）。
 - 会话存储：`data/sessions/{session_id}.json` 平铺（SessionManager 自动迁移旧 mode 子目录）；会话 API 为 list/current-info/get/delete/rename——**没有** import/export 端点。
-- 数据管理页 `/data`：总览、按文档列 JSON/向量库/图片/摘要四类产物、部分/批量删除（`/api/v1/data/documents/{name}/parts`）、缓存查看/清理、smart cleanup、backup、sessions stats，以及 Memory tab。
-- PDF 查看：`/api/v1/pdf/view|images|image`（页面图 + 图片降级）。
+- 数据管理页 `/data`：总览、按文档列 JSON/向量库/图片/摘要四类产物、部分/批量删除（`/api/v1/data/documents/{name}/parts`）、smart cleanup、sessions stats，以及 Memory tab（缓存查看/清理、backup、危险的全量 reset 端点已删）。
+- PDF 查看：`/api/v1/pdf/view/{doc_name}`（页面图，图片降级内建于 view）。
 - 结构编辑器 `/structure`：编辑 structure.json 后走 rebuild 图重生成摘要/索引。
 - `/config` 页读写 provider 与系统设置；`/briefs` 页加载简报条目进管线队列；`/memory` 页桥接外部 LLM-Memory。
 - 语音：`/api/v1/speech/transcribe|synthesize`（需 OPENAI_API_KEY）。
@@ -309,7 +317,7 @@ llmmemory: GET /dates /papers ... 等                    # 外部 webui 透传�
 - **新增顶层 Agent**：建 `src/agents/<name>/` 六件套包 → `agent.py` 继承 `AgentBase`（name 参数同时
   用于 `AGENT_MODEL_OVERRIDES` 查表）→ 需要被 Orchestrator 调用的话在 `sub_agents/` 实现 SubAgent
   子类并注册进 `SUB_AGENTS` 字典 → 在 `tests/test_imports.py` 的模块清单里加一行。
-- **写新的共享状态 JSON**：一律用 `src/pipeline/paths.py:write_json_atomic()` + 独立 `.lock` 文件
+- **写新的共享状态 JSON**：一律用 `src/utils/json_io.py:write_json_atomic()`（`src.pipeline.paths` 亦有 re-export）+ 独立 `.lock` 文件
   的 flock 事务（参考 `registry.py:_transaction` 与 `queue_store.queue_transaction`），不要裸
   open+json.dump 写状态文件。
 - **新数据目录**：路径常量加进 `src/config/constants.py:PathConstants`，需要自动创建的在入口
