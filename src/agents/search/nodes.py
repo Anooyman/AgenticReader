@@ -11,7 +11,7 @@ import json
 
 from .state import SearchState
 from .prompts import SearchRole
-from .utils import extract_json_from_llm_response
+from ..common.json_utils import PARSE_FAILED, parse_llm_json
 from src.config.constants import ProcessingLimits
 
 if TYPE_CHECKING:
@@ -207,8 +207,14 @@ class SearchNodes:
 
             # 解析 JSON 响应
             try:
-                # 使用工具函数从LLM响应中提取JSON
-                selection_data = extract_json_from_llm_response(response)
+                # 统一走 common.parse_llm_json（围栏 / 前后杂文本 / 首尾括号都能剥）。
+                # 解析不出来时照旧抛 JSONDecodeError，由下方 except 回退到"使用前 N 个 URL"，
+                # 与收敛前的 extract_json_from_llm_response 失败语义一致。
+                selection_data = parse_llm_json(response, default=PARSE_FAILED)
+                if selection_data is PARSE_FAILED:
+                    raise json.JSONDecodeError(
+                        "无法从 LLM 响应中解析出 JSON", response.strip(), 0
+                    )
                 selected_items = selection_data.get('selected_urls', [])
                 overall_reason = selection_data.get('overall_reason', '')
 

@@ -13,12 +13,39 @@ import re
 from .state import RetrievalState
 from .prompts import RetrievalRole
 from .tools_config import format_all_tools_for_llm, get_tool_by_name
+from ..common.json_utils import parse_llm_json
+from ..common.progress import build_progress_payload, emit_progress
 from src.config.constants import ProcessingLimits
 
 if TYPE_CHECKING:
     from .agent import RetrievalAgent
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_llm_object(response, default):
+    """
+    解析 LLM 返回的 JSON 对象（think / evaluate 两处内联式收敛后的公共入口）。
+
+    逐条对齐收敛前的语义：
+
+    - 文本不以 ``{`` 开头 → 直接给 ``default``（原实现连 loads 都不做）；
+    - 以 ``{`` 开头却解析不出来 → 照旧抛 ``JSONDecodeError``，交给所在节点的
+      ``except Exception`` 统一兜底。这两条回退路径**不一样**（think 走
+      "默认工具"分支并照常写 current_params，evaluate 走"按迭代次数判定完成"
+      分支），不能压成同一条 default，故保留抛错；
+    - 其余情况返回解析出的 dict；清洗能力比原来强（```json 围栏、前后杂文本
+      现在也吃得下），但凡是原实现能解析成功的输入，返回值与原实现一致。
+    """
+    text = response.strip()  # 非字符串响应照旧在这里抛 AttributeError
+    decision = parse_llm_json(response, default=None, expect="dict")
+    if decision is not None:
+        return decision
+    if text.startswith('{'):
+        # 本分支下 json.loads 必然失败（整串是 parse_llm_json 的第一个候选），
+        # 借标准库抛出真实的 JSONDecodeError 与定位信息。
+        json.loads(text)
+    return default
 
 
 class RetrievalNodes:
@@ -53,27 +80,25 @@ class RetrievalNodes:
             message: 详细消息
             tool: 当前使用的工具（可选）
         """
-        if not self.agent.progress_callback:
-            return
-
-        try:
-            progress_data = {
-                "agent": "retrieval",
-                "stage": stage,
-                "stage_name": stage_name,
-                "iteration": state.get("current_iteration", 0) + 1,  # +1 显示从1开始
-                "max_iterations": state.get("max_iterations", ProcessingLimits.MAX_RETRIEVAL_ITERATIONS),
-                "status": status,
-                "message": message,
-                "doc_name": self._doc_tag()
-            }
-
-            if tool:
-                progress_data["tool"] = tool
-
-            await self.agent.progress_callback(progress_data)
-        except Exception as e:
-            logger.warning(f"⚠️  发送进度更新失败: {e}")
+        # 公共骨架（回调判空 → 组 payload → await → 异常就地吞掉打 warning）见
+        # src/agents/common/progress.py:emit_progress；这里只留 retrieval 侧独有字段。
+        # payload 用零参 callable 传入，保持收敛前"组 dict 也在 try 内"的异常语义。
+        await emit_progress(
+            self.agent.progress_callback,
+            lambda: build_progress_payload(
+                agent="retrieval",
+                stage=stage,
+                stage_name=stage_name,
+                iteration=state.get("current_iteration", 0) + 1,  # +1 显示从1开始
+                max_iterations=state.get("max_iterations", ProcessingLimits.MAX_RETRIEVAL_ITERATIONS),
+                status=status,
+                message=message,
+                doc_name=self._doc_tag(),
+                tool=tool,
+            ),
+            logger=logger,
+            failure_warning="⚠️  发送进度更新失败: {error}",
+        )
 
     def _save_persistent_state(self, state: RetrievalState):
         """
@@ -427,7 +452,7 @@ class RetrievalNodes:
 
             # 解析JSON
             logger.info(f"🤔 [Think|{self._doc_tag()}] LLM 响应: {response[:200]}...")
-            decision = json.loads(response.strip()) if response.strip().startswith('{') else None
+            decision = _parse_llm_object(response, None)
             if decision:
                 thought = decision.get("thought", "")
                 action = decision.get("action", "search_by_context")
@@ -970,7 +995,7 @@ class RetrievalNodes:
 
             logger.info(f"⚖️ [Evaluate|{self._doc_tag()}] LLM 响应: {response[:200]}...")
 
-            evaluation = json.loads(response.strip()) if response.strip().startswith('{') else {}
+            evaluation = _parse_llm_object(response, {})
             is_complete = evaluation.get("is_complete", False)
             reason = evaluation.get("reason", "")
 

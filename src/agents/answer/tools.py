@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Optional, List, Dict, Any
 import logging
 import asyncio
 
+from ..common.progress import build_progress_payload, emit_progress
 from src.config.constants import ProcessingLimits
 from src.config.settings import CROSS_DOC_CONFIG
 
@@ -474,19 +475,22 @@ class AnswerTools:
 
     async def _send_progress(self, stage: str, stage_name: str,
                              status: str = "processing", message: str = ""):
-        """发送进度更新"""
-        if not self.agent.progress_callback:
-            return
+        """
+        发送进度更新
 
-        try:
-            progress_data = {
-                "agent": "answer",
-                "stage": stage,
-                "stage_name": stage_name,
-                "status": status,
-                "message": message,
-                "doc_name": self.agent.current_doc or "MultiDoc"
-            }
-            await self.agent.progress_callback(progress_data)
-        except Exception as e:
-            logger.warning(f"⚠️ 发送进度更新失败: {e}")
+        公共骨架（回调判空 → 组 payload → await → 异常就地吞掉打 warning）已收敛到
+        src/agents/common/progress.py:emit_progress，这里只保留 answer/tools 侧的字段；
+        payload 用零参 callable 传入以保持"组 dict 也在 try 内"。
+        """
+        await emit_progress(
+            self.agent.progress_callback,
+            lambda: build_progress_payload(
+                agent="answer",
+                stage=stage,
+                stage_name=stage_name,
+                status=status,
+                message=message,
+                doc_name=self.agent.current_doc or "MultiDoc",
+            ),
+            logger=logger,
+        )

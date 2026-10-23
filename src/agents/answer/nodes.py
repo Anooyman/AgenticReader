@@ -11,6 +11,7 @@ import logging
 
 from .state import AnswerState
 from .components import AnswerFormatter
+from ..common.progress import build_progress_payload, emit_progress
 
 if TYPE_CHECKING:
     from .agent import AnswerAgent
@@ -32,23 +33,26 @@ class AnswerNodes:
 
     async def _send_progress(self, stage: str, stage_name: str, status: str = "processing",
                              message: str = "", **kwargs):
-        """发送进度更新"""
-        if not self.agent.progress_callback:
-            return
+        """
+        发送进度更新
 
-        try:
-            progress_data = {
-                "agent": "answer",
-                "stage": stage,
-                "stage_name": stage_name,
-                "status": status,
-                "message": message,
-                "doc_name": self.agent.current_doc or "MultiDoc"
-            }
-            progress_data.update(kwargs)
-            await self.agent.progress_callback(progress_data)
-        except Exception as e:
-            logger.warning(f"⚠️ 发送进度更新失败: {e}")
+        公共骨架（回调判空 → 组 payload → await → 异常就地吞掉打 warning）已收敛到
+        src/agents/common/progress.py:emit_progress，这里只保留 answer 侧的字段与
+        ``**kwargs`` 追加语义；payload 用零参 callable 传入以保持"组 dict 也在 try 内"。
+        """
+        await emit_progress(
+            self.agent.progress_callback,
+            lambda: build_progress_payload(
+                agent="answer",
+                stage=stage,
+                stage_name=stage_name,
+                status=status,
+                message=message,
+                doc_name=self.agent.current_doc or "MultiDoc",
+                extra=kwargs,
+            ),
+            logger=logger,
+        )
 
     # ==================== Node 1: plan ====================
 

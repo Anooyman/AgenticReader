@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 import asyncio
 import logging
 import re
-import json
 from urllib.parse import urlparse
 from contextlib import AsyncExitStack
 
@@ -23,48 +22,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# ========== JSON 提取辅助函数 ==========
-
-def extract_json_from_llm_response(response: str) -> Dict:
-    """
-    从LLM响应中提取JSON对象
-
-    支持以下格式：
-    1. 纯JSON: {"key": "value"}
-    2. Markdown代码块: ```json\n{"key": "value"}\n```
-    3. 带说明的JSON: Some text\n```json\n{"key": "value"}\n```\nMore text
-
-    Args:
-        response: LLM响应文本
-
-    Returns:
-        解析后的JSON字典
-
-    Raises:
-        json.JSONDecodeError: JSON解析失败
-    """
-    json_text = response.strip()
-
-    # 如果包含markdown代码块，提取JSON部分
-    if "```json" in json_text:
-        # 提取 ```json 和 ``` 之间的内容
-        start = json_text.find("```json") + 7
-        end = json_text.find("```", start)
-        if end != -1:
-            json_text = json_text[start:end].strip()
-    elif "```" in json_text:
-        # 提取第一个代码块
-        start = json_text.find("```") + 3
-        # 跳过可能的语言标识符（如json, python等）
-        newline_pos = json_text.find("\n", start)
-        if newline_pos != -1:
-            start = newline_pos + 1
-        end = json_text.find("```", start)
-        if end != -1:
-            json_text = json_text[start:end].strip()
-
-    # 解析JSON
-    return json.loads(json_text)
+# LLM 响应里的 JSON 清洗已收敛到 src/agents/common/json_utils.py:parse_llm_json
+# （原先本文件里的 extract_json_from_llm_response 是它的一个子集，已删除）。
 
 
 class SimpleMCPClient:

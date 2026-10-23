@@ -6,8 +6,9 @@
 
 import logging
 import json
-import re
 from typing import Dict, Any
+
+from ...common.json_utils import PARSE_FAILED, parse_llm_json
 
 logger = logging.getLogger(__name__)
 
@@ -102,21 +103,20 @@ class MetadataExtractor:
             response: LLM响应文本
 
         Returns:
-            解析后的元数据字典
+            解析后的元数据字典；清洗失败时返回 {}（与收敛前一致），
+            交由 _validate_metadata 判定后走降级方案。
         """
-        try:
-            # 尝试提取JSON部分
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                metadata = json.loads(json_match.group())
-                return metadata
-            else:
-                logger.warning("⚠️ [MetadataExtractor] 未找到JSON格式，尝试直接解析")
-                return json.loads(response)
-
-        except json.JSONDecodeError as e:
-            logger.error(f"❌ [MetadataExtractor] JSON解析失败: {e}")
+        # 清洗逻辑已统一到 src/agents/common/json_utils.py：
+        # 整串裸 loads → ```json / ``` 围栏 → 首尾大括号/方括号贪婪截取
+        # （后者覆盖原 re.search(r'\{.*\}', DOTALL) 的截取语义）。
+        metadata = parse_llm_json(response, default=PARSE_FAILED)
+        if metadata is PARSE_FAILED:
+            logger.error(
+                f"❌ [MetadataExtractor] JSON解析失败: 响应前200字符="
+                f"{str(response)[:200]!r}"
+            )
             return {}
+        return metadata
 
     def _validate_metadata(self, metadata: Dict[str, Any]) -> bool:
         """
