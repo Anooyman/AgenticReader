@@ -76,7 +76,6 @@ async def get_config() -> Dict[str, Any]:
 async def update_provider(config: ProviderConfig) -> Dict[str, Any]:
     """更新LLM提供商配置"""
     try:
-        global _current_config
         _current_config["provider"] = config.provider
         if config.pdf_preset:
             _current_config["pdf_preset"] = config.pdf_preset
@@ -100,7 +99,6 @@ async def update_provider(config: ProviderConfig) -> Dict[str, Any]:
 async def update_system_config(config: SystemConfig) -> Dict[str, Any]:
     """更新系统配置"""
     try:
-        global _current_config
         _current_config["auto_save_outputs"] = config.auto_save_outputs
         _current_config["enable_notifications"] = config.enable_notifications
         _current_config["log_level"] = config.log_level
