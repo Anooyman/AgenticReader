@@ -19,15 +19,17 @@ Note:
 """
 import asyncio
 import logging
-from typing import Any, Optional, List, Dict
+import threading
+from collections import OrderedDict
+from typing import Any, Optional, List, Dict, Tuple
 from langchain.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, MessagesPlaceholder
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables.history import RunnableWithMessageHistory
 
 # get_embeddings() 里的 provider / 模型名解析全部走 settings 的这两个函数，
-# 本模块不再直接读 LLM_EMBEDDING_CONFIG 的任何键。
-from src.config.settings import get_embedding_provider
+# 本模块不再直接读 LLM_EMBEDDING_CONFIG 的任何键（缓存 key 也只取这两个函数的结果）。
+from src.config.settings import get_embedding_provider, get_embedding_model_name
 from src.config.prompts import SYSTEM_PROMPT_CONFIG
 from src.config.constants import SessionHistoryConfig
 
@@ -590,17 +592,110 @@ class LLMBase:
         logger.info(f"📝 [AFTER ADD] 会话现在有 {len(history.messages)} 条消息")
 
 
+# ============================================================================
+# get_embeddings() 的进程级实例缓存（REFACTOR_REPORT §8.2 / 波次5-B）
+# ============================================================================
+# embeddings 对象本身无业务状态（构造时才读配置、建 SDK client），可以安全共享；
+# 真正不能共享的是 VectorDBClient 的轮次去重状态——那部分刻意留在实例上，
+# 见 src/core/vector_db/vector_db_client.py 的文件头注释。
+# 逃生口：clear_embeddings_cache()。
+# ----------------------------------------------------------------------------
+
+#: embeddings 实例缓存最多保留多少条（LRU；正常只有 1~2 条，兜住滥用场景）
+_EMBEDDINGS_CACHE_MAX_ENTRIES = 32
+
+_embeddings_cache: "OrderedDict[Tuple, Any]" = OrderedDict()
+_embeddings_cache_lock = threading.RLock()
+
+
+def _embeddings_cache_key(provider: str, provider_class: type, kwargs: Dict[str, Any]) -> Optional[Tuple]:
+    """算 get_embeddings() 的缓存 key（配置指纹 + 显式 kwargs）。
+
+    key 覆盖"影响构造结果"的配置：
+      - provider（settings.get_embedding_provider 的唯一入口）
+      - provider 类（防止显式指定 provider 类时串味）
+      - 该 provider 配置的 embedding 模型名（settings.get_embedding_model_name，
+        模型名直接决定维度，是必须进 key 的那一项）
+      - 调用方显式传入的 kwargs（同名字段可覆盖默认配置）
+    未进 key 的构造期配置（api_key / azure_endpoint / base_url / max_retries 等）
+    来自 settings 模块导入时读到的环境变量，本来就要求重启进程才生效；
+    若确实有人在运行时改这些值，用 clear_embeddings_cache() 强制失效。
+
+    取不到可靠指纹（value 不可 repr 等）时返回 None —— 宁可不缓存也不能串。
+    """
+    try:
+        model_name = get_embedding_model_name(provider)
+    except Exception:  # pragma: no cover - settings 侧已兜底，这里只防意外
+        model_name = None
+
+    frozen_items: List[Tuple] = []
+    for name in sorted(kwargs):
+        value = kwargs[name]
+        if value is None or isinstance(value, (str, int, float, bool)):
+            frozen_items.append((name, value))
+            continue
+        try:
+            frozen_items.append((name, repr(value)))
+        except Exception:  # pragma: no cover - 极端对象
+            return None
+
+    return (provider, provider_class.__name__, model_name, tuple(frozen_items))
+
+
+def clear_embeddings_cache() -> int:
+    """逃生口：清空 ``get_embeddings()`` 的进程级实例缓存（测试与运维用）。
+
+    用途：
+      - 测试里 monkeypatch embedding 配置（API key / base_url / 模型名）之后，
+        让下一次 ``get_embeddings()`` 真正重新构造；
+      - 运维上改了不进缓存 key 的构造期配置时，手工强制失效。
+
+    只影响本模块的 embeddings 实例；向量库索引对象的缓存在
+    ``src.core.vector_db.vector_db_client.clear_vector_db_caches()`` 里，
+    两者一起调即可完全复位本波次引入的全部进程级缓存。
+
+    Returns:
+        int: 被清除的条目数。
+    """
+    with _embeddings_cache_lock:
+        removed = len(_embeddings_cache)
+        _embeddings_cache.clear()
+    logger.info(f"🧹 已清空 embedding 模型实例缓存（{removed} 条）")
+    return removed
+
+
+# 兼容任务书里的通用命名（clear_caches() 之类的逃生口）
+clear_caches = clear_embeddings_cache
+
+
 def get_embeddings(**kwargs):
     """
-    获取全局嵌入模型实例
+    获取全局嵌入模型实例（进程级记忆化，REFACTOR_REPORT §8.2 / 波次5-B）
 
     根据配置返回对应的嵌入模型（azure / openai / ollama / gemini），实现细节
     全部交给对应的 Provider，与 LLMBase.get_embedding_model() 共用同一份配置
     读取逻辑（settings.get_embedding_model_name / get_embedding_provider），
     避免各处各读一个键名导致配置被静默忽略。
 
+    缓存语义：
+    - 每次问答 / 每次 ``MetadataVectorDB()`` 构造都会走到这里，而构造一个
+      OpenAIEmbeddings 之类要连带重建 SDK client——属于每请求最贵的重复构造之一。
+      故按"配置指纹"记忆化：同 provider + 同模型名 + 同显式 kwargs ⇒ 返回**同一个实例**。
+    - 返回的是共享实例，**调用方不得原地修改它**（不要 setattr、不要往上面挂属性）。
+      全仓唯一调用方（``src/core/vector_db/metadata_db.py`` → VectorDBClient）只做
+      只读调用（embed_query / embed_documents），因此共享是安全的；日后若出现要改
+      配置的调用方，请通过 kwargs 落到另一个缓存条目，而不是改对象。
+    - 失效：provider 与 embedding 模型名（settings.get_embedding_provider /
+      get_embedding_model_name）在 key 里，改了自然落到新条目；但 **API key /
+      azure endpoint / base_url 这类不进 key 的构造期配置在运行时改动不会让缓存失效**
+      （与"embedding 维度固定、换模型必须重建索引"的既有限制同源）——需要立刻生效
+      就调 ``clear_embeddings_cache()``，或按既有约定重启进程。
+    - 逃生口：本模块 ``clear_embeddings_cache()``（测试/运维用），以及向量库侧
+      ``src.core.vector_db.vector_db_client.clear_vector_db_caches()``。
+
     Args:
-        **kwargs: 传递给嵌入模型的额外参数
+        **kwargs: 传递给嵌入模型的额外参数。会进入缓存 key；不可哈希/不可 repr 的
+                  值会使本次结果不进缓存（仍照常构造并返回）。
 
     Returns:
         嵌入模型实例
@@ -621,4 +716,26 @@ def get_embeddings(**kwargs):
         )
         provider_class = OpenAILLMProvider
 
-    return provider_class().get_embedding_model(**kwargs)
+    cache_key = _embeddings_cache_key(provider, provider_class, kwargs)
+    if cache_key is not None:
+        with _embeddings_cache_lock:
+            cached = _embeddings_cache.get(cache_key)
+            if cached is not None:
+                try:
+                    _embeddings_cache.move_to_end(cache_key)
+                except KeyError:  # pragma: no cover - 并发淘汰
+                    cached = None
+            if cached is not None:
+                logger.debug(f"♻️ 复用进程级缓存中的 embedding 模型实例 (provider={provider})")
+                return cached
+
+    embedding_model = provider_class().get_embedding_model(**kwargs)
+
+    if cache_key is not None:
+        with _embeddings_cache_lock:
+            _embeddings_cache[cache_key] = embedding_model
+            _embeddings_cache.move_to_end(cache_key)
+            while len(_embeddings_cache) > _EMBEDDINGS_CACHE_MAX_ENTRIES:
+                _embeddings_cache.popitem(last=False)
+
+    return embedding_model

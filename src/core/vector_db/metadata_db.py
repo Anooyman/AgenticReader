@@ -11,8 +11,37 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 
+def _invalidate_index_cache(index_path) -> None:
+    """作废 ``VectorDBClient`` 侧的进程级索引对象缓存（写侧删除/重建索引后调用）。
+
+    正常情况靠 (mtime_ns, size) 文件指纹就够了；这里在"删目录 / 重建索引"这类
+    结构性变更处再显式作废一次，保证读侧不可能拿到与新目录同名同尺寸的旧对象。
+    延迟 import，避免模块级把 langchain/faiss 拖进 metadata_db 的导入链。
+    """
+    try:
+        from src.core.vector_db.vector_db_client import invalidate_vector_db_cache
+
+        invalidate_vector_db_cache(str(index_path))
+    except Exception as e:  # pragma: no cover - 缓存失效失败不应影响主流程
+        logger.debug(f"[MetadataDB] 索引缓存失效调用失败（忽略）: {e}")
+
+
 class MetadataVectorDB:
-    """文档元数据向量数据库"""
+    """文档元数据向量数据库
+
+    缓存与并发语义（REFACTOR_REPORT §8.2 / 波次5-B）：
+    - 本类的构造成本几乎全部转嫁给了 ``VectorDBClient``（FAISS 读盘 + 维度探针）
+      和 ``get_embeddings()``（重建 SDK client），这两处已各自做了进程级缓存：
+      前者缓存不可变的索引对象，后者记忆化 embeddings 实例。因此"每次 new 一个
+      MetadataVectorDB"现在只是几个属性赋值的轻量壳，不再需要在本类上再加一层
+      实例缓存。
+    - 刻意**不**按 (index_path,) 做全局单例：本类持有自己的 ``vector_client``，
+      ``add_document`` / ``delete_document`` / ``rebuild_index`` 会原地写它（add_documents
+      / build_vector_db）。共享壳对象等于把某次写入的中间态泄漏给其他并发请求，
+      而且底层 VectorDBClient 的轮次去重状态也是 per-session 的。
+      需要彻底复位进程级缓存时调用
+      ``src.core.vector_db.vector_db_client.clear_vector_db_caches()``。
+    """
 
     def __init__(self):
         """初始化元数据向量数据库"""
@@ -23,7 +52,14 @@ class MetadataVectorDB:
         self._initialize()
 
     def _initialize(self):
-        """初始化向量数据库"""
+        """初始化向量数据库
+
+        这里的两步都是"每请求重复的昂贵构造"，现分别由进程级缓存兜住：
+        ``get_embeddings()`` 按配置指纹记忆化（改 API key / base_url 等不进 key 的
+        构造期配置需 clear_embeddings_cache() 或重启，与 embedding 维度固定的
+        既有限制一致）；``VectorDBClient`` 按 (目录, 索引文件指纹, embedding 指纹)
+        共享只读的 FAISS 索引对象，索引文件变了自然重新读盘。
+        """
         from src.core.vector_db.vector_db_client import VectorDBClient
         from src.core.llm import get_embeddings
 
@@ -314,6 +350,7 @@ class MetadataVectorDB:
                 import shutil
                 if self.index_path.exists():
                     shutil.rmtree(self.index_path)
+                    _invalidate_index_cache(self.index_path)
                 self.index_path.mkdir(parents=True, exist_ok=True)
 
                 # 重新初始化
@@ -332,6 +369,7 @@ class MetadataVectorDB:
                 import shutil
                 if self.index_path.exists():
                     shutil.rmtree(self.index_path)
+                    _invalidate_index_cache(self.index_path)
                 logger.info(f"✅ [MetadataDB] 元数据索引已清空（无剩余文档）")
 
             return True
@@ -358,6 +396,7 @@ class MetadataVectorDB:
             import shutil
             if self.index_path.exists():
                 shutil.rmtree(self.index_path)
+                _invalidate_index_cache(self.index_path)
             self.index_path.mkdir(parents=True, exist_ok=True)
 
             # 重新初始化
