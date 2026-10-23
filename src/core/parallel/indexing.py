@@ -9,7 +9,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Tuple
 
-from src.utils.async_utils import run_async, parallel_process_with_filter
+from src.utils.async_utils import parallel_process_with_filter
 
 # IndexingRole / CommonRole 仅作为函数参数的默认值使用，为缩短本模块被导入时的
 # 依赖链（agents prompts 模块较重），改为函数体内延迟导入。
@@ -190,92 +190,6 @@ class ChapterProcessor:
         return results
 
 
-def run_parallel_chapter_processing(
-    llm_client: Any,
-    agenda_data_list: List[Dict[str, Any]],
-    summary_role: Any = None,
-    refactor_role: Any = None,
-    max_concurrent: int = 5
-) -> List[Tuple[str, str, str, Any, Any]]:
-    """
-    同步接口：并行处理章节的总结和重构
-    
-    这是一个便捷的同步包装函数，内部使用异步并行处理。
-    
-    Args:
-        llm_client: LLM客户端实例（需要有 async_call_llm_chain 方法）
-        agenda_data_list: 章节数据列表，每个包含:
-            - title: 章节标题
-            - data: 章节数据字典 {page: content}
-            - pages: 页码列表
-        summary_role: 总结角色配置
-        refactor_role: 重构角色配置
-        max_concurrent: 最大并发数（默认5，避免API限流）
-        
-    Returns:
-        List[Tuple[title, summary, refactor_content, pages, data]]
-        
-    Example:
-        results = run_parallel_chapter_processing(
-            llm_client=pdf_reader,
-            agenda_data_list=agenda_data_list,
-            max_concurrent=5
-        )
-        for title, summary, refactor, pages, data in results:
-            # 处理结果...
-    """
-    processor = ChapterProcessor(llm_client, max_concurrent)
-    
-    return run_async(
-        processor.process_chapters_summary_and_refactor(
-            agenda_data_list, summary_role, refactor_role
-        )
-    )
-
-
-def run_parallel_detail_summaries(
-    llm_client: Any,
-    chapters: List[Dict[str, Any]],
-    answer_role: Any = None,
-    max_concurrent: int = 5
-) -> List[Tuple[str, str]]:
-    """
-    同步接口：并行生成详细摘要
-    
-    这是一个便捷的同步包装函数，内部使用异步并行处理。
-    
-    Args:
-        llm_client: LLM客户端实例（需要有 async_call_llm_chain 方法）
-        chapters: 章节数据列表，每个包含:
-            - title: 章节标题
-            - context_data: 上下文数据
-            - query: 查询问题
-        answer_role: 回答角色配置
-        max_concurrent: 最大并发数（默认5，避免API限流）
-        
-    Returns:
-        List[Tuple[title, answer]]
-        
-    Example:
-        chapters = [
-            {'title': '第一章', 'context_data': [...], 'query': '总结内容'},
-            {'title': '第二章', 'context_data': [...], 'query': '总结内容'},
-        ]
-        results = run_parallel_detail_summaries(
-            llm_client=pdf_reader,
-            chapters=chapters,
-            max_concurrent=5
-        )
-        for title, answer in results:
-            # 处理结果...
-    """
-    processor = ChapterProcessor(llm_client, max_concurrent)
-    
-    return run_async(
-        processor.process_detail_summaries(chapters, answer_role)
-    )
-
-
 class PageExtractor:
     """
     PDF页面并行提取器
@@ -409,40 +323,3 @@ class PageExtractor:
         logger.info(f"✅ 并行提取完成: 成功 {len(results)} 页, 失败 {len(image_paths) - len(results)} 页")
         
         return results
-
-
-def run_parallel_page_extraction(
-    llm_client: Any,
-    image_paths: List[str],
-    extract_prompt: str,
-    max_concurrent: int = 5
-) -> List[Dict[str, Any]]:
-    """
-    同步接口：并行提取PDF页面图片内容
-    
-    这是一个便捷的同步包装函数，内部使用异步并行处理。
-    
-    Args:
-        llm_client: LLM客户端实例（需要有 chat_model.invoke 方法）
-        image_paths: 图片路径列表（应已按页码排序）
-        extract_prompt: 图片内容提取的提示词
-        max_concurrent: 最大并发数（默认5，避免API限流）
-        
-    Returns:
-        提取结果列表（按页码排序），每个元素包含 {"data": str, "page": str}
-        
-    Example:
-        results = run_parallel_page_extraction(
-            llm_client=pdf_reader,
-            image_paths=sorted_image_paths,
-            extract_prompt="请提取图片中的文字内容",
-            max_concurrent=5
-        )
-        for item in results:
-            print(f"Page {item['page']}: {item['data'][:100]}...")
-    """
-    extractor = PageExtractor(llm_client, extract_prompt, max_concurrent)
-    
-    return run_async(
-        extractor.extract_pages_parallel(image_paths)
-    )

@@ -18,6 +18,8 @@ AGENT_MODEL_OVERRIDES: Dict[str, Optional[str]] = {
     # 以下三项对应 ai-research-pipeline 合并计划里将新增的模块，
     # 提前占位以便实现时直接按 name 查表，不需要再改这份配置的结构。
     "Orchestrator": None,
+    # MemorySearch / QABrief 目前没有同名 Agent（前者是 Orchestrator 子 agent
+    # 在 UI 里的展示名，后者为每日简报问答预留），属 UI 展示名/预留键，保留。
     "MemorySearch": None,
     "QABrief": None,
 }

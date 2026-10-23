@@ -428,23 +428,6 @@ class DocumentRegistry:
         stages = doc_info.get("processing_stages", {})
         return stages.get(stage_name)
 
-    def is_stage_completed(self, doc_name: str, stage_name: str) -> bool:
-        """
-        检查某个阶段是否已完成
-
-        Args:
-            doc_name: 文档名称
-            stage_name: 阶段名称
-
-        Returns:
-            是否已完成
-        """
-        stage_info = self.get_stage_status(doc_name, stage_name)
-        if not stage_info:
-            return False
-
-        return stage_info.get("status") == "completed"
-
 
     def get_statistics(self) -> Dict:
         """

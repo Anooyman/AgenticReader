@@ -11,7 +11,7 @@ deep_dive_document 跳过 memory 检索，省一次开销；模糊回忆型提�
 任意一轮如果同时产生多个 tool_calls，一律用 asyncio.gather 并行执行，不
 逐个 await。工具调用格式使用 AgenticReader 已有的 LLMBase + LangChain
 bind_tools 惯例（与 src/memory/search.py 的 agentic_search 用同一套模式，
-也是 src/services/mcp_client.py 里 MCPClient._process_with_tools 已经
+也是 src/agents/search/utils.py 里 SimpleMCPClient 已经
 验证过的先例）。
 """
 import asyncio

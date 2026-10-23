@@ -9,7 +9,7 @@ import logging
 import asyncio
 
 from src.config.constants import ProcessingLimits
-from src.config.settings import CROSS_DOC_CONFIG, DOCUMENT_SELECTION_CONFIG
+from src.config.settings import CROSS_DOC_CONFIG
 
 if TYPE_CHECKING:
     from .agent import AnswerAgent

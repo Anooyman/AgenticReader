@@ -228,12 +228,6 @@ class VectorStore:
         rows = tbl.search().where(where).limit(1_000_000).to_list()
         return [_strip_vector(r) for r in rows]
 
-    def chunk_hashes(self, namespace: str, source_id: str) -> set:
-        return {
-            r.get("chunk_hash") for r in self.rows_for_source(namespace, source_id)
-            if r.get("chunk_hash")
-        }
-
     def all_rows(self, namespace: NamespaceArg = "*") -> List[Dict[str, Any]]:
         tbl = self._table_or_none()
         if tbl is None:

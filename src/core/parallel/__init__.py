@@ -24,9 +24,6 @@ Parallel Processing Module
 from .indexing import (
     ChapterProcessor,
     PageExtractor,
-    run_parallel_chapter_processing,
-    run_parallel_detail_summaries,
-    run_parallel_page_extraction,
 )
 from .retrieval import ParallelRetrievalCoordinator
 
@@ -34,9 +31,6 @@ __all__ = [
     # 索引并行处理
     'ChapterProcessor',
     'PageExtractor',
-    'run_parallel_chapter_processing',
-    'run_parallel_detail_summaries',
-    'run_parallel_page_extraction',
     # 检索并行处理
     'ParallelRetrievalCoordinator',
 ]

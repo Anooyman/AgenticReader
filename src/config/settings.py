@@ -2,41 +2,13 @@ import os
 import sys
 import logging
 from dotenv import load_dotenv
-from .constants import MCPConstants, ProcessingLimits, PathConstants, PDFConstants, LLMConstants
+from .constants import PathConstants, PDFConstants
 
 logger = logging.getLogger(__name__)
 
-# 导入统一的应用设置 (新增，支持 Pydantic 配置管理)
-try:
-    from .app_settings import AppSettings as PydanticAppSettings, settings as pydantic_settings
-except ImportError:
-    PydanticAppSettings = None
-    pydantic_settings = None
-
 load_dotenv()
 
-# 使用常量文件中的定义，保持向后兼容性
-class MCPToolName:
-    WEB_SEARCH = MCPConstants.ToolNames.WEB_SEARCH
-
 MCP_CONFIG = {
-  MCPToolName.WEB_SEARCH: {
-    #"playwright": {
-    #    "type": "stdio",
-    #    "command": "npx",
-    #    "args": [
-    #        "@playwright/mcp@latest"
-    #    ]
-    #}
-    "ddg-search": {
-        "type": "stdio",
-        # 用当前解释器的完整路径而非裸 "python"/"python3"：MCP 子进程的 env
-        # 会整体替换（不继承父进程环境），若靠系统 PATH 解析命令名，很容易解析到
-        # 一个没装 mcp/项目依赖的系统 Python，而不是本项目的 venv。
-        "command": sys.executable,
-        "args": ["src/services/duckduckgo_mcp_server.py"]
-    },
-  },
   # ===== SearchAgent MCP 服务（顶层配置）=====
   # DuckDuckGo 搜索引擎
   "duckduckgo": {
@@ -169,11 +141,6 @@ PDF_IMAGE_PATH = f"{DATA_ROOT}/{PathConstants.PDF_IMAGE_DIR}"
 JSON_DATA_PATH = f"{DATA_ROOT}/{PathConstants.JSON_DATA_DIR}"
 PDF_PATH = f"{DATA_ROOT}/{PathConstants.PDF_DIR}"
 VECTOR_DB_PATH = f"{DATA_ROOT}/{PathConstants.VECTOR_DB_DIR}"
-OUTPUT_PATH = f"{DATA_ROOT}/{PathConstants.OUTPUT_DIR}"
-
-WEB_MAX_TOKEN_COUNT = ProcessingLimits.MAX_TOKEN_COUNT
-
-MEMORY_PATH = f"{DATA_ROOT}/{PathConstants.MEMORY_DIR}"
 
 # PDF转图片质量配置 - 使用常量定义
 PDF_IMAGE_CONFIG = {
@@ -182,14 +149,8 @@ PDF_IMAGE_CONFIG = {
     "presets": PDFConstants.QUALITY_LEVELS
 }
 
-# ==================== 文档选择配置（跨文档检索） ====================
-DOCUMENT_SELECTION_CONFIG = {
-    "max_selected_docs": 5,            # 最多选择文档数
-}
-
 # ==================== 跨文档检索配置 ====================
 CROSS_DOC_CONFIG = {
-    "enabled": True,                   # 是否启用跨文档功能
     "max_parallel_retrievals": 3,      # 最大并行检索数
     "retrieval_timeout": 1200,          # 单个检索超时（秒）
     "max_iterations": 10,              # 每个Retrieval Agent的最大迭代次数

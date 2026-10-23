@@ -8,40 +8,11 @@ import asyncio
 import logging
 from typing import Any, Callable, List, TypeVar, Coroutine
 
-import nest_asyncio
-
 logger = logging.getLogger(__name__)
 
 # 泛型类型定义
 T = TypeVar('T')
 R = TypeVar('R')
-
-
-def run_async(coro: Coroutine[Any, Any, T]) -> T:
-    """
-    在同步上下文中运行异步协程
-    
-    自动处理事件循环的各种情况：
-    - 如果没有运行中的事件循环，使用 asyncio.run()
-    - 如果已有运行中的事件循环（如 FastAPI），使用 nest_asyncio
-    
-    Args:
-        coro: 要执行的异步协程
-        
-    Returns:
-        协程的返回值
-    """
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # 如果事件循环已在运行（如在 FastAPI 中），应用 nest_asyncio
-            nest_asyncio.apply()
-            return loop.run_until_complete(coro)
-        else:
-            return asyncio.run(coro)
-    except RuntimeError:
-        # 备用方案：直接使用 asyncio.run
-        return asyncio.run(coro)
 
 
 async def parallel_process(

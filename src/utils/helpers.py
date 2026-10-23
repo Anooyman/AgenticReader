@@ -4,71 +4,14 @@ import os
 import unicodedata
 import re
 import logging
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any
 
 # 导入新的工具库
-from .file_operations import SafeFileOperations, AdvancedFileOperations
-from .error_handler import retry_on_error, safe_execute, error_context
+from .file_operations import SafeFileOperations
+from .error_handler import retry_on_error, error_context
 from .exceptions import FileProcessingError
 
 logger = logging.getLogger(__name__)
-
-def list_pdf_files(folder_path: str = "data/pdf") -> List[str]:
-    """
-    读取指定文件夹下的所有文件，返回文件名列表
-
-    Args:
-        folder_path (str): 目录路径，默认为"data/pdf"
-
-    Returns:
-        List[str]: 文件名列表
-    """
-    if not os.path.exists(folder_path):
-        logging.warning(f"文件夹不存在: {folder_path}")
-        return []
-    return [f for f in os.listdir(folder_path) if os.path.isfile(os.path.join(folder_path, f))]
-
-@retry_on_error(max_retries=3, exceptions=(IOError, OSError))
-def load_json_file(file_path: str) -> Optional[Union[Dict[str, Any], List[Any]]]:
-    """
-    读取JSON文件并返回解析后的数据
-
-    使用新的SafeFileOperations进行安全文件读取
-
-    Args:
-        file_path (str): JSON文件的路径
-
-    Returns:
-        Optional[Union[Dict[str, Any], List[Any]]]: 解析后的JSON数据，如果出错则返回None
-    """
-    return safe_execute(
-        SafeFileOperations.read_json_file,
-        file_path,
-        default_value=None,
-        context=f"加载JSON文件: {file_path}",
-        log_errors=True
-    )
-
-@retry_on_error(max_retries=3, exceptions=(IOError, OSError))
-def load_md_file(file_path: str) -> Optional[str]:
-    """
-    读取本地Markdown文件的内容
-
-    使用新的AdvancedFileOperations进行编码检测和安全读取
-
-    Args:
-        file_path (str): Markdown文件的路径
-
-    Returns:
-        Optional[str]: 文件内容，如果出错则返回None
-    """
-    return safe_execute(
-        AdvancedFileOperations.read_file_with_encoding_detection,
-        file_path,
-        default_value=None,
-        context=f"加载Markdown文件: {file_path}",
-        log_errors=True
-    )
 
 def read_images_in_directory(directory_path: str) -> List[str]:
     """
@@ -112,24 +55,6 @@ def makedir(path: str) -> None:
     except OSError as e:
         logger.error(f"创建目录失败 {path}: {e}")
         raise
- 
-def get_pdf_name(file_name: str) -> str:
-    """
-    获取去除扩展名后的文件名。
-    Get file name without extension.
-    Args:
-        file_name (str): 文件名。
-    Returns:
-        str: 去除扩展名后的文件名。
-    """
-    dot_index = file_name.rfind('.')
-    if dot_index != -1:
-        file_name_without_ext = file_name[:dot_index]
-        logger.debug(f"PDF文件名去后缀: {file_name_without_ext}")
-    else:
-        file_name_without_ext = file_name
-        logger.debug(f"PDF文件名无后缀: {file_name}")
-    return file_name_without_ext
 
 @retry_on_error(max_retries=2, exceptions=(Exception,))
 def pdf_to_images(pdf_path: str, output_folder: str, dpi: int = 300, quality: str = "high") -> Dict[str, Any]:
@@ -349,30 +274,6 @@ def extract_data_from_LLM_res(content: str) -> Optional[Dict[str, Any]]:
         logger.error(f"extract_data_from_LLM_res发生意外错误: {e}")
 
     return None
-
-def parse_latest_plugin_call(text: str) -> tuple[str, str, str]:  
-    i = text.rfind('\nAction:')  
-    j = text.rfind('\nAction Input:')  
-    k = text.rfind('\nObservation:')  
-    final_answer_index = text.rfind('\nFinal Answer:')  
-  
-    if 0 <= i < j:  # If the text has `Action` and `Action input`,  
-        if k < j:  # but does not contain `Observation`,  
-            # then it is likely that `Observation` is omitted by the LLM,  
-            # because the output text may have discarded the stop word.  
-            text = text.rstrip() + '\nObservation:'  # Add it back.  
-            k = text.rfind('\nObservation:')  
-  
-    plugin_name, plugin_args, final_answer = '', '', ''  
-  
-    if 0 <= i < j < k:  
-        plugin_name = text[i + len('\nAction:'):j].strip()  
-        plugin_args = text[j + len('\nAction Input:'):k].strip()  
-  
-    if final_answer_index != -1:  
-        final_answer = text[final_answer_index + len('\nFinal Answer:'):].strip()  
-  
-    return plugin_name, plugin_args, final_answer  
 
 def full_to_half(text: str) -> str:
     """
@@ -605,128 +506,3 @@ def _process_section_groups(groups: List[List[Dict[str, Any]]],
                 continue
 
     return data_result, agenda_result
-
-def add_data_keep_order(total_dict: Dict[Any, Any], add_dict: Dict[Any, Any]) -> Dict[Any, Any]:
-    """
-    合并 add_dict 到 total_dict，若 key 重复则用 add_dict 的 value 覆盖，
-    最终返回一个 dict，key 按照数字从小到大排序。
-
-    Args:
-        total_dict (Dict[Any, Any]): 目标字典
-        add_dict (Dict[Any, Any]): 要合并的字典
-
-    Returns:
-        Dict[Any, Any]: 合并并排序后的字典
-    """
-    # 更新 total_dict
-    total_dict.update(add_dict)
-    # 按 key 升序排序并返回新的 dict
-    return dict(sorted(total_dict.items(), key=lambda x: x[0]))
-
-def is_file_exists(file_path: str) -> bool:
-    """
-    判断指定路径下的文件是否存在
-
-    参数:
-        file_path (str): 完整的文件路径，包括文件名和扩展名
-
-    返回值:
-        bool: 如果文件存在且是一个文件（不是目录）则返回True，否则返回False
-
-    异常处理:
-        捕获并处理路径解析过程中可能出现的异常（如权限问题、无效路径等）
-    """
-    try:
-        # 检查路径是否存在且是一个文件
-        if os.path.exists(file_path) and os.path.isfile(file_path):
-            logger.info(f"文件存在: {file_path}")
-            return True
-        else:
-            # 路径不存在或不是文件
-            if not os.path.exists(file_path):
-                logger.warning(f"路径不存在: {file_path}")
-            else:
-                logger.warning(f"路径指向的是目录而非文件: {file_path}")
-            return False
-    except Exception as e:
-        # 处理其他可能的异常（如权限错误、路径格式错误等）
-        logger.error(f"检查文件存在性时发生错误: {str(e)}")
-        return False
-
-def extract_name_from_url(url: str) -> str:
-    """
-    从URL中提取可能作为name的关键信息，规范化处理以确保文件系统兼容
-
-    规范化规则：
-    1. 去除查询参数（? 及其后的内容）
-    2. 去除锚点（# 及其后的内容）
-    3. 将连字符替换为空格
-    4. 移除不安全的文件名字符
-
-    Args:
-        url (str): 待提取信息的URL字符串
-
-    Returns:
-        str: 提取到的规范化文件名（适用于所有操作系统）
-    """
-    import re
-    
-    # 去除URL中的协议部分（如http://、https://）
-    url_without_protocol = url.split('://')[-1]
-    
-    # 去除域名部分（如medium.com、@lucknitelol等）
-    path_parts = url_without_protocol.split('/')[-2:]  # 针对该URL结构，取域名后的路径部分
-    
-    # 提取URL中以连字符连接的关键内容部分
-    if path_parts:
-        if path_parts[-1]:
-            name_part = path_parts[-1]
-        else:
-            name_part = path_parts[-2]
-
-        # 🔥 规范化处理：
-        # 1. 移除查询参数（? 及其后的所有内容）
-        name_part = name_part.split('?')[0]
-        
-        # 2. 移除锚点（# 及其后的所有内容）
-        name_part = name_part.split('#')[0]
-        
-        # 3. 将连字符替换为空格
-        name = name_part.replace('-', ' ')
-        
-        # 4. 移除其他不安全的文件名字符（保留字母、数字、空格、下划线、点）
-        name = re.sub(r'[^\w\s\.]', '', name)
-        
-        # 5. 去除首尾空格并压缩多余空格
-        name = ' '.join(name.split())
-        
-        # 6. 如果结果为空，返回默认值
-        if not name:
-            return "web_content"
-
-        return name
-    else:
-        return "无法从URL中提取有效信息"
-
-@retry_on_error(max_retries=3, exceptions=(IOError, OSError))
-def save_data(path: str, content: Union[Dict[str, Any], List[Any]]) -> None:
-    """
-    将给定内容保存为JSON文件到指定路径
-
-    使用新的SafeFileOperations进行安全文件写入
-
-    Args:
-        path (str): JSON文件保存路径
-        content (Union[Dict[str, Any], List[Any]]): 要保存的内容
-
-    Returns:
-        None
-
-    Raises:
-        FileProcessingError: 文件保存失败
-    """
-    try:
-        SafeFileOperations.write_json_file(path, content)
-        logger.info(f"数据已安全保存到: {path}")
-    except Exception as e:
-        raise FileProcessingError(f"保存数据失败: {e}", "SAVE_DATA_ERROR")

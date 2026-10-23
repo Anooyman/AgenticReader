@@ -415,37 +415,6 @@ class VectorDBClient:
                 logger.error(f"❌ 降级检索同样失败: {fallback_error}，抛出原始异常")
                 raise
 
-    def search_by_pdf_name(
-        self,
-        query: str,
-        pdf_name: str,
-        k: int = 99,
-        fetch_k: Optional[int] = None,
-        enable_dedup: bool = True,
-        conversation_turn: Optional[int] = None
-    ) -> List[tuple]:
-        """
-        按PDF名称过滤进行检索的便利方法
-
-        Args:
-            query (str): 搜索查询
-            pdf_name (str): PDF文档名称
-            k (int): 返回结果数量，默认99
-            fetch_k (int, optional): 过滤前获取的文档数量
-            enable_dedup (bool): 是否启用去重过滤，默认 True
-            conversation_turn (int, optional): 当前对话轮次，透传给底层检索
-
-        Returns:
-            List[tuple]: 检索结果列表
-        """
-        return self.search_with_metadata_filter(
-            query=query, k=k,
-            field_name="pdf_name", field_value=pdf_name,
-            fetch_k=fetch_k,
-            enable_dedup=enable_dedup,
-            conversation_turn=conversation_turn
-        )
-
     def search_by_title(
         self,
         title: str,
@@ -608,17 +577,4 @@ class VectorDBClient:
         self._retrieved_doc_hashes.clear()
         self._current_turn = 0
         logger.info(f"✅ 已重置检索历史，清除了 {count} 个文档哈希记录（轮次归零）")
-
-    def get_retrieval_stats(self) -> Dict[str, int]:
-        """
-        获取检索统计信息
-
-        Returns:
-            Dict[str, int]: 包含已检索文档数量、当前轮次与去重窗口的统计信息
-        """
-        return {
-            "retrieved_documents_count": len(self._retrieved_doc_hashes),
-            "current_turn": self._current_turn,
-            "dedup_window": max(int(getattr(RetrievalDedupConfig, "WINDOW", 5)), 1)
-        }
 

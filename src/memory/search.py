@@ -11,13 +11,13 @@ semantic_search/keyword_search/list_keywords/list_by_source 四个。
 
 用 AgenticReader 自己的 LLMBase.get_chat_model_with_tools()（LangChain
 bind_tools）驱动工具调用循环，而不是像 LLM-Memory 那样直接用 openai SDK
-的裸 dict 工具调用格式——复用本项目已有的 LLM 抽象层（src/services/
-mcp_client.py 的 MCPClient._process_with_tools 是同一个模式的先例）。
+的裸 dict 工具调用格式——复用本项目已有的 LLM 抽象层（src/agents/search/
+utils.py 的 SimpleMCPClient 是同一个模式的先例）。
 """
 import logging
 from typing import Any, Dict, List, Optional
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
 from src.core.llm import LLMBase
 from src.memory.config import MEMORY_DB_DIR, get_embedding_dimensions

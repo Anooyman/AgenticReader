@@ -7,8 +7,7 @@ import os
 import re
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
-from urllib.parse import urlparse
+from typing import Any, Dict
 
 from .exceptions import ValidationError
 from ..config.constants import SecurityConstants
@@ -79,39 +78,6 @@ def validate_file_path(file_path: str, check_exists: bool = True, is_directory: 
     return str(path)
 
 
-def validate_url(url: str) -> str:
-    """
-    验证URL的有效性和安全性
-
-    Args:
-        url (str): 要验证的URL
-
-    Returns:
-        str: 验证后的URL
-
-    Raises:
-        ValidationError: URL无效或不安全
-    """
-    if not url or not isinstance(url, str):
-        raise ValidationError("URL不能为空")
-
-    if len(url) > SecurityConstants.MAX_URL_LENGTH:
-        raise ValidationError(f"URL长度超过限制 ({len(url)} > {SecurityConstants.MAX_URL_LENGTH})")
-
-    try:
-        parsed = urlparse(url)
-    except Exception as e:
-        raise ValidationError(f"URL格式无效: {e}")
-
-    if not parsed.scheme or not parsed.netloc:
-        raise ValidationError("URL格式不完整，缺少协议或域名")
-
-    if parsed.scheme not in ['http', 'https']:
-        raise ValidationError(f"不支持的协议: {parsed.scheme}")
-
-    return url
-
-
 def validate_json_data(data: str) -> Dict[str, Any]:
     """
     验证和解析JSON数据
@@ -137,96 +103,6 @@ def validate_json_data(data: str) -> Dict[str, Any]:
         raise ValidationError(f"JSON格式无效: {e}")
 
     return parsed_data
-
-
-def validate_text_input(text: str, max_length: Optional[int] = None) -> str:
-    """
-    验证文本输入
-
-    Args:
-        text (str): 要验证的文本
-        max_length (Optional[int]): 最大长度限制
-
-    Returns:
-        str: 验证后的文本
-
-    Raises:
-        ValidationError: 文本输入无效
-    """
-    if not isinstance(text, str):
-        raise ValidationError("输入必须是字符串类型")
-
-    max_len = max_length or SecurityConstants.MAX_INPUT_LENGTH
-    if len(text) > max_len:
-        raise ValidationError(f"文本长度超过限制 ({len(text)} > {max_len})")
-
-    # 检查是否包含潜在的危险字符
-    dangerous_patterns = [
-        r'<script[^>]*>.*?</script>',  # 脚本标签
-        r'javascript:',                # JavaScript协议
-        r'vbscript:',                 # VBScript协议
-        r'on\w+\s*=',                 # 事件处理器
-    ]
-
-    for pattern in dangerous_patterns:
-        if re.search(pattern, text, re.IGNORECASE):
-            raise ValidationError("检测到潜在的危险内容")
-
-    return text.strip()
-
-
-def validate_email(email: str) -> str:
-    """
-    验证邮箱格式
-
-    Args:
-        email (str): 邮箱地址
-
-    Returns:
-        str: 验证后的邮箱
-
-    Raises:
-        ValidationError: 邮箱格式无效
-    """
-    if not email or not isinstance(email, str):
-        raise ValidationError("邮箱地址不能为空")
-
-    email = email.strip().lower()
-    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-
-    if not re.match(email_pattern, email):
-        raise ValidationError("邮箱格式无效")
-
-    return email
-
-
-def validate_config_dict(config: Dict[str, Any], required_keys: List[str]) -> Dict[str, Any]:
-    """
-    验证配置字典
-
-    Args:
-        config (Dict[str, Any]): 配置字典
-        required_keys (List[str]): 必需的键列表
-
-    Returns:
-        Dict[str, Any]: 验证后的配置
-
-    Raises:
-        ValidationError: 配置无效
-    """
-    if not isinstance(config, dict):
-        raise ValidationError("配置必须是字典类型")
-
-    missing_keys = [key for key in required_keys if key not in config]
-    if missing_keys:
-        raise ValidationError(f"缺少必需的配置项: {missing_keys}")
-
-    # 检查值是否为空
-    empty_keys = [key for key in required_keys if not config.get(key)]
-    if empty_keys:
-        raise ValidationError(f"以下配置项不能为空: {empty_keys}")
-
-    return config
 
 
 def sanitize_filename(filename: str) -> str:
@@ -264,30 +140,3 @@ def sanitize_filename(filename: str) -> str:
         raise ValidationError("清理后的文件名为空")
 
     return filename
-
-
-def validate_pagination(page: int, page_size: int, max_page_size: int = 100) -> tuple[int, int]:
-    """
-    验证分页参数
-
-    Args:
-        page (int): 页码
-        page_size (int): 每页大小
-        max_page_size (int): 最大每页大小
-
-    Returns:
-        tuple[int, int]: 验证后的页码和每页大小
-
-    Raises:
-        ValidationError: 分页参数无效
-    """
-    if not isinstance(page, int) or page < 1:
-        raise ValidationError("页码必须是大于0的整数")
-
-    if not isinstance(page_size, int) or page_size < 1:
-        raise ValidationError("每页大小必须是大于0的整数")
-
-    if page_size > max_page_size:
-        raise ValidationError(f"每页大小不能超过 {max_page_size}")
-
-    return page, page_size

@@ -9,18 +9,6 @@ import os
 class ProcessingLimits:
     """处理过程中的各种限制常量"""
 
-    # PDF处理相关
-    MAX_CHAPTER_LENGTH = 10  # 章节最大长度限制
-    DEFAULT_CHUNK_SIZE = 20  # PDF分块处理的默认大小
-
-    # Token相关限制
-    MAX_TOKEN_COUNT = 3000  # Web内容最大Token数
-
-    # 重试和超时
-    MAX_MCP_ATTEMPTS = 10  # MCP服务最大调用尝试次数
-    DEFAULT_SEARCH_K = 10  # 默认检索结果数量
-    DEFAULT_RECURSION_LIMIT = 50  # 图执行递归限制
-
     # Retrieval Agent 迭代次数配置
     MAX_RETRIEVAL_ITERATIONS = 10  # Retrieval Agent 最大迭代次数（ReAct循环）
 
@@ -64,7 +52,6 @@ class PathConstants:
     JSON_DATA_DIR = "json_data"
     VECTOR_DB_DIR = "vector_db"
     OUTPUT_DIR = "output"
-    MEMORY_DIR = "memory"
     SEARCH_CACHE_DIR = "search_cache"  # SearchAgent 搜索结果缓存
     WEB_CONTENT_DIR = "web_content"  # Use Case 2 URL 内容原始文件
 
@@ -86,32 +73,11 @@ class PDFConstants:
     SUPPORTED_IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.bmp', '.gif']
 
 
-# === MCP和工具常量 ===
-class MCPConstants:
-    """MCP服务相关常量"""
-
-    # 工具标识
-    TOOL_STOP_FLAG = "Observation"  # MCP工具调用停止标识符
-
-    # 工具名称
-    class ToolNames:
-        WEB_SEARCH = "web search"
-        MEMORY = "memory"
-
-
 # === LLM相关常量 ===
 class LLMConstants:
     """LLM处理相关常量"""
 
-    # 提供商类型
-    class Providers:
-        AZURE = "azure"
-        OPENAI = "openai"
-        OLLAMA = "ollama"
-
     # 默认配置
-    DEFAULT_TEMPERATURE = 0.7
-    DEFAULT_MAX_RETRIES = 5
     DEFAULT_ENCODING = "o200k_base"
 
 
@@ -183,11 +149,7 @@ class SessionHistoryConfig:
 # === Reader处理常量 ===
 class ReaderConstants:
     """Reader相关常量"""
-    
-    # 文件后缀
-    VECTOR_DB_SUFFIX = "_data_index"  # 向量数据库路径后缀
-    FORMAT_DATA_SUFFIX = "_format_data.json"  # 格式化数据文件后缀
-    
+
     # 分块处理
     DEFAULT_CHUNK_COUNT = 20  # PDF分块处理的默认大小
 
