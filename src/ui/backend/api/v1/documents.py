@@ -179,8 +179,13 @@ async def index_document(
 ) -> Dict[str, Any]:
     """索引文档（后台任务）"""
     try:
-        pdf_path = PDF_DIR / request.doc_name
-        if not pdf_path.exists():
+        if not request.doc_name.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="只支持PDF文件")
+        # Validate the user-supplied name, then preserve its exact filename.
+        # safe_path strips a trailing .pdf for validation and therefore is not the path to open.
+        guarded = safe_path(PDF_DIR, request.doc_name)
+        pdf_path = guarded.parent / request.doc_name
+        if not pdf_path.exists() or not pdf_path.is_file():
             raise HTTPException(status_code=404, detail=f"PDF文件不存在: {request.doc_name}")
 
         # 添加后台任务
@@ -199,6 +204,8 @@ async def index_document(
 
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         print(f"❌ 启动索引任务失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))

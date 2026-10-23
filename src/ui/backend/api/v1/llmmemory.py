@@ -8,8 +8,13 @@ LLM-Memory 侧自己就有完整的 brief 抽取、增量状态、检索与对�
 
 对话作用域约定：前端会把明确选择的日期拼进 query，并通过自然语言说明范围，
 namespace 固定为 AATF。未选日期时保持原问题，不人为追加空范围提示。
+
+例外：/load-jobs 不是透传，它把"加载某天的简报"登记进本仓库 job_runner 的
+串行车道，再由 services/brief_memory.py 去驱动外部服务——外部那边没有队列
+也没有并发上限，批量点日期时会失控，详见下面 /load-jobs 上方的说明。
 """
 import os
+import re
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -60,6 +65,68 @@ async def brief_load(body: dict):
 @router.get("/load/progress/{job_id}")
 async def brief_load_progress(job_id: str):
     return await _lm("GET", f"/api/briefs/load/progress/{job_id}")
+
+
+# ---- 队列驱动的批量加载 ----------------------------------------------------
+# 上面那对 /load 是把请求原样转发给外部服务：那边是 thread-per-job，既没有
+# 队列也没有并发上限（server.py 的 _MAX_ACTIVE_JOBS 只挂在 ingest/chat 上，
+# brief load 一个都没接），日期列表上连点几行就会同时开好几个 job 一起打
+# 同一个网关，同一日期并发跑两遍还会写进重复记忆行。
+#
+# 下面这组走 AgenticReader 自己的 job_runner 串行车道：一天一个 job，进度
+# /取消/重试都是现成的（job 账本在 /api/v1/jobs 上，这里给了一份只含加载
+# 任务的过滤视图）。原 /load 保留不动，仍然留给"一次塞多个日期"的用法。
+#
+# 取消语义有一点要留意：外部服务没有 brief load 的停止端点，取消本地 job
+# 只是停止继续盯它，那一轮 load 还是会自己跑完——日期最终仍然会被加载上，
+# 只是状态会先显示 cancelled 再在刷新后变回已加载。
+
+_LOAD_KIND = "load_brief_date"
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# 单次请求最多排多少个日期。本地队列不设上限（串行本身就慢），这条只是
+# 挡住误操作把整个月的日期一次塞进来。
+_MAX_DATES_PER_REQUEST = 40
+
+
+def _normalize_dates(body: dict) -> list:
+    """接受 ["2026-10-13", ...] 或单个字符串，去重排序后校验格式。"""
+    dates = (body or {}).get("dates")
+    if isinstance(dates, str):
+        dates = [dates]
+    if not isinstance(dates, list) or not dates:
+        raise HTTPException(status_code=400,
+                            detail="dates: non-empty list of YYYY-MM-DD required")
+    valid = sorted({d for d in dates if isinstance(d, str) and _DATE_RE.match(d)})
+    if not valid:
+        raise HTTPException(status_code=400,
+                            detail="dates contains no valid YYYY-MM-DD entries")
+    if len(valid) > _MAX_DATES_PER_REQUEST:
+        raise HTTPException(status_code=400,
+                            detail=f"一次最多排 {_MAX_DATES_PER_REQUEST} 个日期，请分批")
+    return valid
+
+
+@router.post("/load-jobs")
+async def post_load_jobs(body: dict):
+    """批量加载：每个日期登记一个后台任务，立刻返回，不等结果。
+
+    `job_runner.enqueue()` 对同一个 target 会直接返回还在排队/运行的那条，
+    所以重复点同一个日期不会跑两遍——这正是之前并发撞车的那个坑。"""
+    from src.ui.backend.services import job_runner
+
+    dates = _normalize_dates(body)
+    jobs = [await job_runner.enqueue(_LOAD_KIND, d, title=f"加载简报 {d}")
+            for d in dates]
+    return {"requested": len(dates), "queued": len(jobs), "dates": dates, "jobs": jobs}
+
+
+@router.get("/load-jobs")
+async def get_load_jobs():
+    """这个页专用的任务视图：只回 load_brief_date 类型，省得前端自己去
+    /api/v1/jobs 里筛一遍。按创建时间倒序（job_runner.list_jobs 已排好）。"""
+    from src.ui.backend.services import job_runner
+
+    return {"jobs": [j for j in job_runner.list_jobs() if j.get("kind") == _LOAD_KIND]}
 
 
 @router.post("/chat")

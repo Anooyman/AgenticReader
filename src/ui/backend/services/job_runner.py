@@ -56,6 +56,9 @@ TIMEOUTS = {
     "process_web": 15 * 60,
     "sync_memory": 30 * 60,
     "render_report": 5 * 60,
+    # 外部 LLM-Memory 那边一天的简报通常几分钟跑完；给 20 分钟，超了就是
+    # 卡在网络或对端，不是"慢"。
+    "load_brief_date": 20 * 60,
 }
 
 ACTIVE_STATUSES = ("queued", "running", "cancelling")
@@ -263,6 +266,32 @@ async def _run_job(job: dict) -> dict:
             return {"error": f"生成报告失败: {e}"}
         return {"ok": True}
 
+    if kind == "load_brief_date":
+        # 把一天的简报灌进外部 LLM-Memory 的记忆库（namespace AATF）。
+        # target 就是一个 YYYY-MM-DD；外部服务那边一天一个 job 也串行，
+        # 我们这里同样一天一个 job，等于给它补上了缺的那道并发闸门。
+        from src.ui.backend.services import brief_memory
+
+        try:
+            outcome = await asyncio.wait_for(
+                brief_memory.load_date(target), timeout=TIMEOUTS["load_brief_date"],
+            )
+        except asyncio.TimeoutError:
+            return {"error": f"加载简报 {target} 超时"
+                             f"（>{TIMEOUTS['load_brief_date']}s）"}
+        except Exception as e:  # noqa: BLE001
+            return {"error": f"加载简报 {target} 失败: {e}"}
+
+        if not outcome.get("loaded"):
+            errors = outcome.get("errors") or ["外部服务没有写入任何条目"]
+            return {"error": f"加载简报 {target} 未完成: {'; '.join(errors)}"}
+        # 日期本身处理了，但个别 kind 抽取/入库失败——任务算成功完成，把
+        # 警告留在 job.detail 里让 UI 显示，别把整体判成失败。
+        if outcome.get("errors"):
+            logger.warning("简报日期 %s 有警告: %s", target, outcome["errors"])
+            return {"ok": True, "detail": "; ".join(outcome["errors"])}
+        return {"ok": True}
+
     return {"error": f"未知任务类型: {kind}"}
 
 
@@ -315,7 +344,12 @@ async def run_forever() -> None:
                 await _update_job(job_id, status="failed", finished_at=_now(), error=outcome["error"])
                 logger.warning("任务失败 %s: %s", job_id[:8], outcome["error"])
             else:
-                await _update_job(job_id, status="done", finished_at=_now())
+                # detail 是"成功但有警告"（比如某天里某个 kind 抽取失败）——
+                # 不影响状态，只是别把它藏着。
+                fields = {"status": "done", "finished_at": _now()}
+                if outcome.get("detail"):
+                    fields["detail"] = outcome["detail"]
+                await _update_job(job_id, **fields)
                 logger.info("任务完成 %s: %s", job_id[:8], job["target"])
         except asyncio.CancelledError:
             logger.info("管线任务 worker 停止")
