@@ -127,15 +127,6 @@ class VectorStore:
 
     # ---- 读 ----
 
-    def get_by_ids(self, ids: List[str]) -> Dict[str, Dict[str, Any]]:
-        """按 id 精确取行，返回 {id: row}。用于详情页/单条查看。"""
-        tbl = self._table_or_none()
-        if tbl is None or not ids:
-            return {}
-        clause = " OR ".join(f"id = '{_esc(i)}'" for i in ids)
-        rows = tbl.search().where(clause).limit(len(ids)).to_list()
-        return {r["id"]: _strip_vector(r) for r in rows}
-
     def _where(self, namespace: NamespaceArg, extra: Optional[str] = None,
                source_type: Optional[str] = None,
                source_id: Optional[str] = None) -> Optional[str]:
@@ -237,10 +228,3 @@ class VectorStore:
         if where:
             q = q.where(where)
         return [_strip_vector(r) for r in q.limit(1_000_000).to_list()]
-
-    def count_rows(self, namespace: NamespaceArg = "*") -> int:
-        tbl = self._table_or_none()
-        if tbl is None:
-            return 0
-        where = self._where(namespace)
-        return tbl.count_rows(filter=where) if where else tbl.count_rows()

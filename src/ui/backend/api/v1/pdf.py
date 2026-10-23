@@ -2,10 +2,8 @@
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
-from pathlib import Path
-from typing import Dict, Any, List
 
-from ...config import PDF_DIR, PDF_IMAGE_DIR
+from ...config import PDF_DIR
 from src.utils.path_guard import safe_path
 
 router = APIRouter()
@@ -39,83 +37,4 @@ async def view_pdf(doc_name: str):
         raise
     except Exception as e:
         print(f"❌ 获取PDF文件失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/images/{doc_name}")
-async def get_pdf_images(doc_name: str) -> Dict[str, Any]:
-    """获取PDF图片列表"""
-    try:
-        # 目录穿越防护
-        try:
-            safe_path(PDF_IMAGE_DIR, doc_name)
-        except ValueError as guard_e:
-            raise HTTPException(status_code=400, detail=f"非法文档名: {guard_e}")
-
-        pdf_image_dir = PDF_IMAGE_DIR / doc_name
-
-        if not pdf_image_dir.exists():
-            return {
-                "success": False,
-                "message": f"PDF图片目录不存在: {doc_name}",
-                "images": []
-            }
-
-        # 获取所有PNG图片并按页码排序
-        image_files = list(pdf_image_dir.glob("*.png"))
-
-        # 按页码排序（从文件名中提取数字）
-        def extract_page_num(filepath):
-            import re
-            match = re.search(r'page_(\d+)', filepath.name)
-            return int(match.group(1)) if match else 0
-
-        image_files = sorted(image_files, key=extract_page_num)
-
-        images = []
-        for image_file in image_files:
-            # 构建相对URL路径
-            image_url = f"/api/v1/pdf/image/{doc_name}/{image_file.name}"
-            images.append(image_url)
-
-        return {
-            "success": True,
-            "doc_name": doc_name,
-            "total_pages": len(images),
-            "images": images
-        }
-
-    except Exception as e:
-        print(f"❌ 获取PDF图片失败: {e}")
-        return {
-            "success": False,
-            "message": str(e),
-            "images": []
-        }
-
-
-@router.get("/image/{doc_name}/{filename}")
-async def get_pdf_image(doc_name: str, filename: str):
-    """获取单个PDF图片"""
-    try:
-        # 目录穿越防护：doc_name 与 filename 都需限制在图片目录内
-        try:
-            doc_dir = safe_path(PDF_IMAGE_DIR, doc_name)
-            image_path = safe_path(doc_dir, filename)
-        except ValueError as guard_e:
-            raise HTTPException(status_code=400, detail=f"非法路径: {guard_e}")
-
-        if not image_path.exists():
-            raise HTTPException(status_code=404, detail=f"图片不存在: {filename}")
-
-        return FileResponse(
-            path=str(image_path),
-            media_type='image/png',
-            filename=filename
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"❌ 获取PDF图片失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))

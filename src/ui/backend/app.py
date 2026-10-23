@@ -82,7 +82,7 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 # 导入并注册路由
 from .api import pages, websocket
 from .api.v1 import (
-    documents, chat, pdf, chapters, structure, config, sessions, data,
+    documents, chat, pdf, structure, config, sessions, data,
     briefs, jobs, memory, speech, llmmemory,
 )
 
@@ -91,7 +91,6 @@ app.include_router(websocket.router, tags=["WebSocket"])
 app.include_router(documents.router, prefix="/api/v1/documents", tags=["Documents"])
 app.include_router(chat.router, prefix="/api/v1/chat", tags=["Chat"])
 app.include_router(pdf.router, prefix="/api/v1/pdf", tags=["PDF"])
-app.include_router(chapters.router, prefix="/api/v1/chapters", tags=["Chapters"])
 app.include_router(structure.router, prefix="/api/v1/structure", tags=["Structure"])
 app.include_router(config.router, prefix="/api/v1/config", tags=["Config"])
 app.include_router(sessions.router, prefix="/api/v1/sessions", tags=["Sessions"])

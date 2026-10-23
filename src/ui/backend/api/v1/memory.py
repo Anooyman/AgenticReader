@@ -22,14 +22,6 @@ async def get_namespace(namespace: str):
     return await memory_browse.fetch_namespace(namespace)
 
 
-@router.get("/item/{memory_id}")
-async def get_item(memory_id: str):
-    data = await memory_browse.fetch_detail(memory_id)
-    if not data.get("found"):
-        raise HTTPException(status_code=404, detail="memory not found")
-    return data
-
-
 @router.delete("/item/{memory_id}")
 async def delete_item(memory_id: str):
     return await memory_browse.delete_memory(memory_id)

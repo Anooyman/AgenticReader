@@ -97,29 +97,6 @@ def _build_namespace_list(namespace: str) -> Dict[str, Any]:
     return {"namespace": namespace, "total": len(rows), "groups": result}
 
 
-def _build_detail(memory_id: str) -> Dict[str, Any]:
-    """单条记忆的全字段（列表接口只给精简形状，抽屉里要看完整内容）。"""
-    vs = _vs()
-    row = vs.get_by_ids([memory_id]).get(memory_id)
-    if row is None:
-        return {"found": False, "id": memory_id}
-    return {
-        "found": True,
-        "id": row.get("id"),
-        "namespace": row.get("namespace"),
-        "memory_type": row.get("memory_type"),
-        "importance": row.get("importance"),
-        "created_at": row.get("created_at"),
-        "occurred_at": row.get("occurred_at"),
-        "source_type": row.get("source_type"),
-        "source_id": row.get("source_id"),
-        "abstract": row.get("abstract"),
-        "detail": row.get("detail"),
-        "raw_source": row.get("raw_source"),
-        "keywords": load_json_list(row.get("keywords")),
-    }
-
-
 def _delete_memory(memory_id: str) -> Dict[str, Any]:
     vs = _vs()
     vs.delete(memory_id)
@@ -157,10 +134,6 @@ async def fetch_overview() -> Dict[str, Any]:
 
 async def fetch_namespace(namespace: str) -> Dict[str, Any]:
     return await asyncio.to_thread(_build_namespace_list, namespace)
-
-
-async def fetch_detail(memory_id: str) -> Dict[str, Any]:
-    return await asyncio.to_thread(_build_detail, memory_id)
 
 
 async def delete_memory(memory_id: str) -> Dict[str, Any]:

@@ -611,13 +611,6 @@ class StructureEditor {
         }
     }
 
-    changePage(delta) {
-        const newPage = this.currentPage + delta;
-        if (newPage >= 1 && newPage <= this.totalPages) {
-            this.scrollToPage(newPage);
-        }
-    }
-
     initPanelResizer() {
         const resizer = document.getElementById('panel-resizer');
         const leftPanel = document.querySelector('.editor-panel');
