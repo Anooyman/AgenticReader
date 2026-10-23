@@ -1,0 +1,203 @@
+    .dashboard {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 1.5rem 2rem;
+    }
+
+    .welcome {
+        text-align: center;
+        padding: 1.5rem 0;
+    }
+
+    .welcome h1 {
+        font-size: 2rem;
+        color: var(--primary-color);
+        margin-bottom: 0.25rem;
+    }
+
+    .welcome p {
+        color: var(--text-muted);
+        font-size: 0.9rem;
+    }
+
+    .section-title {
+        font-size: 1.125rem;
+        font-weight: 600;
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+
+    .section-title a {
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: var(--primary-color);
+        text-decoration: none;
+    }
+
+    .section-title a:hover {
+        text-decoration: underline;
+    }
+
+    /* 今日简报预览——首页的视觉主体，不是又一个入口卡片，直接展示内容
+       摘要，点了就能处理，不需要先猜"该去哪个页面看"。 */
+    .briefs-preview {
+        margin-bottom: 2rem;
+    }
+
+    .briefs-preview-card {
+        background: var(--bg-primary);
+        border-radius: 0.75rem;
+        border: 1px solid var(--border-light);
+        box-shadow: var(--shadow-sm);
+        padding: 1.25rem 1.5rem;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .briefs-preview-card:hover {
+        border-color: var(--primary-color);
+        box-shadow: var(--shadow-md);
+    }
+
+    .briefs-preview-summary {
+        color: var(--text-secondary);
+        font-size: 0.875rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .briefs-preview-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .briefs-preview-list li {
+        padding: 0.375rem 0;
+        border-top: 1px solid var(--border-light);
+        font-size: 0.875rem;
+        color: var(--text-primary);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .briefs-preview-empty {
+        color: var(--text-muted);
+        font-size: 0.875rem;
+        text-align: center;
+        padding: 1rem 0;
+    }
+
+    /* 快捷操作行——降级为次要功能，让位给上面的简报预览 */
+    .quick-actions {
+        margin-bottom: 2rem;
+    }
+
+    .mode-card {
+        background: var(--bg-primary);
+        border-radius: 0.75rem;
+        padding: 1.25rem;
+        box-shadow: var(--shadow-sm);
+        border: 1px solid var(--border-light);
+        transition: all 0.2s;
+        cursor: pointer;
+        text-align: center;
+    }
+
+    .mode-card:hover {
+        border-color: var(--primary-color);
+        box-shadow: var(--shadow-md);
+        transform: translateY(-2px);
+    }
+
+    .mode-icon { font-size: 1.75rem; margin-bottom: 0.5rem; }
+    .mode-title { font-size: 1rem; font-weight: 700; margin-bottom: 0.25rem; }
+    .mode-requirement {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        background: var(--bg-secondary);
+        padding: 0.25rem 0.6rem;
+        border-radius: 0.5rem;
+        display: inline-block;
+        margin-top: 0.25rem;
+    }
+
+    /* 后台任务小面板：默认只显示一行摘要，点了才展开列表——首页只做
+       "看一眼有没有在跑"，真正管理任务在 /briefs 的任务表格里。 */
+    .jobs-panel-list {
+        margin-top: 0.75rem;
+        border-top: 1px solid var(--border-light);
+        padding-top: 0.75rem;
+        text-align: left;
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+    }
+
+    .jobs-panel-list .job-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.5rem;
+        padding: 0.25rem 0;
+    }
+
+    .jobs-panel-list .job-row .job-name {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    /* 响应式优化 */
+    @media (max-width: 768px) {
+        .mode-cards {
+            grid-template-columns: 1fr !important;
+        }
+    }
+
+    /* 历史对话弹窗——内容渲染复用 manage.js 里 DataManager 已有的会话
+       方法（loadSessions/renderSessions/showSessionDetail 等），这里只是
+       给它们一个模态框外壳，不重新实现列表/搜索/删除逻辑。 */
+    #sessions-modal-overlay {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 1000;
+        align-items: center;
+        justify-content: center;
+    }
+
+    #sessions-modal-overlay.open {
+        display: flex;
+    }
+
+    .sessions-modal-panel {
+        background: var(--bg-primary);
+        border-radius: 0.75rem;
+        box-shadow: var(--shadow-lg);
+        width: 90%;
+        max-width: 900px;
+        max-height: 85vh;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .sessions-modal-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1.25rem 1.5rem;
+        border-bottom: 1px solid var(--border-light);
+        flex-shrink: 0;
+    }
+
+    .sessions-modal-header h3 {
+        margin: 0;
+    }
+
+    .sessions-modal-body {
+        overflow-y: auto;
+        padding: 1.5rem;
+    }

@@ -1,0 +1,502 @@
+    .manage-container {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 2rem 1rem;
+    }
+
+    .page-header {
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+
+    .page-header h1 {
+        font-size: 2rem;
+        margin-bottom: 0.5rem;
+        color: var(--text-primary);
+    }
+
+    .page-header p {
+        color: var(--text-muted);
+    }
+
+    /* Tab Navigation */
+    .tab-nav {
+        display: flex;
+        gap: 1rem;
+        margin-bottom: 2rem;
+        border-bottom: 2px solid var(--border-light);
+    }
+
+    .tab-button {
+        padding: 1rem 2rem;
+        background: transparent;
+        border: none;
+        border-bottom: 3px solid transparent;
+        cursor: pointer;
+        font-size: 1rem;
+        font-weight: 500;
+        color: var(--text-muted);
+        transition: all 0.3s;
+    }
+
+    .tab-button:hover {
+        color: var(--text-primary);
+        background: var(--bg-secondary);
+    }
+
+    .tab-button.active {
+        color: var(--primary-color);
+        border-bottom-color: var(--primary-color);
+    }
+
+    /* Tab Content */
+    .tab-content {
+        display: none;
+    }
+
+    .tab-content.active {
+        display: block;
+    }
+
+    /* .overview-grid / .overview-card / .controls-bar / .search-box /
+       .search-icon 已上移到 components.css（dashboard.html 的历史对话
+       弹窗需要复用这几个类，避免两页各存一份）。 */
+
+    /* Document Cards */
+    .documents-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+        gap: 1.5rem;
+        margin-bottom: 2rem;
+    }
+
+    .document-card {
+        background: var(--bg-primary);
+        border-radius: 0.5rem;
+        box-shadow: var(--shadow-md);
+        overflow: hidden;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .document-card:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-lg);
+    }
+
+    .document-card.selected {
+        border: 2px solid var(--primary-color);
+        background: rgba(0, 123, 255, 0.05);
+    }
+
+    .document-checkbox {
+        position: absolute;
+        top: 1rem;
+        right: 1rem;
+        width: 20px;
+        height: 20px;
+        cursor: pointer;
+        z-index: 10;
+    }
+
+    .document-header {
+        padding: 1.5rem;
+        border-bottom: 1px solid var(--border-light);
+        position: relative;
+    }
+
+    .document-title {
+        font-size: 1.125rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin: 0 0 0.5rem 0;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .document-meta {
+        font-size: 0.875rem;
+        color: var(--text-muted);
+        margin-bottom: 0.75rem;
+    }
+
+    .document-keywords {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+        max-height: 2.5rem;
+        overflow: hidden;
+        transition: max-height 0.3s ease;
+    }
+
+    .document-keywords.expanded {
+        max-height: none;
+    }
+
+    .keyword-tag {
+        background: var(--bg-secondary);
+        color: var(--text-primary);
+        padding: 0.25rem 0.75rem;
+        border-radius: 1rem;
+        font-size: 0.75rem;
+    }
+
+    .document-body {
+        padding: 1.5rem;
+    }
+
+    .document-abstract {
+        font-size: 0.875rem;
+        color: var(--text-secondary);
+        line-height: 1.6;
+        margin-bottom: 1rem;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .document-abstract.expanded {
+        -webkit-line-clamp: unset;
+    }
+
+    .expand-toggle {
+        color: var(--primary-color);
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+    }
+
+    .expand-toggle:hover {
+        text-decoration: underline;
+    }
+
+    .data-stats {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.75rem;
+        margin-top: 1rem;
+    }
+
+    .data-stat {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.5rem;
+        background: var(--bg-secondary);
+        border-radius: 0.375rem;
+        font-size: 0.875rem;
+    }
+
+    .stat-label {
+        color: var(--text-muted);
+    }
+
+    .stat-value {
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .stat-value.has-data {
+        color: var(--success-color);
+    }
+
+    .stat-value.no-data {
+        color: var(--text-muted);
+    }
+
+    .document-actions {
+        display: flex;
+        gap: 0.5rem;
+        padding: 1rem 1.5rem;
+        border-top: 1px solid var(--border-light);
+        background: var(--bg-secondary);
+    }
+
+    .action-btn {
+        padding: 0.5rem 1rem;
+        border: none;
+        border-radius: 0.375rem;
+        cursor: pointer;
+        font-size: 0.875rem;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+
+    .action-btn-delete {
+        background: #dc3545;
+        color: white;
+    }
+
+    .action-btn-delete:hover {
+        background: #c82333;
+    }
+
+    .action-btn-partial {
+        background: #ffc107;
+        color: #000;
+    }
+
+    .action-btn-partial:hover {
+        background: #e0a800;
+    }
+
+    /* .sessions-grid / .session-card / .session-* / .empty-state / .loading
+       已上移到 components.css（原因同上，dashboard.html 弹窗复用）。 */
+
+    /* Notification animations */
+    @keyframes slideInRight {
+        from {
+            transform: translateX(100%);
+            opacity: 0;
+        }
+        to {
+            transform: translateX(0);
+            opacity: 1;
+        }
+    }
+
+    @keyframes slideOutRight {
+        from {
+            transform: translateX(0);
+            opacity: 1;
+        }
+        to {
+            transform: translateX(100%);
+            opacity: 0;
+        }
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+        .documents-grid,
+        .sessions-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .overview-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .tab-button {
+            padding: 0.75rem 1rem;
+            font-size: 0.875rem;
+        }
+    }
+
+    /* Markdown content in detail modal */
+    #detail-modal-content h1,
+    #detail-modal-content h2,
+    #detail-modal-content h3 {
+        margin-top: 1em;
+        margin-bottom: 0.5em;
+        font-weight: 600;
+        line-height: 1.3;
+    }
+
+    #detail-modal-content h1 {
+        font-size: 1.5em;
+        border-bottom: 2px solid var(--border-light);
+        padding-bottom: 0.3em;
+    }
+
+    #detail-modal-content h2 {
+        font-size: 1.3em;
+        border-bottom: 1px solid var(--border-light);
+        padding-bottom: 0.25em;
+    }
+
+    #detail-modal-content h3 {
+        font-size: 1.1em;
+    }
+
+    #detail-modal-content p {
+        margin: 0.8em 0;
+    }
+
+    #detail-modal-content ul,
+    #detail-modal-content ol {
+        margin: 0.8em 0;
+        padding-left: 1.5em;
+    }
+
+    #detail-modal-content li {
+        margin: 0.3em 0;
+    }
+
+    #detail-modal-content code {
+        background: var(--bg-secondary);
+        padding: 0.2em 0.4em;
+        border-radius: 0.25rem;
+        font-family: 'Courier New', monospace;
+        font-size: 0.9em;
+    }
+
+    #detail-modal-content pre {
+        background: var(--bg-secondary);
+        padding: 1em;
+        border-radius: 0.5rem;
+        overflow-x: auto;
+        margin: 1em 0;
+    }
+
+    #detail-modal-content pre code {
+        background: none;
+        padding: 0;
+    }
+
+    #detail-modal-content blockquote {
+        border-left: 4px solid var(--primary-color);
+        padding-left: 1em;
+        margin: 1em 0;
+        color: var(--text-secondary);
+    }
+
+    /* KaTeX math rendering */
+    #detail-modal-content .katex-display {
+        margin: 1.5em 0;
+        overflow-x: auto;
+        overflow-y: hidden;
+    }
+
+    #detail-modal-content .katex {
+        font-size: 1.1em;
+    }
+
+    #detail-modal-content .katex-display > .katex {
+        text-align: center;
+    }
+
+    /* .pagination / .pagination-btn / .pagination-ellipsis 已上移到
+       components.css（原因同上）。 */
+
+    /* Memory tab */
+    .memory-search-result {
+        border: 1px solid var(--border-light);
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin-bottom: 1.5rem;
+        background: var(--bg-secondary);
+        white-space: pre-wrap;
+        font-size: 0.875rem;
+    }
+
+    .namespace-tabs {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+        flex-wrap: wrap;
+    }
+
+    .namespace-tabs button {
+        padding: 6px 14px;
+        border: 1px solid var(--border-color);
+        border-radius: 999px;
+        background: var(--bg-primary);
+        color: var(--text-primary);
+        cursor: pointer;
+        font-size: 0.875rem;
+    }
+
+    .namespace-tabs button.active {
+        background: var(--primary-color);
+        color: white;
+        border-color: var(--primary-color);
+    }
+
+    .memory-namespace-actions {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 0.75rem;
+    }
+
+    .btn-danger-outline {
+        font-size: 0.8125rem;
+        color: var(--danger-color);
+        border: 1px solid var(--danger-color);
+        background: var(--bg-primary);
+        border-radius: 6px;
+        padding: 5px 12px;
+        cursor: pointer;
+    }
+
+    .btn-danger-outline:hover {
+        background: var(--danger-color);
+        color: white;
+    }
+
+    .memory-group {
+        border: 1px solid var(--border-light);
+        border-radius: 0.5rem;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        background: var(--bg-primary);
+    }
+
+    .memory-group .group-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 0.5rem;
+    }
+
+    .memory-group .group-header-right {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex-shrink: 0;
+    }
+
+    .memory-group .group-delete-btn {
+        font-size: 0.75rem;
+        color: var(--danger-color);
+        border: 1px solid var(--danger-color);
+        background: var(--bg-primary);
+        border-radius: 4px;
+        padding: 2px 8px;
+        cursor: pointer;
+    }
+
+    .memory-group .group-delete-btn:hover {
+        background: var(--danger-color);
+        color: white;
+    }
+
+    .memory-group .source-id {
+        font-family: monospace;
+        font-size: 0.75rem;
+        color: var(--text-muted);
+    }
+
+    .memory-item {
+        border-top: 1px solid var(--border-light);
+        padding: 0.5rem 0;
+        font-size: 0.875rem;
+    }
+
+    .memory-item .keywords {
+        margin-top: 4px;
+    }
+
+    .memory-item .keywords span {
+        display: inline-block;
+        background: var(--bg-tertiary);
+        border-radius: 4px;
+        padding: 1px 6px;
+        margin-right: 4px;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+    }
+
+    .memory-item button.danger {
+        font-size: 0.75rem;
+        color: var(--danger-color);
+        border: 1px solid var(--danger-color);
+        background: var(--bg-primary);
+        border-radius: 4px;
+        padding: 2px 8px;
+        cursor: pointer;
+        margin-top: 4px;
+    }

@@ -1,0 +1,691 @@
+const API = "/api/v1/llmmemory";
+const state = { dates: [], selected: new Set(), chatHistory: [],
+                conversationId: 0, datesInitialized: false,
+                // jobs: 当前日期相关的加载任务快照，日期行徽章靠它
+                jobs: [] };
+
+function esc(s) {
+    const d = document.createElement("div");
+    d.textContent = s == null ? "" : String(s);
+    return d.innerHTML;
+}
+function showErr(msg) {
+    const b = document.getElementById("errBox");
+    b.textContent = "⚠ " + msg;
+    b.style.display = "block";
+    clearTimeout(showErr._t);
+    showErr._t = setTimeout(() => { b.style.display = "none"; }, 8000);
+}
+function detail(x) {
+    const d = x && x.detail;
+    if (typeof d === "string") return d;
+    if (d && d.detail) return String(d.detail);
+    if (d && typeof d === "object" && d.error) return String(d.error);
+    return JSON.stringify(x || "unknown error").slice(0, 300);
+}
+
+// ---------- dates ----------
+
+async function fetchDates() {
+    try {
+        const r = await fetch(`${API}/dates`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(detail(d));
+        state.dates = d.dates || [];
+        // On the first load, mirror the checked state in the date list: loaded
+        // dates are checked by default. Previously only the DOM checkboxes were
+        // checked; state.selected stayed empty, so the selection state was inconsistent.
+        if (!state.datesInitialized) {
+            state.selected = new Set(state.dates.filter(x => x.loaded).map(x => x.date));
+            state.datesInitialized = true;
+        } else {
+            // Preserve the user's selection, but discard dates no longer present.
+            const available = new Set(state.dates.map(x => x.date));
+            state.selected = new Set([...state.selected].filter(x => available.has(x)));
+        }
+        renderDates();
+    } catch (e) { showErr("读取日期列表失败：" + e.message); }
+}
+
+// 日期行上的徽章 = 这天的加载任务现在处于什么状态。没有任务时就是它自己的
+// 加载状态（已加载 N 篇 / 未加载 / 失败）。有任务在排队或跑的时候，那一天的
+// "加载"按钮会收起来——重复点虽然服务端会去重，但看着像失灵，不如直接不给点。
+const JOB_BADGES = {
+    queued: `<span class="badge queued">排队</span>`,
+    running: `<span class="badge running">加载中</span>`,
+    cancelling: `<span class="badge running">取消中</span>`,
+    done: `<span class="badge loaded">完成</span>`,
+    failed: `<span class="badge jobfail">失败</span>`,
+    interrupted: `<span class="badge jobfail">中断</span>`,
+    cancelled: `<span class="badge cancelled">已取消</span>`,
+};
+
+function jobBadgeFor(job) {
+    if (!job) return "";
+    if (job.status === "done" && job.detail) {
+        return `<span class="badge jobwarn" title="${esc(String(job.detail))}">完成·有警告</span>`;
+    }
+    return JOB_BADGES[job.status] || "";
+}
+
+function renderDates() {
+    const box = document.getElementById("dateList");
+    box.innerHTML = "";
+    for (const d of state.dates) {
+        const row = document.createElement("label");
+        row.className = "date-row";
+        const job = state.jobs.find(j => j.target === d.date);
+        const st = d.loaded ? `<span class="badge loaded">${d.papers || 0} 篇</span>`
+                   : d.failed ? `<span class="badge failed">失败</span>`
+                              : `<span class="badge unloaded">未加载</span>`;
+        const checked = state.selected.has(d.date);
+        row.innerHTML = `
+            <input type="checkbox" ${checked ? "checked" : ""} data-date="${d.date}">
+            <span>${d.date}</span>${st}${jobBadgeFor(job)}`;
+        const cb = row.querySelector("input");
+        cb.onchange = () => {
+            cb.checked ? state.selected.add(d.date) : state.selected.delete(d.date);
+        };
+        const busy = job && ACTIVE_JOB_STATUSES.includes(job.status);
+        if (!d.loaded && !busy) {
+            const btn = document.createElement("button");
+            btn.className = "load-btn";
+            btn.textContent = "加载";
+            btn.onclick = (ev) => { ev.preventDefault(); loadDate(d.date, btn); };
+            row.appendChild(btn);
+        }
+        // 已结束的任务在这一行就给重试入口，不用去列表里翻
+        if (job && (job.status === "failed" || job.status === "interrupted"
+                    || job.status === "cancelled")) {
+            const retry = document.createElement("button");
+            retry.className = "load-btn";
+            retry.textContent = "重试";
+            retry.onclick = (ev) => { ev.preventDefault(); runJobAction(job.job_id, "retry"); };
+            row.appendChild(retry);
+        }
+        box.appendChild(row);
+    }
+}
+
+// ---------- 加载：走 AgenticReader 自己的串行车道，一天一个 job ----------
+//
+// 这里刻意不再把请求直接转给外部服务的 /load。那边是 thread-per-job：没有
+// 队列也没有并发上限（它自己的 _MAX_ACTIVE_JOBS 只挂在 ingest/chat 上），
+// 日期列表上连点几行就会同时开好几个 job 去抢同一个网关，同一个日期被并发
+// 跑两遍还会往记忆库里写重复行。/load-jobs 把日期登记进 job_runner 的队列，
+// 一天一个任务串行执行，进度/取消/重试都从同一份 job 账本里看。
+
+async function enqueueLoad(dates) {
+    const r = await fetch(`${API}/load-jobs`, { method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ dates }) });
+    const d = await r.json();
+    if (!r.ok) throw new Error(detail(d));
+    return d;
+}
+
+async function loadDate(date, btn) {
+    btn.disabled = true; btn.textContent = "排队…";
+    loadNote = `已排队 ${date}`;
+    try {
+        await enqueueLoad([date]);
+    } catch (e) {
+        showErr(e.message);
+        loadNote = "";
+        btn.disabled = false; btn.textContent = "加载";
+        return;
+    }
+    // 立刻刷一次：排队徽章要在这一两秒里就出现，不能等下一个轮询周期
+    await refreshLoadJobs();
+    startLoadJobPoll();
+    refreshLoadJobs();
+}
+
+// 批量加载 = 把"勾选中的、还没加载的"日期一次性排进队列。串行执行，所以
+// 十几个日期排下去也是一个个来，不会互相抢；单个日期失败不影响别的日期，
+// 每个日期都能单独取消或重试。
+async function batchLoad() {
+    const selectable = state.dates.filter(d => !d.loaded);
+    const pending = selectable.filter(d => state.selected.has(d.date)).map(d => d.date);
+    if (!pending.length) {
+        // 反馈写在常驻可见的队列行上，别塞进会被隐藏的任务列表里
+        loadNote = selectable.length
+            ? `选中里有 ${selectable.length} 天还没加载，但没勾中——「全选未加载」一次性勾上`
+            : "所有日期都已经加载过了";
+        await refreshLoadJobs();
+        return;
+    }
+    loadNote = `已排入 ${pending.length} 个日期`;
+    try {
+        await enqueueLoad(pending);
+    } catch (e) { showErr(e.message); loadNote = ""; return; }
+    await refreshLoadJobs();
+    startLoadJobPoll();
+    refreshLoadJobs();
+}
+
+// ---------- 加载队列的轮询视图 ----------
+//
+// 刷新页面不用重新触发加载：job 账本在服务器端，init 时拉一次就能接上正在
+// 跑的任务。队列里全部结束（含失败/取消）才刷日期列表——中途去刷会让
+// "未加载"徽章在加载过程中反复乱闪。
+
+const ACTIVE_JOB_STATUSES = ["queued", "running", "cancelling"];
+let loadJobTimer = null;
+let loadNote = "";
+// 上一轮还活跃的那些日期，用来判断"是不是刚好全跑完了"——只有那时候才去刷
+// 日期列表，中途刷会让徽章乱闪。
+let prevActiveDates = new Set();
+
+async function fetchLoadJobs() {
+    const r = await fetch(`${API}/load-jobs`);
+    const data = await r.json();
+    if (!r.ok) throw new Error(detail(data));
+    return data.jobs || [];
+}
+
+function startLoadJobPoll() {
+    if (loadJobTimer) return;
+    loadJobTimer = setInterval(refreshLoadJobs, 2500);
+}
+
+function stopLoadJobPoll() {
+    if (loadJobTimer) { clearInterval(loadJobTimer); loadJobTimer = null; }
+}
+
+async function refreshLoadJobs() {
+    let jobs;
+    try {
+        jobs = await fetchLoadJobs();
+    } catch (e) {
+        // 网络抖一下不该让轮询就此停摆——留着 timer，下一轮再试。
+        return;
+    }
+    const drained = applyJobs(jobs);
+    if (drained) {
+        stopLoadJobPoll();
+        await fetchDates();
+    }
+}
+
+// 把任务快照摊到三处看得见的地方：
+//   1. 每一行日期上的状态徽章（不用滚到列表末尾才看到进度）
+//   2. 常驻可见的队列计数行
+//   3. 下面的任务明细（取消/重试）
+// 返回"是否从活跃变成了全空闲"，调用方据此决定要不要刷新日期列表。
+function applyJobs(jobs) {
+    state.jobs = jobs;
+    const activeNow = new Set(jobs
+        .filter(j => ACTIVE_JOB_STATUSES.includes(j.status))
+        .map(j => j.target));
+    const drained = prevActiveDates.size > 0 && activeNow.size === 0;
+    prevActiveDates = activeNow;
+    renderQueueSummary(jobs);
+    renderQueueDetail(jobs);
+    renderDates();
+    return drained;
+}
+
+const JOB_LABELS = { queued: "排队", running: "加载中", cancelling: "取消中",
+                     done: "完成", failed: "失败", cancelled: "已取消", interrupted: "中断" };
+const JOB_BADGE_CLASS = { running: "running", queued: "queued", cancelling: "running",
+                          done: "done", failed: "failed", interrupted: "failed",
+                          cancelled: "cancelled" };
+
+function renderQueueSummary(jobs) {
+    const line = document.getElementById("loadSummary");
+    if (!jobs.length) {
+        line.textContent = loadNote;
+        return;
+    }
+    const order = [["running", "运行"], ["queued", "排队"], ["cancelling", "取消中"],
+                   ["done", "完成"], ["failed", "失败"], ["interrupted", "中断"],
+                   ["cancelled", "已取消"]];
+    const counts = order
+        .map(([status, label]) => [label, jobs.filter(j => j.status === status).length])
+        .filter(([, n]) => n)
+        .map(([label, n]) => `${label} ${n}`);
+    const current = jobs.find(j => j.status === "running");
+    line.textContent = `队列：${counts.join(" · ")}`
+        + (current ? `｜正在加载 ${current.target}` : "")
+        + (loadNote ? `｜${loadNote}` : "");
+}
+
+// 明细里不做"有多少历史就列多少"：job 账本最多留 200 条，全铺出来就没法
+// 看了。策略是活跃任务 + 失败/取消的任务全留，已完成的只留最近 8 条，
+// 更早的折叠成一行说明。
+function visibleLoadJobs(jobs) {
+    const keep = new Set(jobs.filter(j => j.status !== "done").map(j => j.job_id));
+    const doneList = jobs.filter(j => j.status === "done");
+    doneList.slice(0, 8).forEach(j => keep.add(j.job_id));
+    // list_jobs 已经是按创建时间倒序，这里保持原顺序，别重排
+    return { rows: jobs.filter(j => keep.has(j.job_id)),
+             omitted: jobs.length - jobs.filter(j => keep.has(j.job_id)).length };
+}
+
+function renderQueueDetail(jobs) {
+    const wrap = document.getElementById("loadJobs");
+    const list = document.getElementById("loadJobsList");
+    if (!jobs.length) {
+        wrap.classList.add("hidden");
+        list.innerHTML = "";
+        return;
+    }
+    wrap.classList.remove("hidden");
+    const { rows, omitted } = visibleLoadJobs(jobs);
+    list.innerHTML = rows.map(j => {
+        const badge = JOB_BADGE_CLASS[j.status] || "";
+        const label = JOB_LABELS[j.status] || j.status;
+        const warn = j.detail ? `<span class="job-warn" title="${esc(String(j.detail))}">⚠ 有警告</span>` : "";
+        let action = "";
+        if (j.status === "queued" || j.status === "running") {
+            action = `<button class="job-btn" data-act="cancel" data-id="${j.job_id}">取消</button>`;
+        } else if (j.status === "failed" || j.status === "interrupted") {
+            action = `<button class="job-btn" data-act="retry" data-id="${j.job_id}">重试</button>`;
+        }
+        return `<div class="job-row">
+            <span class="job-date" title="${esc(j.title || j.target)}">${esc(j.target)}</span>
+            <span class="job-badge ${badge}">${label}</span>${warn}${action}
+        </div>`;
+    }).join("");
+    if (omitted > 0) {
+        list.innerHTML += `<div class="job-row"><span class="job-date">…另有 ${omitted} 条更早的已完成任务</span></div>`;
+    }
+
+    list.querySelectorAll(".job-btn").forEach(btn => {
+        btn.onclick = () => runJobAction(btn.dataset.id, btn.dataset.act, btn);
+    });
+}
+
+// 取消/重试都打到通用的 /api/v1/jobs 端点上——加载任务和其它管线任务共用
+// 一本账，没必要为这类任务再开一套。
+async function runJobAction(jobId, act, btn) {
+    if (btn) btn.disabled = true;
+    try {
+        const r = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/${act}`, { method: "POST" });
+        const d = await r.json();
+        if (!r.ok) throw new Error(detail(d));
+        // 外部服务没有 brief load 的停止端点，所以取消只是不再盯它——那一轮
+        // 还是会自己跑完，日期稍后会显示成已加载。
+        loadNote = act === "cancel" ? "已发起取消（外部那一轮无法中断，仍会自己跑完）"
+                                   : "已重新排队";
+    } catch (e) {
+        showErr(e.message);
+        if (btn) btn.disabled = false;
+        return;
+    }
+    await refreshLoadJobs();
+}
+
+// ---------- 回复链接旁的一键下载、索引与深读 ----------
+
+function docNameFromPaperUrl(url) {
+    let m = String(url).match(/arxiv\.org\/(?:abs|pdf)\/([0-9]{4}\.[0-9]{4,5}(?:v\d+)?)/i);
+    if (m) return m[1];
+    m = String(url).match(/([^/?#]+)\.pdf(?:[?#]|$)/i);
+    if (m) return m[1].replace(/[^%\w.+-]/g, "_");
+    return null;
+}
+
+async function indexedDocNames() {
+    const r = await fetch("/api/v1/documents/list");
+    const d = await r.json();
+    if (!r.ok) throw new Error(detail(d));
+    return new Set((d || []).map(x => x.doc_name));
+}
+async function unindexedPdfNames() {
+    const r = await fetch("/api/v1/documents/available-pdfs");
+    const d = await r.json();
+    if (!r.ok) throw new Error(detail(d));
+    return new Set((d || []).map(f => String(f).replace(/\.pdf$/i, "")));
+}
+async function pdfNameExists(docName) {
+    const r = await fetch("/api/v1/documents/available-pdfs");
+    const d = await r.json();
+    if (!r.ok) throw new Error(detail(d));
+    const expected = String(docName).replace(/\.pdf$/i, "");
+    return (d || []).some(name => String(name).replace(/\.pdf$/i, "") === expected);
+}
+
+function deepReadLink(docName) {
+    const go = document.createElement("a");
+    go.href = `/chat?doc=${encodeURIComponent(docName)}`;
+    go.target = "_blank"; go.rel = "noopener";
+    go.textContent = "💬 去深读 ↗";
+    return go;
+}
+
+async function waitForIndexedDoc(docName, actions, button) {
+    const cleanName = String(docName).replace(/\.pdf$/i, "");
+    const deadline = Date.now() + 30 * 60 * 1000;
+    while (Date.now() < deadline) {
+        try {
+            const docs = await indexedDocNames();
+            const found = [...docs].find(name => String(name).replace(/\.pdf$/i, "") === cleanName);
+            if (found) {
+                button.classList.add("ok");
+                button.textContent = "✓ 已下载并索引";
+                button.disabled = true;
+                button.dataset.indexingDoc = "";
+                if (!actions.querySelector("a.deep-read-link")) {
+                    const link = deepReadLink(String(found).replace(/\.pdf$/i, ""));
+                    link.className = "deep-read-link";
+                    actions.appendChild(link);
+                }
+                setInlineNote(actions, "索引完成，可深读");
+                return true;
+            }
+        } catch (error) { /* temporary list/API errors: keep waiting */ }
+        const elapsedSeconds = Math.floor((Date.now() - (deadline - 30 * 60 * 1000)) / 1000);
+        setInlineNote(actions, `索引中… ${elapsedSeconds} 秒`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+    button.disabled = false;
+    button.dataset.indexingDoc = cleanName;
+    button.textContent = "继续检查索引";
+    setInlineNote(actions, "索引仍未完成；可继续检查状态，不会重复下载");
+    return false;
+}
+
+function paperPdfTargetFromUrl(url) {
+    const value = String(url || "");
+    let parsed;
+    try { parsed = new URL(value, window.location.href); } catch (error) { return null; }
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+    if (/\.pdf(?:$|[?#])/i.test(parsed.href)) return parsed.href;
+    if (/arxiv\.org\/abs\//i.test(parsed.href)) return parsed.href.replace(/\/abs\//i, "/pdf/") + ".pdf";
+    return null;
+}
+
+function attachInlinePaperActions(bubble) {
+    for (const link of bubble.querySelectorAll("a[href]")) {
+        if (link.dataset.paperActionsAttached === "true") continue;
+        const target = paperPdfTargetFromUrl(link.href);
+        if (!target) continue;
+        const actions = document.createElement("span");
+        actions.className = "paper-inline-actions";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "ingest-btn";
+        button.dataset.url = target;
+        button.textContent = "⬇ 下载入库";
+        actions.appendChild(button);
+        link.dataset.paperActionsAttached = "true";
+        link.insertAdjacentElement("afterend", actions);
+    }
+}
+
+function setInlineNote(actions, text) {
+    let note = actions.querySelector(".ingest-note");
+    if (!note) {
+        note = document.createElement("span");
+        note.className = "ingest-note";
+        actions.appendChild(note);
+    }
+    note.textContent = text;
+}
+
+async function startInlinePaperIndex(docName, actions, button) {
+    const response = await fetch("/api/v1/documents/index", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ doc_name: /\.pdf$/i.test(docName) ? docName : `${docName}.pdf` })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(detail(result));
+
+    button.dataset.pendingDocName = "";
+    button.dataset.indexingDoc = docName;
+    button.textContent = "索引中…";
+    setInlineNote(actions, "索引已排队，完成后会自动显示深读链接");
+    await waitForIndexedDoc(docName, actions, button);
+}
+
+async function downloadInlinePaper(button) {
+    const actions = button.closest(".paper-inline-actions");
+    if (button.dataset.indexingDoc) {
+        button.disabled = true;
+        await waitForIndexedDoc(button.dataset.indexingDoc, actions, button);
+        return;
+    }
+    if (button.dataset.pendingDocName) {
+        button.disabled = true;
+        try { await startInlinePaperIndex(button.dataset.pendingDocName, actions, button); }
+        catch (error) {
+            button.disabled = false;
+            button.textContent = "重试启动索引";
+            setInlineNote(actions, "✗ " + error.message);
+        }
+        return;
+    }
+    const target = button.dataset.url;
+    const guess = docNameFromPaperUrl(target);
+    button.disabled = true;
+    try {
+        const already = await indexedDocNames().catch(() => new Set());
+        const existingName = guess && [...already].find(name => String(name).replace(/\.pdf$/i, "") === guess);
+        if (existingName) {
+            button.classList.add("ok");
+            button.textContent = "✓ 已入库";
+            button.disabled = true;
+            if (!actions.querySelector("a.deep-read-link")) {
+                const link = deepReadLink(String(existingName).replace(/\.pdf$/i, ""));
+                link.className = "deep-read-link";
+                actions.appendChild(link);
+            }
+            setInlineNote(actions, "已索引，可深读");
+            return;
+        }
+
+        setInlineNote(actions, "下载 PDF 中…");
+        let before = null;
+        try { before = await unindexedPdfNames(); } catch (error) { /* use URL-derived name */ }
+        const response = await fetch(`${API}/download`, {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ url: target })
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(detail(result));
+
+        let after = null;
+        try { after = await unindexedPdfNames(); } catch (error) { /* use URL-derived name */ }
+        let docName = guess;
+        if (docName && after && !after.has(docName)) {
+            const newlyAdded = before && after ? [...after].filter(name => !before.has(name)) : [];
+            if (newlyAdded.length === 1) docName = newlyAdded[0];
+            else if (newlyAdded.length > 1) docName = null;
+            else if (await pdfNameExists(docName)) {
+                // It may have become indexed while the download completed.
+                const docs = await indexedDocNames();
+                const found = [...docs].find(name => String(name).replace(/\.pdf$/i, "") === docName);
+                if (found) {
+                    button.classList.add("ok");
+                    button.textContent = "✓ 已入库";
+                    button.disabled = true;
+                    if (!actions.querySelector("a.deep-read-link")) {
+                        const link = deepReadLink(String(found).replace(/\.pdf$/i, ""));
+                        link.className = "deep-read-link";
+                        actions.appendChild(link);
+                    }
+                    setInlineNote(actions, "已索引，可深读");
+                    return;
+                }
+            } else docName = null;
+        }
+        if (!docName && after && before) {
+            const newlyAdded = [...after].filter(name => !before.has(name));
+            if (newlyAdded.length === 1) docName = newlyAdded[0];
+        }
+        if (!docName || !(await pdfNameExists(docName))) {
+            throw new Error("下载成功，但无法唯一定位 data/pdf 中的 PDF，请检查下载文件名");
+        }
+
+        setInlineNote(actions, "启动 PDF 索引中…");
+        button.dataset.pendingDocName = docName;
+        await startInlinePaperIndex(docName, actions, button);
+    } catch (error) {
+        button.disabled = false;
+        button.textContent = button.dataset.pendingDocName ? "重试启动索引" : "重试下载入库";
+        setInlineNote(actions, "✗ " + error.message);
+    }
+}
+
+function wireInlinePaperActions() {
+    log().addEventListener("click", event => {
+        const button = event.target.closest("button.ingest-btn");
+        if (button) downloadInlinePaper(button);
+    });
+}
+
+function decorateAssistantReply(bubble) {
+    attachInlinePaperActions(bubble);
+}
+
+// ---------- chat ----------
+
+const log = () => document.getElementById("chatLog");
+
+function renderAssistantContent(target, text) {
+    const source = String(text || "");
+    const rawHtml = typeof marked !== "undefined" ? marked.parse(source) : esc(source).replace(/\n/g, "<br>");
+    // If the sanitizer CDN is unavailable, fail closed to escaped plain text.
+    target.innerHTML = typeof DOMPurify !== "undefined"
+        ? DOMPurify.sanitize(rawHtml)
+        : esc(source).replace(/\n/g, "<br>");
+    if (typeof renderMathInElement === "function") {
+        renderMathInElement(target, {
+            delimiters: [
+                { left: "$$", right: "$$", display: true },
+                { left: "\\[", right: "\\]", display: true },
+                { left: "\\(", right: "\\)", display: false },
+                { left: "$", right: "$", display: false }
+            ],
+            throwOnError: false,
+            ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code"]
+        });
+    }
+}
+
+function addBubble(role, text, cite) {
+    const b = document.createElement("div");
+    b.className = "chat-bubble " + role;
+    if (role === "assistant") renderAssistantContent(b, text);
+    else b.textContent = text == null ? "" : String(text);
+    if (cite) {
+        const citation = document.createElement("span");
+        citation.className = "cite";
+        citation.textContent = cite;
+        b.appendChild(citation);
+    }
+    log().appendChild(b);
+    log().scrollTop = log().scrollHeight;
+    return b;
+}
+
+async function sendChat() {
+    const input = document.getElementById("chatInput");
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    // Date selection belongs exclusively to the brief-loading UI. Keep the
+    // original user prompt untouched so retrieval spans all dates in AATF.
+    const conversationId = state.conversationId;
+    addBubble("user", text);
+    const think = addBubble("assistant", "检索记忆中…");
+    think.dataset.userMessage = text;
+    document.getElementById("sendBtn").disabled = true;
+    document.getElementById("chatStatus").textContent = "agentic 检索 + 生成回复中，可能需要 30-60 秒";
+    try {
+        const r = await fetch(`${API}/chat`, { method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ message: text, history: state.chatHistory }) });
+        const d = await r.json();
+        if (!r.ok) throw new Error(detail(d));
+        pollChat(d.job_id, think, conversationId);
+    } catch (e) {
+        think.textContent = "出错了：" + e.message;
+        document.getElementById("sendBtn").disabled = false;
+        document.getElementById("chatStatus").textContent = "";
+    }
+}
+
+function pollChat(jobId, bubble, conversationId) {
+    const t = setInterval(async () => {
+        let job;
+        try {
+            const r = await fetch(`${API}/chat/progress/${jobId}`);
+            job = await r.json();
+            if (!r.ok) throw new Error(detail(job));
+        } catch (e) { clearInterval(t); bubble.textContent = "进度查询失败：" + e.message;
+                     document.getElementById("sendBtn").disabled = false;
+                     document.getElementById("chatStatus").textContent = ""; return; }
+        if (!job.done) return;
+        clearInterval(t);
+        if (conversationId === state.conversationId) {
+            document.getElementById("sendBtn").disabled = false;
+            document.getElementById("chatStatus").textContent = "";
+        }
+        const res = job.result || {};
+        if (job.error) { bubble.textContent = "出错了：" + job.error; return; }
+        const n = (res.retrieved_memories || []).length;
+        bubble.replaceChildren();
+        renderAssistantContent(bubble, res.reply || "（空回复）");
+        const citation = document.createElement("span");
+        citation.className = "cite";
+        citation.textContent = `引用了 ${n} 条记忆`;
+        bubble.appendChild(citation);
+        if (conversationId !== state.conversationId) return;
+        state.chatHistory.push({ role: "user", content: bubble.dataset.userMessage || "" });
+        state.chatHistory.push({ role: "assistant", content: res.reply || "" });
+        decorateAssistantReply(bubble);
+        if (state.chatHistory.length > 20) state.chatHistory.splice(0, state.chatHistory.length - 20);
+    }, 1500);
+}
+
+function linkify(s) {
+    return esc(s).replace(/\[([^\]]+)\]\((https?:[^)]+)\)|(https?:\/\/[^\s<]+)/g,
+        (match, label, markdownUrl, bareUrl) => {
+            if (markdownUrl) {
+                return `<a href="${markdownUrl}" target="_blank" rel="noopener">${label}</a>`;
+            }
+            const trailing = bareUrl.match(/[),.;!?\u3001\u3002\uFF09\uFF0C\uFF1B\uFF1A]+$/)?.[0] || "";
+            const href = bareUrl.slice(0, bareUrl.length - trailing.length);
+            return `<a href="${href}" target="_blank" rel="noopener">${href}</a>${trailing}`;
+        });
+}
+
+// ---------- wiring ----------
+
+wireInlinePaperActions();
+
+document.getElementById("sendBtn").onclick = sendChat;
+document.getElementById("newConversationBtn").onclick = () => {
+    state.conversationId++;
+    state.chatHistory = [];
+    log().innerHTML = '<div class="chat-bubble assistant">新对话已开始。可以继续询问记忆库中的内容。</div>';
+    document.getElementById("chatStatus").textContent = "";
+};
+document.getElementById("chatInput").addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); sendChat(); }
+});
+document.getElementById("selectAllLoaded").onclick = () => {
+    state.selected = new Set(state.dates.filter(d => d.loaded).map(d => d.date));
+    renderDates();
+};
+document.getElementById("selectAllUnloaded").onclick = () => {
+    // 不覆盖已加载的勾选——只是把还没加载的都加进来，好让"批量加载"有东西可排。
+    state.dates.filter(d => !d.loaded).forEach(d => state.selected.add(d.date));
+    renderDates();
+};
+document.getElementById("batchLoad").onclick = batchLoad;
+document.getElementById("clearSel").onclick = () => {
+    state.selected.clear();
+    renderDates();
+};
+
+fetchDates();
+// 接上刷新前就已经在跑/排队的加载任务：拉一次快照摊到界面上，有活跃任务就
+// 把轮询开起来。没有活跃任务时什么都不用做——日期刚才已经刷过了。
+fetchLoadJobs().then(jobs => {
+    applyJobs(jobs);
+    if (jobs.some(j => ACTIVE_JOB_STATUSES.includes(j.status))) startLoadJobPoll();
+}).catch(() => {});
