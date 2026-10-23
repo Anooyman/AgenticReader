@@ -92,7 +92,8 @@ src/
 │   ├── model_overrides.py    # AGENT_MODEL_OVERRIDES：每 agent 单独指定模型
 │   └── prompts/              # 仅 metadata_prompts.py（+惰性 SYSTEM_PROMPT_CONFIG 聚合）
 ├── core/
-│   ├── document_management/  # registry.py(DocumentRegistry) / indexer.py / manager.py
+│   ├── document_management/  # registry.py(DocumentRegistry) / indexer.py(index_pdf_document) /
+│   │                         #   delete_service.py(delete_document_service 唯一删除实现) / manager.py
 │   ├── llm/                  # client.py(LLMBase) / providers.py(azure|openai|ollama|gemini) / history.py
 │   ├── parallel/             # indexing.py(ChapterProcessor 等) / retrieval.py(ParallelRetrievalCoordinator)
 │   └── vector_db/            # vector_db_client.py(FAISS+轮次去重) / metadata_db.py

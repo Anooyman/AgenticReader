@@ -333,12 +333,17 @@ utils   → config 3
 
 ### P2 — 结构（3-5 天，风险中）——2 已完（16a5ccb），余 1/3/4/5 待动
 
-1. `index_document_service()` / `delete_document_service()`：4 份索引、3 份删除收敛；`documents.py` 只留 `list`（并修 D1）。
+1. ✅（R2 d4c056c + 波次6-B）索引与删除双双收敛：`IndexingAgent.index_document()` 与
+   core 层 `delete_service.delete_document_service()` 为唯一实现，三份删除实现并集对齐，
+   顺带修掉 4 个真缺陷（CLI 无 safe_path 防护、CLI 漏删 5 个历史摘要命名、三路都漏删
+   registry 登记产物、data 端点带 .pdf 请求漏注销 registry）；并与 5-B 缓存协同失效。
 2. ✅（波次 5-B，16a5ccb）缓存只收 FAISS 反序列化产物 + embedding 身份指纹进
    key（(mtime_ns,size) 双文件指纹失效），**壳 client 保持每会话新建**——轮次去重
    是实例态，全局单例会造成并行 session 污染（历史缺陷同类）；写路径先 clone 脱离
    共享对象；真实索引热构造 ≈55×。`MetadataVectorDB` 刻意不缓存实例。
-3. `AnswerAgent` 图退化（删 `evaluate`）、state 构造器统一、`deep_dive` 复用 AnswerAgent。
+3. ✅（波次6-A，6c502fb + 19e067c）evaluate 纯标记节点删除（核实无 LLM 调用、写的
+   is_complete 无人消费）、`_build_initial_state()` 统一且全仓测试收口、deep_dive
+   按 (doc_name, provider) LRU-32 复用（error/全失败即剔除）。
 4. 前端共享层：`api.js` 唯一出口 + `ui-feedback.js` + `pdf-viewer.js`；`data.py` 按 documents/storage/ops 拆三模块。
 5. 模板内联 3,200 行外链化。
 
