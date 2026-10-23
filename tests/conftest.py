@@ -52,7 +52,9 @@ def pytest_collection_modifyitems(config, items):
     if has_llm_credentials():
         return
     for item in items:
-        filename = os.path.basename(str(getattr(item, "fspath", "") or ""))
+        # pytest 9 起 item.fspath 已被移除，改用 item.path（pathlib.Path）
+        path = getattr(item, "path", None)
+        filename = path.name if path is not None else ""
         reason = LLM_DEPENDENT_FILES.get(filename)
         if reason is not None:
             item.add_marker(

@@ -16,6 +16,8 @@ import logging
 import asyncio
 from typing import List, Dict, Any
 
+import pytest
+
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -77,6 +79,37 @@ def check_document_indexed(doc_registry: DocumentRegistry, doc_name: str) -> boo
         logger.warning(f"❌ 文档未索引: {doc_name}")
         logger.warning(f"   提示: 请先使用 test_indexing_agent.py 对该文档进行索引")
         return False
+
+
+# ==================== pytest fixtures ====================
+# test_single_query 既被 pytest 当作用例收集，也被 batch_test_queries() 当普通
+# 协程函数直接调用。为消除 pytest 收集后的 fixture 缺失 ERROR，这里补上 module 级
+# fixture（构造方式与 batch_test_queries() 中 RetrievalAgent(doc_name=...) 一致）。
+# max_iterations 带默认值，pytest 不会把它当 fixture。
+
+DEFAULT_DOC_NAME = "1706.03762v7"  # 需事先用 test_indexing_agent.py 索引过
+DEFAULT_QUERY = "这篇论文的主要内容是什么？"
+
+
+@pytest.fixture(scope="module")
+def doc_name() -> str:
+    """被测文档名；文档尚未索引时整模块跳过（与脚本模式的前置检查一致）"""
+    doc_registry = DocumentRegistry()
+    if not check_document_indexed(doc_registry, DEFAULT_DOC_NAME):
+        pytest.skip(f"文档 {DEFAULT_DOC_NAME} 尚未索引，跳过 RetrievalAgent 用例")
+    return DEFAULT_DOC_NAME
+
+
+@pytest.fixture(scope="module")
+def query() -> str:
+    """检索测试用的问题"""
+    return DEFAULT_QUERY
+
+
+@pytest.fixture(scope="module")
+def retrieval_agent(doc_name: str) -> RetrievalAgent:
+    """与脚本模式一致的构造方式：RetrievalAgent(doc_name=...)"""
+    return RetrievalAgent(doc_name=doc_name)
 
 
 async def test_single_query(

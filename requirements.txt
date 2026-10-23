@@ -21,8 +21,10 @@ numpy==2.3.1
 
 # Memory subsystem (src/memory/) — LanceDB-backed long-term memory,
 # ported from the LLM-Memory project for the ai-research-pipeline merge
-lancedb>=0.6.0
-pyarrow>=12.0.0
+# 上界取当前 .venv 实测可用的版本（lancedb 0.36.0 / pyarrow 23.0.1），
+# 避免大版本升级把 src/memory/ 的表 schema / 读写 API 打挂。
+lancedb>=0.6.0,<0.37
+pyarrow>=12.0.0,<24
 
 # ==================== Web Framework ====================
 
@@ -34,15 +36,11 @@ jinja2==3.1.4
 python-multipart==0.0.20
 websockets==14.1
 
-# Streamlit (Optional UI)
-streamlit==1.38.0
-
 # ==================== Document Processing ====================
 
 # PDF Processing
 PyMuPDF==1.26.3
 pillow>=10.0.0
-weasyprint==66.0
 
 # Markdown
 markdown==3.8.2
@@ -51,7 +49,6 @@ markdown==3.8.2
 
 # Model Context Protocol
 mcp>=1.9.0
-mcp-server-fetch
 
 # Web Scraping (for DuckDuckGo MCP)
 beautifulsoup4==4.12.3

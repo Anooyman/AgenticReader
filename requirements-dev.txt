@@ -1,6 +1,13 @@
-# 开发/测试依赖（当前 .venv 未安装，需手动执行：pip install -r requirements-dev.txt）
+# 开发/测试依赖
 #
-# pytest：测试收集与运行
+# 状态：当前 .venv 已装好（pytest 9.1.1 / pytest-asyncio 1.4.0），
+#       无需额外手动安装；换环境时再执行 pip install -r requirements-dev.txt。
+#
+# pytest：测试收集与运行。pytest 9 起已移除 item.fspath（改用 item.path），
+#         tests/conftest.py 已按新 API 实现，别退回旧写法。
 pytest>=7.0
 # pytest-asyncio：运行 tests/ 下的 async def test_*（pytest.ini 已配置 asyncio_mode=auto）
+# 不设上界的说明：本仓库已在 pytest-asyncio 1.4.0 + pytest 9.1.1 下实测可用
+# （asyncio_mode=auto 正常调度协程用例），故只保留下界；若将来 2.x 破坏兼容，
+# 再在此处补上界，而不是提前猜测版本号。
 pytest-asyncio>=0.21

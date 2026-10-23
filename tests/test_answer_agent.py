@@ -16,6 +16,8 @@ import logging
 import asyncio
 from typing import List, Dict, Any
 
+import pytest
+
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -75,6 +77,49 @@ def check_document_indexed(doc_registry: DocumentRegistry, doc_name: str) -> boo
         logger.warning(f"❌ 文档未索引: {doc_name}")
         logger.warning(f"   提示: 请先使用 test_indexing_agent.py 对该文档进行索引")
         return False
+
+
+# ==================== pytest fixtures ====================
+# test_single_turn / test_multi_turn_conversation / test_different_scenarios
+# 既能被 pytest 当作用例收集，也被 main() 当普通脚本函数直接调用。
+# 为了让 pytest 收集时不再因缺 fixture 而 ERROR，这里按脚本里的用法
+# 补上 module 级 fixture（构造方式与 main() 中 AnswerAgent(doc_name=...) 一致）。
+# 脚本模式 python tests/test_answer_agent.py 走 main() 自己的配置，不受影响。
+
+DEFAULT_DOC_NAME = "1706.03762v7"  # 需事先用 test_indexing_agent.py 索引过
+DEFAULT_SINGLE_QUERY = "这篇论文的主要内容是什么？"
+DEFAULT_CONVERSATION_TURNS = [
+    "文档的结构是怎样的？",
+    "能详细说说第一部分吗？",
+    "谢谢",
+]
+
+
+@pytest.fixture(scope="module")
+def doc_name() -> str:
+    """被测文档名；文档尚未索引时整模块跳过（与脚本模式的前置检查一致）"""
+    doc_registry = DocumentRegistry()
+    if not check_document_indexed(doc_registry, DEFAULT_DOC_NAME):
+        pytest.skip(f"文档 {DEFAULT_DOC_NAME} 尚未索引，跳过 AnswerAgent 用例")
+    return DEFAULT_DOC_NAME
+
+
+@pytest.fixture(scope="module")
+def query() -> str:
+    """单轮测试用的问题"""
+    return DEFAULT_SINGLE_QUERY
+
+
+@pytest.fixture(scope="module")
+def conversation_turns() -> List[str]:
+    """多轮测试的问题序列"""
+    return list(DEFAULT_CONVERSATION_TURNS)
+
+
+@pytest.fixture(scope="module")
+def answer_agent(doc_name: str) -> AnswerAgent:
+    """与脚本模式一致的构造方式：AnswerAgent(doc_name=...)"""
+    return AnswerAgent(doc_name=doc_name)
 
 
 async def test_single_turn(

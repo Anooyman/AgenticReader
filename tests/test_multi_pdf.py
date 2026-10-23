@@ -16,8 +16,11 @@
 """
 import asyncio
 import logging
+import os
 from pathlib import Path
 from typing import List, Dict, Any
+
+import pytest
 
 from src.agents.answer import AnswerAgent
 from src.core.document_management import DocumentRegistry
@@ -375,8 +378,12 @@ async def run_all_tests():
     print(f"\n总计: {passed}/{total} 通过 ({passed/total*100:.1f}%)")
 
 
+@pytest.mark.skipif(
+    os.environ.get("RUN_INTERACTIVE_TESTS") != "1",
+    reason="交互式菜单需要 stdin 输入，只在 RUN_INTERACTIVE_TESTS=1 时手工运行",
+)
 async def test_menu():
-    """测试菜单"""
+    """测试菜单（交互式，依赖 input()，默认跳过）"""
     while True:
         print("\n" + "=" * 80)
         print("  测试菜单")
