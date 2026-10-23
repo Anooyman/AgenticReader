@@ -50,5 +50,7 @@ async def post_search(body: dict):
 
     from src.memory.search import agentic_search
 
-    result = await agentic_search(query, namespace=[namespace] if namespace else None, provider="openai")
+    from src.config.settings import resolve_provider
+    result = await agentic_search(query, namespace=[namespace] if namespace else None,
+                                  provider=resolve_provider(None))
     return result

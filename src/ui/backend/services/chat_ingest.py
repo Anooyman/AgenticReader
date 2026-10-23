@@ -45,7 +45,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from src.config.settings import DATA_ROOT
+from src.config.settings import DATA_ROOT, resolve_provider
 from src.memory.config import NAMESPACE_WEBAPP_CHAT
 from src.memory.ingest import ingest_source
 from src.pipeline.paths import write_json_atomic
@@ -154,7 +154,7 @@ async def ingest_session(session_id: str, path: Path, updated_at: str) -> dict:
         report = await asyncio.wait_for(
             ingest_source(
                 str(path), source_type="webapp_chat",
-                namespace=NAMESPACE_WEBAPP_CHAT, provider="openai", source_id=session_id,
+                namespace=NAMESPACE_WEBAPP_CHAT, provider=resolve_provider(None), source_id=session_id,
             ),
             timeout=INGEST_TIMEOUT,
         )

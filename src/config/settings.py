@@ -2,7 +2,7 @@ import os
 import sys
 import logging
 from dotenv import load_dotenv
-from .constants import PathConstants, PDFConstants
+from .constants import PathConstants, PDFConstants, get_data_root
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +140,47 @@ DATA_ROOT = PathConstants.DATA_ROOT
 PDF_IMAGE_PATH = f"{DATA_ROOT}/{PathConstants.PDF_IMAGE_DIR}"
 JSON_DATA_PATH = f"{DATA_ROOT}/{PathConstants.JSON_DATA_DIR}"
 PDF_PATH = f"{DATA_ROOT}/{PathConstants.PDF_DIR}"
+
+# —— 对话侧 provider 的唯一选择入口（REFACTOR_REPORT §8.4）——
+# 背景：/config 页把 provider 持久化进 data/config/app_config.json（见
+# src/ui/backend/api/v1/config.py），但 chat_ingest/job_runner/memory 搜索/
+# 管线脚本/Orchestrator 及其子 agent 一度写死 "openai" 十余处，页面上切
+# provider 只影响文档校验用的 AnswerAgent，其余链路全部无感。现所有"默认
+# provider"的消费者一律走 resolve_provider()。优先级：
+#   显式非空参数 > app_config.json 的 provider > env PROVIDER > "openai"
+# 后两级让 CLI（无配置文件）也能不改代码换 provider。
+APP_CONFIG_FILE = get_data_root() / "config" / "app_config.json"
+
+
+def get_default_provider() -> str:
+    """缺省 provider：app_config.json -> env PROVIDER -> "openai"。
+
+    文件缺失/坏损/无 provider 键时静默按优先级回退——这些函数被后台车道和
+    CLI 共用，配置问题不应该炸掉一次问答，回退 + 上层日志即可。"""
+    try:
+        if APP_CONFIG_FILE.exists():
+            import json as _json
+            with open(APP_CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg = _json.load(f)
+            value = cfg.get("provider") if isinstance(cfg, dict) else None
+            if isinstance(value, str) and value.strip():
+                return value.strip().lower()
+    except Exception:
+        logger.debug("app_config.json 读取失败，provider 回退到 env/默认值", exc_info=True)
+    env_value = os.environ.get("PROVIDER", "").strip()
+    if env_value:
+        return env_value.lower()
+    return "openai"
+
+
+def resolve_provider(provider=None) -> str:
+    """显式传入非空 provider 时原样采用（小写化），否则走 get_default_provider()。
+
+    既有显式传参的调用方（tests、agent 间互调）行为不变——这是本函数存在的
+    前提：它只做"缺省补全"，不做"强制覆盖"。"""
+    if provider and str(provider).strip():
+        return str(provider).strip().lower()
+    return get_default_provider()
 
 # PDF转图片质量配置 - 使用常量定义
 PDF_IMAGE_CONFIG = {

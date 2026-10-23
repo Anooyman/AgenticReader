@@ -13,6 +13,7 @@ vector_store.py）在 _where() 里已经原生支持 namespace 列表，一次�
 from typing import Any, Dict
 
 from src.agents.orchestrator.sub_agents.base import ProgressCallback, SubAgent
+from src.config.settings import resolve_provider
 
 
 class MemorySearchAgent(SubAgent):
@@ -68,7 +69,9 @@ class MemorySearchAgent(SubAgent):
         try:
             from src.memory.search import agentic_search
 
-            result = await agentic_search(query, namespace=effective_namespace, provider="openai")
+            result = await agentic_search(
+                query, namespace=effective_namespace,
+                provider=resolve_provider(kwargs.get("provider")))
             return {"answer": result.get("answer", ""), "hits": self._shape_hits(result.get("results", []))}
         except Exception as e:  # noqa: BLE001
             return {"error": str(e)}

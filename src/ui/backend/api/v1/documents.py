@@ -13,6 +13,7 @@ from src.config.constants import (
     get_summary_paths,
     get_vector_db_path,
 )
+from src.config.settings import resolve_provider
 from src.core.document_management import DocumentRegistry
 from src.utils.path_guard import safe_path
 
@@ -30,7 +31,7 @@ class DocumentInfo(BaseModel):
 class IndexRequest(BaseModel):
     """索引请求"""
     doc_name: str
-    provider: str = "openai"
+    provider: Optional[str] = None  # 省略 = 跟随 /config 页选择（resolve_provider 链）
     pdf_preset: str = "high"
 
 
@@ -229,7 +230,7 @@ async def _index_document_task(doc_name: str, provider: str, pdf_preset: str):
         pdf_path = PDF_DIR / doc_name
 
         # 创建索引代理
-        indexing_agent = IndexingAgent(provider=provider, pdf_preset=pdf_preset)
+        indexing_agent = IndexingAgent(provider=resolve_provider(provider), pdf_preset=pdf_preset)
 
         # 执行索引（初始 state 由 IndexingAgent.index_document 统一构造，
         # 其中包含 doc_type——历史上这里手拼 state 漏了 doc_type）

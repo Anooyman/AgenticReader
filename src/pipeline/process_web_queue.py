@@ -20,6 +20,7 @@ from src.memory.config import NAMESPACE_AI_RESEARCH
 from src.memory.ingest import ingest_source
 from src.pipeline.generate_qa_brief import generate_brief_for_summary
 from src.pipeline.paths import SUMMARIES_DIR, write_json_atomic
+from src.config.settings import resolve_provider
 from src.pipeline.queue_store import claim_item, fail_item, finish_item, select_processable
 
 QUESTIONS_WEB = [
@@ -36,7 +37,7 @@ QUESTIONS_WEB = [
 async def probe_and_process(url: str) -> dict:
     """调用一次 SearchAgent.search() 探测/爬取，同时（若判定需要）触发索引。
     返回 {"strategy", "overview_answer", "success", "error"}。"""
-    agent = SearchAgent(provider="openai")
+    agent = SearchAgent(provider=resolve_provider(None))
     try:
         result = await agent.search(
             query="总结这篇文章的主要内容",
@@ -57,7 +58,7 @@ async def probe_and_process(url: str) -> dict:
 async def direct_chat_qa(overview_answer: str) -> dict:
     """direct_chat 场景：探测阶段已经生成了 overview_answer（基于爬取的
     merged_text）。剩余问题对同样的上下文做纯文本 LLM QA，不重新爬取。"""
-    llm = LLMBase(provider="openai")
+    llm = LLMBase(provider=resolve_provider(None))
     qa = {"overview": overview_answer}
 
     for key, question in QUESTIONS_WEB:
@@ -78,7 +79,7 @@ async def generate_title_from_qa(qa: dict, item_id: str) -> str:
     """标题兜底：正常情况下 sync 阶段已经从简报卡片的 h3 链接带上准确标题；
     但旧解析器时代的存量条目标题为空，用已生成的 overview 请 LLM 起一个短
     标题。"""
-    llm = LLMBase(provider="openai")
+    llm = LLMBase(provider=resolve_provider(None))
     overview = (qa.get("overview") or "").strip()
     if not overview:
         return ""
@@ -96,7 +97,7 @@ async def generate_title_from_qa(qa: dict, item_id: str) -> str:
 async def index_then_chat_qa(doc_name: str) -> dict:
     qa = {}
     for key, question in QUESTIONS_WEB:
-        agent = AnswerAgent(doc_name=doc_name, provider="openai")
+        agent = AnswerAgent(doc_name=doc_name, provider=resolve_provider(None))
         result = await agent.query(
             user_query=question,
             enabled_tools=["retrieve_documents"],
@@ -153,7 +154,7 @@ async def process_item(item: dict) -> None:
     }
 
     print(f"  [{item['item_id']}] 生成简明摘要...")
-    summary["qa_brief"] = await generate_brief_for_summary(summary, provider="openai")
+    summary["qa_brief"] = await generate_brief_for_summary(summary, provider=resolve_provider(None))
 
     summary_path = SUMMARIES_DIR / "web" / f"{item['item_id']}.json"
     write_json_atomic(summary_path, summary)
@@ -163,7 +164,7 @@ async def process_item(item: dict) -> None:
     try:
         memory_report = await ingest_source(
             str(summary_path), source_type="ai_research",
-            namespace=NAMESPACE_AI_RESEARCH, provider="openai", source_id=item["item_id"],
+            namespace=NAMESPACE_AI_RESEARCH, provider=resolve_provider(None), source_id=item["item_id"],
         )
         item["artifacts"]["memory_ingested"] = True
         item["artifacts"]["memory_chunks_added"] = memory_report.get("chunks_added", 0)

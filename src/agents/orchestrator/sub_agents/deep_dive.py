@@ -6,6 +6,7 @@ webapp 和 AgenticReader 当时在两个不同 venv 里；合并进同一个项�
 from typing import Any, Dict
 
 from src.agents.orchestrator.sub_agents.base import ProgressCallback, SubAgent
+from src.config.settings import resolve_provider
 
 
 class DeepDiveAgent(SubAgent):
@@ -48,7 +49,11 @@ class DeepDiveAgent(SubAgent):
         try:
             from src.agents.answer import AnswerAgent
 
-            agent = AnswerAgent(doc_name=doc_name, provider="openai")
+            # provider 由 Orchestrator.ask 解析后经 tool 调用参数透传；直接
+            # 实例化调用（无 provider kwarg）时 resolve_provider(None) 按
+            # app_config.json → env → openai 回退。
+            agent = AnswerAgent(doc_name=doc_name,
+                                provider=resolve_provider(kwargs.get("provider")))
             result_state = await agent.query(
                 user_query=question,
                 enabled_tools=["retrieve_documents"],

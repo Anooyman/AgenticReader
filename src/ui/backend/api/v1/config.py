@@ -149,8 +149,12 @@ async def reset_config() -> Dict[str, Any]:
 
 
 def get_current_provider() -> str:
-    """获取当前配置的 LLM provider（供其他模块调用）"""
-    return _current_config.get("provider", "openai")
+    """获取当前配置的 LLM provider（供其他模块调用）。
+
+    单一事实源在 settings.resolve_provider()——它直接读 app_config.json 再
+    回退 env；本函数只是它的别名，避免再维护一份内存缓存导致漂移。"""
+    from src.config.settings import get_default_provider
+    return get_default_provider()
 
 
 def get_current_pdf_preset() -> str:

@@ -39,6 +39,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+from src.config.settings import resolve_provider
 from src.pipeline.paths import STATE_DIR, write_json_atomic
 
 logger = logging.getLogger(__name__)
@@ -217,7 +218,7 @@ async def _run_job(job: dict) -> dict:
             if item_type == "pdf_arxiv":
                 from src.pipeline.process_pdf_queue import main_async as process_pdf_main_async
                 await asyncio.wait_for(
-                    process_pdf_main_async(limit=0, provider="openai", item_id=target),
+                    process_pdf_main_async(limit=0, provider=resolve_provider(None), item_id=target),
                     timeout=TIMEOUTS[timeout_key],
                 )
             else:
@@ -240,7 +241,7 @@ async def _run_job(job: dict) -> dict:
         try:
             from src.pipeline.sync_memory_ingest import main_async as sync_memory_main_async
             await asyncio.wait_for(
-                sync_memory_main_async(limit=0, provider="openai", item_id=None),
+                sync_memory_main_async(limit=0, provider=resolve_provider(None), item_id=None),
                 timeout=TIMEOUTS["sync_memory"],
             )
         except asyncio.TimeoutError:

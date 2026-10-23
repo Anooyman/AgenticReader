@@ -24,6 +24,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from src.agents.orchestrator.prompts import EMPTY_ANSWER_FALLBACK, SYSTEM_PROMPT
 from src.agents.orchestrator.sub_agents import SUB_AGENTS
 from src.config.model_overrides import AGENT_MODEL_OVERRIDES
+from src.config.settings import resolve_provider
 from src.core.llm import LLMBase
 
 # 反复调用工具往往不是死循环，而是真的没检索到关键信息、换个说法再试一次，
@@ -50,7 +51,8 @@ def _tool_result_message(tool_call_id: str, result: dict) -> ToolMessage:
 
 
 async def _safe_invoke(name: str, on_progress: ProgressCallback, args: dict,
-                        default_namespaces: Optional[List[str]] = None) -> dict:
+                        default_namespaces: Optional[List[str]] = None,
+                        provider: Optional[str] = None) -> dict:
     """调用子 agent 并把任何意外异常降级为 {"error": ...} 结果。
 
     SubAgent 的契约是自己返回 error 字段而不抛异常，但这里的 try/except
@@ -66,6 +68,10 @@ async def _safe_invoke(name: str, on_progress: ProgressCallback, args: dict,
     if (name == "search_memory" and default_namespaces
             and not args.get("namespace") and not args.get("namespaces")):
         args = {**args, "namespaces": default_namespaces}
+    if provider:
+        # LLM 的 tool schema 里没有 provider 参数，注入不会与之冲突；
+        # setdefault 语义——万一 args 带了 provider，以 args 为准。
+        args = {**args, "provider": args.get("provider") or provider}
     try:
         return await agent.invoke(on_progress=on_progress, **args)
     except Exception as e:  # noqa: BLE001
@@ -73,12 +79,13 @@ async def _safe_invoke(name: str, on_progress: ProgressCallback, args: dict,
 
 
 async def _run_tool_calls(tool_calls, on_progress: ProgressCallback,
-                           default_namespaces: Optional[List[str]] = None):
+                           default_namespaces: Optional[List[str]] = None,
+                           provider: Optional[str] = None):
     """并行执行 LLM 在某一轮里发起的全部 tool_calls（不逐个 await）。"""
     async def _run_one(tool_call):
         name = tool_call["name"]
         args = tool_call.get("args") or {}
-        return name, await _safe_invoke(name, on_progress, args, default_namespaces)
+        return name, await _safe_invoke(name, on_progress, args, default_namespaces, provider)
 
     outcomes = await asyncio.gather(*[_run_one(tc) for tc in tool_calls])
 
@@ -111,6 +118,7 @@ async def ask(
     namespaces: Optional[List[str]] = None,
     history: Optional[List[Dict[str, str]]] = None,
     on_progress: ProgressCallback = None,
+    provider: Optional[str] = None,
 ) -> Dict[str, Any]:
     """跑一次完整的 Orchestrator 编排，返回
     {"answer": str, "sources_used": [子agent name, ...], "stop_reason": str}。
@@ -126,9 +134,15 @@ async def ask(
 
     `history`：本 session 此前的对话消息（[{"role": "user"|"assistant",
     "content": ...}, ...]，不含本次 question）。省略表示全新对话。
+
+    `provider`：显式指定则原样使用；省略走 settings.resolve_provider(None)
+    （app_config.json → env PROVIDER → "openai"）。解析结果同时下发给
+    deep_dive_document / search_memory 子 agent，保证一次提问里编排 LLM、
+    文档深挖、记忆检索用同一个 provider。
     """
+    resolved_provider = resolve_provider(provider)
     model_name = AGENT_MODEL_OVERRIDES.get("Orchestrator")
-    llm = LLMBase(provider="openai", model=model_name)
+    llm = LLMBase(provider=resolved_provider, model=model_name)
 
     messages: List[Any] = [SystemMessage(content=SYSTEM_PROMPT)]
     for msg in history or []:
@@ -171,7 +185,8 @@ async def ask(
 
         messages.append(response)
 
-        tool_messages, round_sources = await _run_tool_calls(tool_calls, on_progress, namespaces)
+        tool_messages, round_sources = await _run_tool_calls(
+            tool_calls, on_progress, namespaces, provider=resolved_provider)
         messages.extend(tool_messages)
         sources_used.extend(round_sources)
 

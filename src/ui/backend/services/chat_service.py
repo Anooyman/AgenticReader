@@ -34,7 +34,6 @@ class ChatService:
         # 仅用于校验手动选择的文档是否存在（AnswerAgent 实例缓存池，避免
         # 重复创建）；真正的问答走 Orchestrator，见 chat()。
         self._agent_cache: Dict[str, AnswerAgent] = {}  # {provider: AnswerAgent}
-        self._current_provider: Optional[str] = None
 
     def initialize(
         self,
@@ -121,12 +120,12 @@ class ChatService:
             print(f"📌 使用 LLM Provider: {provider}")
 
             if self.selected_docs and "retrieve_documents" in self.enabled_tools:
-                if provider in self._agent_cache and self._current_provider == provider:
-                    validator_agent = self._agent_cache[provider]
-                else:
-                    validator_agent = AnswerAgent(provider=provider)
-                    self._agent_cache[provider] = validator_agent
-                    self._current_provider = provider
+                # _agent_cache 以 provider 为 key 本身就是"换配置即失效"：
+                # /config 页切 provider 后下一个请求直接 cache-miss 建新实例，
+                # 不需要额外的 _current_provider 标量。
+                if provider not in self._agent_cache:
+                    self._agent_cache[provider] = AnswerAgent(provider=provider)
+                validator_agent = self._agent_cache[provider]
 
                 valid_docs, invalid_docs = validator_agent.validate_manual_selected_docs(self.selected_docs)
                 if invalid_docs:
@@ -233,6 +232,9 @@ class ChatService:
                 doc_name=doc_name,
                 history=history,
                 on_progress=on_progress,
+                # 与文档校验路径同源：/config 页选的 provider 真正贯通到
+                # 编排 LLM 与全部子 agent（此前 orchestrator 内部写死 openai）。
+                provider=load_config().get("provider"),
             )
 
             final_answer = result.get("answer", "")

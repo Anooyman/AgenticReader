@@ -741,7 +741,8 @@ async def search_chat_mode():
     # 初始化 SearchAgent
     logger.info("🔧 初始化 SearchAgent...")
     try:
-        search_agent = SearchAgent(provider="openai")
+        from src.config.settings import resolve_provider
+        search_agent = SearchAgent(provider=resolve_provider(None))
         logger.info("✅ SearchAgent 初始化完成\n")
     except Exception as e:
         logger.error(f"❌ SearchAgent 初始化失败: {e}")
