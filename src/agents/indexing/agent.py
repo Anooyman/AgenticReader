@@ -5,7 +5,7 @@ Indexing Agent - 文档索引构建Agent
 """
 
 from langgraph.graph import StateGraph, END
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any
 import logging
 
 from ..base import AgentBase
@@ -13,7 +13,6 @@ from .state import IndexingState
 from src.core.document_management import DocumentRegistry
 from .tools import IndexingTools
 from .nodes import IndexingNodes
-from .utils import IndexingUtils
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +54,12 @@ class IndexingAgent(AgentBase):
             provider: LLM提供商 ('azure', 'openai', 'ollama')
             pdf_preset: PDF转图片质量预设 ('fast', 'balanced', 'high', 'ultra')
         """
-        # 初始化基类（会初始化 self.llm 和 self.embedding_model）
+        # 初始化基类（self.llm 就绪；embedding 客户端改为首次使用时才构造）
         super().__init__(name="IndexingAgent", provider=provider)
 
         self.doc_registry = DocumentRegistry()
 
         # 初始化功能模块（使用依赖注入）
-        self.utils = IndexingUtils(self)
         self.tools = IndexingTools(self)
         self.nodes = IndexingNodes(self)
 
@@ -207,97 +205,6 @@ class IndexingAgent(AgentBase):
         return workflow.compile()
 
     # ==================== 对外接口方法 ====================
-
-    async def process_documents_batch(
-        self,
-        doc_list: List[Dict[str, Any]],
-        max_concurrent: int = 3
-    ) -> List[Dict[str, Any]]:
-        """
-        批量处理文档列表
-
-        Args:
-            doc_list: 文档列表，每个元素格式：
-                {
-                    "doc_name": str,
-                    "doc_path": str,
-                    "doc_type": "pdf" | "url"
-                }
-            max_concurrent: 最大并发处理数
-
-        Returns:
-            处理结果列表
-        """
-        return await self.tools.process_documents_batch(doc_list, max_concurrent)
-
-    def delete_document(self, doc_id: str, delete_source: bool = False) -> Dict[str, Any]:
-        """
-        删除文档及其所有关联文件
-
-        Args:
-            doc_id: 文档ID
-            delete_source: 是否删除源文件
-
-        Returns:
-            删除结果字典
-        """
-        logger.info(f"🗑️ 删除文档: {doc_id}, 删除源文件: {delete_source}")
-
-        result = self.doc_registry.delete_all_files(doc_id, delete_source=delete_source)
-
-        if result["success"]:
-            logger.info(f"✅ 文档删除成功: 删除 {len(result['deleted_files'])} 个文件")
-        else:
-            logger.error(f"❌ 文档删除部分失败: 成功 {len(result['deleted_files'])} 个, 失败 {len(result['failed_files'])} 个")
-
-        return result
-
-    def list_documents(self, **filters) -> List[Dict]:
-        """
-        列出所有文档
-
-        Args:
-            **filters: 过滤条件（可选）
-                - doc_type: 文档类型过滤
-
-        Returns:
-            文档列表
-        """
-        all_docs = self.doc_registry.list_all()
-
-        # 应用过滤器
-        if "doc_type" in filters:
-            all_docs = [d for d in all_docs if d.get("doc_type") == filters["doc_type"]]
-
-        return all_docs
-
-    def get_document_info(self, doc_id: str) -> Optional[Dict]:
-        """
-        获取文档详细信息
-
-        Args:
-            doc_id: 文档ID
-
-        Returns:
-            文档信息字典
-        """
-        doc_info = self.doc_registry.get(doc_id)
-        if doc_info:
-            # 添加文件统计信息
-            file_stats = self.doc_registry.get_file_stats(doc_id)
-            if file_stats:
-                doc_info["file_stats"] = file_stats
-
-        return doc_info
-
-    def get_statistics(self) -> Dict:
-        """
-        获取文档统计信息
-
-        Returns:
-            统计信息字典
-        """
-        return self.doc_registry.get_statistics()
 
     async def rebuild_from_structure(
         self,

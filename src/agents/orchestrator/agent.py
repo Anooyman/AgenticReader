@@ -49,11 +49,6 @@ def _tool_result_message(tool_call_id: str, result: dict) -> ToolMessage:
     return ToolMessage(content=json.dumps(result, ensure_ascii=False), tool_call_id=tool_call_id)
 
 
-async def _maybe_await(value):
-    if value is not None:
-        await value
-
-
 async def _safe_invoke(name: str, on_progress: ProgressCallback, args: dict,
                         default_namespaces: Optional[List[str]] = None) -> dict:
     """调用子 agent 并把任何意外异常降级为 {"error": ...} 结果。

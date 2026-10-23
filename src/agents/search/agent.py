@@ -257,34 +257,6 @@ class SearchAgent(AgentBase):
             # 清理 MCP clients
             await self.utils.cleanup_mcp_clients()
 
-    async def analyze_url(
-        self,
-        url: str,
-        question: Optional[str] = None,
-        auto_index: bool = True
-    ) -> Dict:
-        """
-        分析单个URL的内容
-
-        Args:
-            url: 目标URL
-            question: 用户问题（可选，默认为"总结这个网页的内容"）
-            auto_index: 是否自动判断是否需要索引（默认True）
-
-        Returns:
-            分析结果
-        """
-        query = question or "总结这个网页的内容"
-
-        result = await self.search(
-            query=query,
-            target_urls=[url],
-            use_case="url_analysis",
-            max_iterations=1
-        )
-
-        return result
-
     # ========== 辅助方法 ==========
 
     async def call_indexing_agent(

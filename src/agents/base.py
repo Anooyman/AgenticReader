@@ -69,7 +69,10 @@ class AgentBase:
         # 初始化LLM实例（Agent级别，供所有工具方法复用）
         from src.core.llm import LLMBase
         self.llm = LLMBase(provider=provider, model=model)
-        self.embedding_model = self.llm.embedding_model
+        # embedding 客户端不再在这里取值：LLMBase.embedding_model 是懒加载
+        # property，构造期取一次就把 provider 的 embedding 客户端急切建出来了
+        # （多数 Agent 一生都不做向量化）。改为下面的 property 按次转发，
+        # 首次真正用到时才构造，取的仍是 LLMBase 内部缓存的同一个实例。
 
         logger.info(
             f"✅ {self.name} initialized with LLM provider: {provider}"
@@ -79,6 +82,17 @@ class AgentBase:
         self.graph: Optional[StateGraph] = None
 
         logger.debug(f"🤖 Initialized {self.name}")
+
+    @property
+    def embedding_model(self):
+        """
+        懒加载 embedding 客户端
+
+        构造 Agent 时不再急切创建（那是网络/凭据相关最贵的一步），首次访问
+        时才向 LLMBase 取——LLMBase 内部同样懒加载并缓存，所以多次访问拿到的是
+        同一个实例，切换 provider 后也能跟着刷新（LLMBase 会重置它的缓存）。
+        """
+        return self.llm.embedding_model
 
     def build_graph(self) -> StateGraph:
         """

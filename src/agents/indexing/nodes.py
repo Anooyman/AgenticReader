@@ -76,7 +76,6 @@ class IndexingNodes:
                     pdf_data_list = json.load(f)
                 state["pdf_data_list"] = pdf_data_list
                 state["json_data_dict"] = {str(item.get("page", i+1)): item.get("data", "") for i, item in enumerate(pdf_data_list)}
-                state["raw_data"] = "\n\n".join([f"[Page {item.get('page', i+1)}]\n{item.get('data', '')}" for i, item in enumerate(pdf_data_list)])
                 logger.info(f"   📥 已加载 PDF 数据: {len(pdf_data_list)} 页")
             except Exception as e:
                 logger.warning(f"⚠️  [CheckCache] PDF 数据加载失败: {e}")
@@ -287,7 +286,6 @@ class IndexingNodes:
                 }
 
                 # 直接在 state 上修改
-                state["raw_data"] = raw_data
                 state["pdf_data_list"] = pdf_data_list
                 state["json_data_dict"] = json_data_dict
                 state["generated_files"]["images"] = extract_result["image_paths"]
@@ -334,10 +332,6 @@ class IndexingNodes:
                     for i in range((len(full_text) + virtual_page_chars - 1) // virtual_page_chars)
                 ]
 
-                raw_data = "\n\n".join([
-                    f"[Page {item['page']}]\n{item['data']}"
-                    for item in pdf_data_list
-                ])
                 json_data_dict = {str(item["page"]): item["data"] for item in pdf_data_list}
 
                 # 落盘 data.json，格式与 PDF 路径一致，使 check_cache 能对 url 文档同样生效
@@ -347,7 +341,6 @@ class IndexingNodes:
                 with open(output_json_path, 'w', encoding='utf-8') as f:
                     json.dump(pdf_data_list, f, ensure_ascii=False, indent=2)
 
-                state["raw_data"] = raw_data
                 state["pdf_data_list"] = pdf_data_list
                 state["json_data_dict"] = json_data_dict
                 state["generated_files"]["json_data"] = output_json_path
@@ -860,7 +853,6 @@ class IndexingNodes:
 
             # 直接在 state 上修改
             state["index_path"] = index_path
-            state["vector_db_docs"] = vector_db_docs
             if "generated_files" not in state:
                 state["generated_files"] = {
                     "images": [],

@@ -19,7 +19,6 @@ class IndexingState(TypedDict, total=False):
     doc_type: Literal["pdf", "url"]  # 文档类型
 
     # ============ 中间状态 ============
-    raw_data: Optional[str]  # 原始提取的内容
     pdf_data_list: Optional[List[Dict]]  # PDF每页原始数据 [{"page": str, "data": str}, ...]
     json_data_dict: Optional[Dict[str, str]]  # 页码为key的数据字典 {page: content}
     agenda_dict: Optional[Dict[str, List]]  # 文档目录结构 {title: [page_numbers]}
@@ -41,9 +40,6 @@ class IndexingState(TypedDict, total=False):
     chapter_summaries: Optional[Dict[str, str]]  # 章节摘要 {title: summary}
     chapter_refactors: Optional[Dict[str, str]]  # 章节重构内容 {title: refactor}
     raw_data_dict: Optional[Dict[str, Any]]  # 原始数据字典 {title: data}
-
-    # 向量数据库文档
-    vector_db_docs: Optional[List[Any]]  # 用于构建向量数据库的Document列表
 
     brief_summary: Optional[str]  # 简要摘要（基于所有章节摘要生成）
 

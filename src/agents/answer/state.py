@@ -34,7 +34,6 @@ class AnswerState(TypedDict, total=False):
     selected_docs: Optional[List[str]]  # 用户选择的文档列表（PDF检索时）
 
     # ============ 工具调用记录 ============
-    thoughts: List[str]  # 推理过程记录
     tool_calls: List[Dict[str, Any]]  # 所有工具调用记录 [{tool, args, iteration}, ...]
     tool_results: List[Dict[str, Any]]  # 所有工具返回结果 [{tool, args, result, success}, ...]
     current_iteration: int  # 工具执行批次计数（保留字段；单轮架构下最多 +1）

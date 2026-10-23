@@ -311,25 +311,6 @@ class SearchUtils:
 
         return valid_urls
 
-    @staticmethod
-    def normalize_url(url: str) -> str:
-        """
-        标准化URL（去除末尾斜杠、查询参数等）
-
-        Args:
-            url: 原始URL
-
-        Returns:
-            标准化后的URL
-        """
-        url = url.strip()
-
-        # 去除末尾斜杠
-        if url.endswith('/'):
-            url = url[:-1]
-
-        return url
-
     # ========== 内容量判断 ==========
 
     @staticmethod
@@ -458,38 +439,6 @@ class SearchUtils:
 
         return "\n\n".join(merged_parts)
 
-    @staticmethod
-    def extract_key_info_from_html(html: str, max_length: int = 10000) -> str:
-        """
-        从HTML中提取关键文本（去除标签、脚本、样式等）
-
-        Args:
-            html: HTML内容
-            max_length: 最大保留长度
-
-        Returns:
-            提取的文本
-        """
-        if not html:
-            return ""
-
-        # 简单的HTML清理（实际项目中应使用 BeautifulSoup 等库）
-        # 去除 script 和 style 标签
-        text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
-
-        # 去除所有HTML标签
-        text = re.sub(r'<[^>]+>', '', text)
-
-        # 去除多余空白
-        text = re.sub(r'\s+', ' ', text)
-
-        # 截断
-        if len(text) > max_length:
-            text = text[:max_length] + "..."
-
-        return text.strip()
-
     # ========== Use Case 检测 ==========
 
     @staticmethod
@@ -608,68 +557,6 @@ class SearchUtils:
 
         return str(cache_file)
 
-    @staticmethod
-    def load_search_cache(query: str) -> Optional[Dict]:
-        """
-        加载搜索缓存
-
-        Args:
-            query: 查询字符串
-
-        Returns:
-            缓存数据，如果不存在返回 None
-        """
-        import json
-        from pathlib import Path
-        from src.config.constants import PathConstants
-
-        # 生成查询哈希
-        query_hash = SearchUtils.generate_query_hash(query)
-
-        # 缓存文件路径
-        cache_dir = Path(PathConstants.DATA_ROOT) / PathConstants.SEARCH_CACHE_DIR
-        cache_file = cache_dir / f"{query_hash}.json"
-
-        # 检查文件是否存在
-        if not cache_file.exists():
-            return None
-
-        # 读取缓存
-        try:
-            with open(cache_file, 'r', encoding='utf-8') as f:
-                cache_data = json.load(f)
-
-            logger.info(f"📦 [Cache] 找到缓存: {cache_file}")
-            logger.info(f"   - 查询: {cache_data['query'][:50]}...")
-            logger.info(f"   - 时间: {cache_data['timestamp']}")
-            logger.info(f"   - 来源数量: {len(cache_data['sources'])}")
-
-            return cache_data
-
-        except Exception as e:
-            logger.warning(f"⚠️  [Cache] 读取缓存失败: {e}")
-            return None
-
-    @staticmethod
-    def has_search_cache(query: str) -> bool:
-        """
-        检查是否有缓存
-
-        Args:
-            query: 查询字符串
-
-        Returns:
-            是否存在缓存
-        """
-        from pathlib import Path
-        from src.config.constants import PathConstants
-
-        query_hash = SearchUtils.generate_query_hash(query)
-        cache_dir = Path(PathConstants.DATA_ROOT) / PathConstants.SEARCH_CACHE_DIR
-        cache_file = cache_dir / f"{query_hash}.json"
-
-        return cache_file.exists()
-
     # ========== Use Case 2: Web 内容保存 ==========
 
     @staticmethod
@@ -718,39 +605,6 @@ class SearchUtils:
         logger.info(f"   - 文本长度: {len(content.get('text', ''))} 字符")
 
         return str(json_file)
-
-    @staticmethod
-    def load_web_content(url: str) -> Optional[Dict]:
-        """
-        加载已保存的 URL 内容
-
-        Args:
-            url: URL 地址
-
-        Returns:
-            内容数据，如果不存在返回 None
-        """
-        import json
-        from pathlib import Path
-        from src.config.constants import PathConstants
-
-        url_hash = SearchUtils.generate_query_hash(url)
-        web_dir = Path(PathConstants.DATA_ROOT) / PathConstants.WEB_CONTENT_DIR
-        json_file = web_dir / f"{url_hash}.json"
-
-        if not json_file.exists():
-            return None
-
-        try:
-            with open(json_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-
-            logger.info(f"📦 [WebContent] 找到已保存内容: {json_file}")
-            return data
-
-        except Exception as e:
-            logger.warning(f"⚠️  [WebContent] 读取内容失败: {e}")
-            return None
 
     @staticmethod
     def generate_doc_name_from_url(url: str) -> str:

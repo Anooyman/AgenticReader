@@ -306,8 +306,6 @@ class AnswerNodes:
 
         # 初始化状态字段
         # （current_iteration / max_iterations 仅作兼容保留，不再驱动多轮规划）
-        if "thoughts" not in state:
-            state["thoughts"] = []
         if "tool_calls" not in state:
             state["tool_calls"] = []
         if "tool_results" not in state:
@@ -328,7 +326,6 @@ class AnswerNodes:
         # 情况1：用户没有启用任何工具 → 纯对话
         if not enabled_tools:
             state["is_complete"] = True
-            state["thoughts"].append("用户未启用任何工具，纯对话模式")
             logger.info(f"✅ [Plan] 无启用工具，纯对话模式")
             await self._send_progress(stage="plan", stage_name="工具规划",
                                       status="completed", message="纯对话模式")
@@ -337,7 +334,6 @@ class AnswerNodes:
         # 情况2：已有工具结果（多轮迭代）→ 已经检索过，直接生成
         if tool_results:
             state["is_complete"] = True
-            state["thoughts"].append("已有工具结果，直接生成答案")
             logger.info(f"✅ [Plan] 已有工具结果，跳过重复调用")
             await self._send_progress(stage="plan", stage_name="工具规划",
                                       status="completed", message="使用已有结果")
@@ -346,7 +342,6 @@ class AnswerNodes:
         # 情况3：寒暄过滤
         if self._is_greeting(user_query):
             state["is_complete"] = True
-            state["thoughts"].append("寒暄对话，无需调用工具")
             logger.info(f"✅ [Plan] 寒暄检测，跳过工具调用")
             await self._send_progress(stage="plan", stage_name="工具规划",
                                       status="completed", message="直接回答")
@@ -357,7 +352,6 @@ class AnswerNodes:
         for tc in new_tool_calls:
             tc["iteration"] = iteration
         state["tool_calls"].extend(new_tool_calls)
-        state["thoughts"].append(f"按用户选择调用 {len(new_tool_calls)} 个工具")
         logger.info(f"🔧 [Plan] 构造 {len(new_tool_calls)} 个工具调用: {[tc['tool'] for tc in new_tool_calls]}")
 
         await self._send_progress(

@@ -24,7 +24,6 @@ from ..base import AgentBase
 from .state import AnswerState
 from .tools import AnswerTools
 from .nodes import AnswerNodes
-from .utils import AnswerUtils
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +67,6 @@ class AnswerAgent(AgentBase):
         self.registry = DocumentRegistry()
 
         # 初始化功能模块（依赖注入）
-        self.utils = AnswerUtils(self)
         self.tools = AnswerTools(self)
         self.nodes = AnswerNodes(self)
 
@@ -127,43 +125,6 @@ class AnswerAgent(AgentBase):
 
     # ==================== Retrieval Agent 管理 ====================
 
-    def get_retrieval_agent(self, doc_name: str):
-        """获取指定文档的 Retrieval Agent 实例"""
-        return self.retrieval_agents.get(doc_name)
-
-    def get_managed_documents(self):
-        """获取当前管理的所有文档列表"""
-        return list(self.retrieval_agents.keys())
-
-    def get_retrieval_cache_stats(self, doc_name: str = None):
-        """获取检索缓存统计信息"""
-        if doc_name:
-            agent = self.retrieval_agents.get(doc_name)
-            if agent and hasattr(agent, 'retrieval_data_dict'):
-                return {
-                    "doc_name": doc_name,
-                    "cached_chapters": len(agent.retrieval_data_dict),
-                    "chapter_list": list(agent.retrieval_data_dict.keys())
-                }
-            return {"doc_name": doc_name, "cached_chapters": 0, "chapter_list": []}
-        else:
-            stats = {}
-            for doc, agent in self.retrieval_agents.items():
-                if hasattr(agent, 'retrieval_data_dict'):
-                    stats[doc] = {
-                        "cached_chapters": len(agent.retrieval_data_dict),
-                        "chapter_list": list(agent.retrieval_data_dict.keys())
-                    }
-            return stats
-
-    def clear_retrieval_agent(self, doc_name: str):
-        """清除指定文档的 Retrieval Agent"""
-        if doc_name in self.retrieval_agents:
-            del self.retrieval_agents[doc_name]
-            logger.info(f"🗑️  已清除文档 '{doc_name}' 的 Retrieval Agent")
-        if doc_name in self.conversation_turns:
-            del self.conversation_turns[doc_name]
-
     def clear_all_retrieval_agents(self):
         """清除所有 Retrieval Agent"""
         count = len(self.retrieval_agents)
@@ -198,78 +159,6 @@ class AnswerAgent(AgentBase):
         ]
 
     # ==================== 历史管理 ====================
-
-    def load_history(self, messages: list, selected_docs: Optional[list] = None):
-        """
-        加载历史对话到 LLM
-
-        Args:
-            messages: 历史消息列表 [{"role": "user", "content": "..."}, ...]
-            selected_docs: 跨文档模式下的文档列表
-        """
-        if not messages or len(messages) == 0:
-            logger.info("无历史消息需要加载")
-            return
-
-        logger.info(f"正在加载 {len(messages)} 条历史消息到 LLM...")
-
-        from langchain_core.messages import HumanMessage, AIMessage
-
-        langchain_messages = []
-        for msg in messages:
-            role = msg.get("role")
-            content = msg.get("content")
-            if role == "user":
-                langchain_messages.append(HumanMessage(content=content))
-            elif role == "assistant":
-                langchain_messages.append(AIMessage(content=content))
-
-        # 并行加载到所有 session
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        import time
-
-        start_time = time.time()
-
-        def load_to_session(agent_llm, session_id, agent_name=""):
-            try:
-                agent_llm.add_messages_to_history(session_id, langchain_messages)
-                return (session_id, agent_name, True, None)
-            except Exception as e:
-                logger.error(f"加载到 {agent_name} session '{session_id}' 时出错: {e}")
-                return (session_id, agent_name, False, str(e))
-
-        tasks = []
-        # Answer Agent 的 tool_planning session
-        tasks.append((self.llm, "tool_planning", "Answer Agent"))
-        # 所有 Retrieval Agent 的 rewrite_query session
-        for doc_name, retrieval_agent in self.retrieval_agents.items():
-            tasks.append((retrieval_agent.llm, "rewrite_query", f"Retrieval Agent ({doc_name})"))
-
-        with ThreadPoolExecutor(max_workers=min(len(tasks), 10)) as executor:
-            futures = {executor.submit(load_to_session, llm, sid, name): (sid, name) for llm, sid, name in tasks}
-            success_count = 0
-            for future in as_completed(futures):
-                session_id, agent_name, success, error = future.result()
-                if success:
-                    logger.info(f"✅ 已加载历史到 {agent_name} 的 '{session_id}' session")
-                    success_count += 1
-
-        elapsed = time.time() - start_time
-        logger.info(f"⚡ 并行加载完成: {success_count}/{len(tasks)} 个session，耗时: {elapsed:.3f}秒")
-
-        # 设置对话轮次
-        user_message_count = sum(1 for msg in messages if msg.get("role") == "user")
-        if user_message_count > 0:
-            for doc_name in self.retrieval_agents.keys():
-                self.conversation_turns[doc_name] = user_message_count
-
-            if self.current_doc and self.current_doc not in self.conversation_turns:
-                self.conversation_turns[self.current_doc] = user_message_count
-
-            if selected_docs:
-                for doc_name in selected_docs:
-                    if doc_name not in self.conversation_turns:
-                        self.conversation_turns[doc_name] = user_message_count
 
     def reset_history(self):
         """重置 LLM 历史"""

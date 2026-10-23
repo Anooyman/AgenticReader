@@ -9,7 +9,6 @@ import logging
 import json
 import os
 import re
-from pathlib import Path
 
 if TYPE_CHECKING:
     from .agent import IndexingAgent
@@ -80,87 +79,6 @@ class IndexingTools:
         except Exception as e:
             logger.error(f"❌ [Tool:generate_summary] 生成摘要失败: {e}")
             return f"文档 {doc_name} 的简要摘要（生成错误: {str(e)}）"
-
-    async def build_vector_index_impl(
-        self,
-        doc_name: str,
-        chunks: List[Dict[str, str]],
-        metadata: Optional[Dict] = None
-    ) -> str:
-        """
-        构建向量索引（工具方法）
-
-        Args:
-            doc_name: 文档名称
-            chunks: 文本分块列表，格式：[{"data": str, "page": str}, ...]
-            metadata: 元数据（包含tags, summary等）
-
-        Returns:
-            索引路径
-        """
-        logger.info(f"🔨 [Tool:build_index] 构建向量索引: {doc_name}, 分块数: {len(chunks)}")
-
-        try:
-            from src.config.settings import DATA_ROOT
-            from src.core.vector_db.vector_db_client import VectorDBClient
-            from langchain.docstore.document import Document
-
-            # 构建索引路径
-            index_dir = Path(DATA_ROOT) / "vector_db" / f"{doc_name}_data_index"
-            index_dir.mkdir(parents=True, exist_ok=True)
-            index_path = str(index_dir)
-
-            # 创建 VectorDBClient，直接使用 self.agent.embedding_model
-            vector_db_client = VectorDBClient(index_path, embedding_model=self.agent.embedding_model)
-
-            # 准备文档列表
-            vector_db_docs = []
-
-            # 提取元数据
-            summary = metadata.get("summary", "") if metadata else ""
-
-            # 为每个分块创建Document对象
-            for i, chunk_item in enumerate(chunks):
-                chunk_data = chunk_item.get("data", "")
-                chunk_page = chunk_item.get("page", f"chunk_{i+1}")
-
-                if not chunk_data or not chunk_data.strip():
-                    continue
-
-                # 创建内容文档
-                doc = Document(
-                    page_content=chunk_data,
-                    metadata={
-                        "type": "content",
-                        "chunk_id": i,
-                        "page": chunk_page,
-                        "doc_name": doc_name,
-                    }
-                )
-                vector_db_docs.append(doc)
-
-            # 添加文档结构信息
-            structure_doc = Document(
-                page_content="Document Structure",
-                metadata={
-                    "type": "structure",
-                    "doc_name": doc_name,
-                    "total_chunks": len(chunks),
-                    "summary": summary,
-                }
-            )
-            vector_db_docs.append(structure_doc)
-
-            # 构建向量数据库
-            logger.info(f"开始构建向量数据库，共 {len(vector_db_docs)} 个文档...")
-            vector_db_client.build_vector_db(vector_db_docs)
-
-            logger.info(f"✅ [Tool:build_index] 索引构建完成: {index_path}")
-            return index_path
-
-        except Exception as e:
-            logger.error(f"❌ [Tool:build_index] 索引构建失败: {e}")
-            raise
 
     async def extract_pdf_data_impl(self, pdf_file_path: str) -> Dict[str, Any]:
         """
@@ -482,73 +400,7 @@ class IndexingTools:
             # 返回默认结构（整个文档作为一个章节）
             return {"全文": list(range(1, len(pdf_data_list) + 1))}
 
-    # ==================== 批量处理和管理方法 ====================
-
-    async def process_documents_batch(
-        self,
-        doc_list: List[Dict[str, Any]],
-        max_concurrent: int = 3
-    ) -> List[Dict[str, Any]]:
-        """
-        批量处理文档列表
-
-        Args:
-            doc_list: 文档列表，每个元素格式：
-                {
-                    "doc_name": str,
-                    "doc_path": str,
-                    "doc_type": "pdf" | "url"
-                }
-            max_concurrent: 最大并发处理数
-
-        Returns:
-            处理结果列表
-        """
-        import asyncio
-
-        logger.info(f"📦 开始批量处理文档: 共 {len(doc_list)} 个文档")
-
-        results = []
-
-        # 分批处理避免过载
-        for i in range(0, len(doc_list), max_concurrent):
-            batch = doc_list[i:i + max_concurrent]
-            logger.info(f"处理第 {i // max_concurrent + 1} 批: {len(batch)} 个文档")
-
-            # 并发处理当前批次
-            tasks = []
-            for doc_info in batch:
-                # 构建初始状态
-                state = {
-                    "doc_name": doc_info["doc_name"],
-                    "doc_path": doc_info["doc_path"],
-                    "doc_type": doc_info["doc_type"],
-                    "status": "pending"
-                }
-                # 创建处理任务
-                task = self.agent.graph.ainvoke(state)
-                tasks.append(task)
-
-            # 等待当前批次完成
-            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
-
-            # 处理结果
-            for j, result in enumerate(batch_results):
-                doc_name = batch[j]["doc_name"]
-                if isinstance(result, Exception):
-                    logger.error(f"❌ 文档处理失败: {doc_name}, 错误: {result}")
-                    results.append({
-                        "doc_name": doc_name,
-                        "status": "error",
-                        "error": str(result)
-                    })
-                else:
-                    logger.info(f"✅ 文档处理完成: {doc_name}, 状态: {result.get('status')}")
-                    results.append(result)
-
-        logger.info(f"✅ 批量处理完成: 成功 {sum(1 for r in results if r.get('status') == 'completed')} 个, 失败 {sum(1 for r in results if r.get('status') == 'error')} 个")
-
-        return results
+    # ==================== 重建辅助方法 ====================
 
     async def _prepare_rebuild_state(
         self,
@@ -607,11 +459,6 @@ class IndexingTools:
             for i, item in enumerate(pdf_data_list)
         }
 
-        raw_data = "\n\n".join([
-            f"[Page {item.get('page', i+1)}]\n{item.get('data', '')}"
-            for i, item in enumerate(pdf_data_list)
-        ])
-
         logger.info(f"   ✅ 加载完成: {len(pdf_data_list)} 页")
 
         # 4. 删除旧的生成文件
@@ -652,7 +499,6 @@ class IndexingTools:
             "doc_type": "pdf",
             "pdf_data_list": pdf_data_list,
             "json_data_dict": json_data_dict,
-            "raw_data": raw_data,
             "agenda_dict": agenda_dict,
             "has_toc": has_toc,
             "status": "loaded",

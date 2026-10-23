@@ -6,7 +6,7 @@ SearchAgent 状态定义
 2. URL内容分析模式 (url_analysis)
 """
 
-from typing import TypedDict, Optional, List, Dict, Any
+from typing import TypedDict, Optional, List, Dict
 
 
 class SearchState(TypedDict, total=False):
@@ -45,8 +45,6 @@ class SearchState(TypedDict, total=False):
     generated_doc_name: Optional[str]  # 生成的文档名（用于 IndexingAgent）
 
     # ============ 爬取过程 ============
-    scraping_tasks: List[Dict]  # 待爬取的任务列表
-    # 格式: [{"url": str, "content_types": List[str]}, ...]
     scraped_results: List[Dict]  # 爬取结果
     # 格式: [{"url": str, "success": bool, "content": {...}, "files": [...], "error": str}, ...]
 
@@ -60,11 +58,6 @@ class SearchState(TypedDict, total=False):
     actions: List[Dict]  # 执行的动作
     observations: List[str]  # 观察结果
     current_iteration: int  # 当前迭代次数
-
-    # ============ 当前步骤状态 ============
-    current_tool: Optional[str]  # 当前使用的工具
-    current_params: Optional[Dict]  # 当前工具参数
-    last_result: Optional[Any]  # 上一步的结果
 
     # ============ 输出 ============
     final_answer: str  # 最终答案

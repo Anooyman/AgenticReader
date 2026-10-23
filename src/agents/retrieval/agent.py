@@ -111,17 +111,3 @@ class RetrievalAgent(AgentBase):
         workflow.set_entry_point("initialize")
 
         return workflow.compile()
-
-    # ==================== 状态持久化管理 ====================
-
-    def clear_state(self):
-        """
-        清除持久化状态
-
-        清除所有历史信息：
-        - thoughts, actions, observations
-        - retrieved_content
-        - 等等
-        """
-        self.persistent_state = None
-        logger.info(f"🗑️  [{self.current_doc or 'MultiDoc'}] 已清除 RetrievalAgent 持久化状态")

@@ -210,61 +210,6 @@ class AnswerFormatter:
         return text
 
     @staticmethod
-    def format_retrieval_context(context: str, original_query: str = None) -> str:
-        """
-        格式化检索上下文，使其更适合作为文档参考内容
-
-        Args:
-            context: 原始检索上下文
-            original_query: 原始用户查询（可选，用于生成摘要）
-
-        Returns:
-            格式化后的上下文
-        """
-        if not context:
-            return context
-
-        formatted = context
-
-        # 1. 添加上下文标识
-        if original_query:
-            formatted = f"**📚 文档参考内容**（针对查询：{original_query}）\n\n{formatted}"
-        else:
-            formatted = f"**📚 文档参考内容**\n\n{formatted}"
-
-        # 2. 美化公式和结构
-        formatted = AnswerFormatter.format_answer(formatted)
-
-        return formatted
-
-    @staticmethod
-    def add_emoji_indicators(text: str) -> str:
-        """
-        为不同类型的内容添加emoji指示器，提升可读性
-
-        例如：
-        - 重要提示 → ⚠️
-        - 注意事项 → 📌
-        - 示例 → 💡
-        - 总结 → 📝
-        """
-        # 为特定关键词添加emoji
-        replacements = [
-            (r'\n(注意|注意事项)[:：]', r'\n📌 **\1**:'),
-            (r'\n(提示|重要提示)[:：]', r'\n⚠️ **\1**:'),
-            (r'\n(示例|例子|举例)[:：]', r'\n💡 **\1**:'),
-            (r'\n(总结|小结)[:：]', r'\n📝 **\1**:'),
-            (r'\n(优点|优势)[:：]', r'\n✅ **\1**:'),
-            (r'\n(缺点|劣势|不足)[:：]', r'\n❌ **\1**:'),
-            (r'\n(结论|结果)[:：]', r'\n🎯 **\1**:'),
-        ]
-
-        for pattern, replacement in replacements:
-            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
-
-        return text
-
-    @staticmethod
     def format_cross_doc_synthesis(synthesis: str, doc_names: list = None) -> str:
         """
         格式化跨文档综合答案
