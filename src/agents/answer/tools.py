@@ -270,51 +270,29 @@ class AnswerTools:
             message=f"正在检索文档: {doc_name}"
         )
 
-        # 获取或创建 Retrieval Agent
-        if doc_name not in self.agent.retrieval_agents:
+        # 获取或创建 Retrieval Agent（实例池由 AnswerAgent 持有）
+        retrieval_agent = self.agent.retrieval_agents.get(doc_name)
+        if retrieval_agent is None:
             from ..retrieval import RetrievalAgent
-            self.agent.retrieval_agents[doc_name] = RetrievalAgent(
+            retrieval_agent = RetrievalAgent(
                 doc_name=doc_name,
                 provider=self.agent.llm.provider,
                 progress_callback=self.agent.progress_callback
             )
+            self.agent.retrieval_agents[doc_name] = retrieval_agent
             logger.info(f"✅ [Tool:retrieve_documents] 为文档 '{doc_name}' 创建新的 RetrievalAgent")
         else:
             logger.info(f"♻️  [Tool:retrieve_documents] 复用文档 '{doc_name}' 的 RetrievalAgent")
-            agent = self.agent.retrieval_agents[doc_name]
-            cache_count = len(agent.retrieval_data_dict) if hasattr(agent, 'retrieval_data_dict') else 0
+            cache_count = len(retrieval_agent.retrieval_data_dict) if hasattr(retrieval_agent, 'retrieval_data_dict') else 0
             logger.info(f"📦 [Tool:retrieve_documents] 缓存中已有 {cache_count} 个章节")
 
-        # 获取对话轮次
-        if doc_name not in self.agent.conversation_turns:
-            self.agent.conversation_turns[doc_name] = 0
-        current_turn = self.agent.conversation_turns[doc_name]
-        logger.info(f"🔢 [Tool:retrieve_documents] 文档 '{doc_name}' 对话轮次: {current_turn}")
-
-        # 调用 Retrieval Agent
-        retrieval_agent = self.agent.retrieval_agents[doc_name]
-        max_iterations = ProcessingLimits.MAX_RETRIEVAL_ITERATIONS
-        recursion_limit = max_iterations * 5 + 10
-
-        result = await retrieval_agent.graph.ainvoke(
-            {
-                "query": query,
-                "doc_name": doc_name,
-                "max_iterations": max_iterations,
-                "conversation_turn": current_turn,
-                "current_iteration": 0,
-                "is_complete": False,
-                "thoughts": [],
-                "actions": [],
-                "observations": [],
-                "retrieved_content": []
-            },
-            config={"recursion_limit": recursion_limit}
+        # 调用 Retrieval Agent（state 拼装 / 轮次记账 / recursion_limit 都在 retrieve() 内）
+        result = await retrieval_agent.retrieve(
+            query,
+            doc_name=doc_name,
+            max_iterations=ProcessingLimits.MAX_RETRIEVAL_ITERATIONS,
+            conversation_turns=self.agent.conversation_turns
         )
-
-        # 递增对话轮次
-        self.agent.conversation_turns[doc_name] += 1
-        logger.info(f"🔢 [Tool:retrieve_documents] 文档 '{doc_name}' 对话轮次递增至: {self.agent.conversation_turns[doc_name]}")
 
         context = result.get("final_summary", "")
         logger.info(f"✅ [Tool:retrieve_documents] 单文档检索完成，长度: {len(context)}")

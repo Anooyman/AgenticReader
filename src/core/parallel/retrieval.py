@@ -45,8 +45,10 @@ class ParallelRetrievalCoordinator:
         {
             "doc1_name": {
                 "final_summary": "...",
-                "formatted_data": [...],
+                "retrieved_content": [...],
+                "selected_pages": [...],
                 "is_complete": True,
+                "error": None,
                 "source_metadata": {...},
                 "used_query": "实际使用的查询"
             },
@@ -204,49 +206,27 @@ class ParallelRetrievalCoordinator:
         """
         doc_name = doc_info["doc_name"]
 
-        # 获取或创建该文档的RetrievalAgent
-        if doc_name not in self.answer_agent.retrieval_agents:
+        # 获取或创建该文档的RetrievalAgent（实例池由 AnswerAgent 持有）
+        # 注意：core 层不得在模块级 import src.agents，此处保持函数级延迟 import
+        retrieval_agent = self.answer_agent.retrieval_agents.get(doc_name)
+        if retrieval_agent is None:
             from src.agents.retrieval import RetrievalAgent
             # 传递 progress_callback，使得 RetrievalAgent 的进度可以实时上报
-            self.answer_agent.retrieval_agents[doc_name] = RetrievalAgent(
+            retrieval_agent = RetrievalAgent(
                 doc_name=doc_name,
                 provider=self.answer_agent.llm.provider,  # 从 AnswerAgent 继承 provider
                 progress_callback=self.answer_agent.progress_callback  # 关键：传递回调
             )
+            self.answer_agent.retrieval_agents[doc_name] = retrieval_agent
             logger.info(f"✨ [ParallelCoordinator] 为文档 '{doc_name}' 创建新的 Retrieval Agent (provider={self.answer_agent.llm.provider}，已绑定进度回调）")
 
-        retrieval_agent = self.answer_agent.retrieval_agents[doc_name]
-
-        # 获取对话轮次
-        if doc_name not in self.answer_agent.conversation_turns:
-            self.answer_agent.conversation_turns[doc_name] = 0
-
-        current_turn = self.answer_agent.conversation_turns[doc_name]
-
-        # 调用RetrievalAgent
-        from src.config.constants import ProcessingLimits
-
-        # 计算递归限制
-        recursion_limit = max_iterations * 5 + 10
-
-        result = await retrieval_agent.graph.ainvoke(
-            {
-                "query": query,
-                "doc_name": doc_name,
-                "max_iterations": max_iterations,
-                "conversation_turn": current_turn,
-                "current_iteration": 0,
-                "is_complete": False,
-                "thoughts": [],
-                "actions": [],
-                "observations": [],
-                "retrieved_content": []
-            },
-            config={"recursion_limit": recursion_limit}
+        # 调用RetrievalAgent（state 拼装 / 轮次记账 / recursion_limit 都在 retrieve() 内）
+        result = await retrieval_agent.retrieve(
+            query,
+            doc_name=doc_name,
+            max_iterations=max_iterations,
+            conversation_turns=self.answer_agent.conversation_turns
         )
-
-        # 递增对话轮次
-        self.answer_agent.conversation_turns[doc_name] += 1
 
         # 添加源文档元数据和使用的查询到结果
         result["source_metadata"] = doc_info
