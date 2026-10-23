@@ -323,17 +323,21 @@ utils   → config 3
    （4a2b1fc：session/task/app_config/search_cache 全部原子化，`paths.py` 留
    re-export；顺带修掉 core→pipeline 反向依赖与 task_service 启动恢复）
 3. ✅ `get_vector_db_path()` / `get_output_dir()` helper，修 D2/D3。（d4c056c）
-4. ◐ `helpers.py` 9 个死函数已删（d5f7291）；JSON 清洗 4→1、`_send_progress`
-   3→1 未做——两处都是纯收敛不修 bug，且动 answer/retrieval/search 热点路径，
-   建议与 P2-3（AnswerAgent 图退化）同轮做，避免同文件反复动。
+4. ✅ `helpers.py` 9 个死函数已删（d5f7291）；JSON 清洗 4→1 与 `_send_progress`
+   3→1 已由波次 5-A 完成（4cfe1e4：`src/agents/common/json_utils.py` 统一清洗
+   入口 + `common/progress.py` 唯一 emitter，三处 `_send_progress` 签名保留薄
+   委托，失败路径语义逐点对齐，88 项断言回归）。
 5. ◐ `GET /documents/index` 误列为 GET 的疑虑已随 R2 消除（`documents.py` 现
    调 `index_document()`）；`_session_cache` 与三个空配置开关保留（低风险、
    有注释），`/sessions/current/info` 无消费者但删除需要单独授权——留待决策。
 
-### P2 — 结构（3-5 天，风险中）——未动，下一轮候选
+### P2 — 结构（3-5 天，风险中）——2 已完（16a5ccb），余 1/3/4/5 待动
 
 1. `index_document_service()` / `delete_document_service()`：4 份索引、3 份删除收敛；`documents.py` 只留 `list`（并修 D1）。
-2. `VectorDBClient`/`MetadataVectorDB` 按 `(path, mtime)` 进程级缓存 + `get_embeddings` `lru_cache`。
+2. ✅（波次 5-B，16a5ccb）缓存只收 FAISS 反序列化产物 + embedding 身份指纹进
+   key（(mtime_ns,size) 双文件指纹失效），**壳 client 保持每会话新建**——轮次去重
+   是实例态，全局单例会造成并行 session 污染（历史缺陷同类）；写路径先 clone 脱离
+   共享对象；真实索引热构造 ≈55×。`MetadataVectorDB` 刻意不缓存实例。
 3. `AnswerAgent` 图退化（删 `evaluate`）、state 构造器统一、`deep_dive` 复用 AnswerAgent。
 4. 前端共享层：`api.js` 唯一出口 + `ui-feedback.js` + `pdf-viewer.js`；`data.py` 按 documents/storage/ops 拆三模块。
 5. 模板内联 3,200 行外链化。
