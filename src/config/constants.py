@@ -4,6 +4,8 @@ LLMReader 项目常量配置
 """
 
 import os
+from pathlib import Path
+from typing import List, Optional
 
 # === 处理限制常量 ===
 class ProcessingLimits:
@@ -54,6 +56,94 @@ class PathConstants:
     OUTPUT_DIR = "output"
     SEARCH_CACHE_DIR = "search_cache"  # SearchAgent 搜索结果缓存
     WEB_CONTENT_DIR = "web_content"  # Use Case 2 URL 内容原始文件
+
+    # 派生产物的命名约定（全仓库唯一出处，禁止在调用点手抄字面量）
+    VECTOR_DB_SUFFIX = "_data_index"      # data/vector_db/{doc_name}_data_index/
+    BRIEF_SUMMARY_SUFFIX = "_brief_summary"  # data/output/{doc_name}_brief_summary.md
+    # 历史遗留的摘要命名（数据管理页删除/统计时一并覆盖，顺序即优先级）
+    SUMMARY_SUFFIXES = ("_brief_summary", "_summary", "")
+    SUMMARY_EXTENSIONS = (".md", ".pdf")
+
+
+# ==================== 派生数据路径 helper ====================
+#
+# 这些 helper 是「向量库目录 / 摘要文件」路径的唯一生成入口。
+# 历史上 7-8 处调用点各自手抄 f"{doc}_data_index" 字面量，抄漏后缀就产生
+# 删不掉的孤儿 FAISS 目录（UI 删除端点、rebuild 清理旧索引都踩过）。
+# 任何新增调用点一律走这里，不要再拼字符串。
+
+def get_data_root() -> Path:
+    """
+    数据根目录（PathConstants.DATA_ROOT 的 Path 形式）。
+
+    配置值允许是相对路径；相对时锚定到项目根，使路径与进程 cwd 无关——
+    UI 由 run_server / uvicorn 从任意目录启动时，读写路径仍然一致。
+    """
+    root = Path(PathConstants.DATA_ROOT)
+    if root.is_absolute():
+        return root
+    return Path(__file__).resolve().parents[2] / root
+
+
+def get_vector_db_dir() -> Path:
+    """向量库根目录：{data_root}/vector_db"""
+    return get_data_root() / PathConstants.VECTOR_DB_DIR
+
+
+def get_vector_db_path(doc_name: str) -> Path:
+    """
+    单个文档的 FAISS 向量库目录：{data_root}/vector_db/{doc_name}_data_index
+
+    Args:
+        doc_name: 文档名（不含扩展名，调用方自行去掉 .pdf）
+
+    Returns:
+        向量库目录 Path（不保证存在）
+    """
+    return get_vector_db_dir() / f"{doc_name}{PathConstants.VECTOR_DB_SUFFIX}"
+
+
+def get_metadata_db_path() -> Path:
+    """元数据向量库目录：{data_root}/vector_db/_metadata"""
+    return get_vector_db_dir() / "_metadata"
+
+
+def get_output_dir(doc_name: Optional[str] = None) -> Path:
+    """
+    摘要/报告输出目录。
+
+    Args:
+        doc_name: 为 None 时返回输出根目录 {data_root}/output；
+            传入文档名时返回历史遗留的按文档分目录 {data_root}/output/{doc_name}
+            （当前索引流程不再写这个目录，rebuild 清理时仍需照顾旧产物）
+
+    Returns:
+        输出目录 Path（不保证存在）
+    """
+    base = get_data_root() / PathConstants.OUTPUT_DIR
+    return base if doc_name is None else base / doc_name
+
+
+def get_brief_summary_path(doc_name: str) -> Path:
+    """
+    单个文档的简要摘要文件：{data_root}/output/{doc_name}_brief_summary.md
+
+    与 IndexingAgent.generate_brief_summary 的落盘位置、以及数据管理页
+    （data.py delete_document_parts）统计/删除的摘要路径保持一致。
+    """
+    return get_output_dir() / f"{doc_name}{PathConstants.BRIEF_SUMMARY_SUFFIX}.md"
+
+
+def get_summary_paths(doc_name: str) -> List[Path]:
+    """
+    单个文档所有可能的摘要文件（含历史命名），顺序与数据管理页一致：
+    后缀 _brief_summary / _summary / 无后缀 × 扩展名 .md / .pdf
+    """
+    return [
+        get_output_dir() / f"{doc_name}{suffix}{ext}"
+        for suffix in PathConstants.SUMMARY_SUFFIXES
+        for ext in PathConstants.SUMMARY_EXTENSIONS
+    ]
 
 
 # === PDF处理常量 ===

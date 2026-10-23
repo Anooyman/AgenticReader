@@ -313,24 +313,26 @@ class SearchAgent(AgentBase):
             logger.info(f"🔄 [CallIndexingAgent] 开始索引文档...")
 
             indexing_agent = IndexingAgent(provider=self.llm.provider)
-            result_state = await indexing_agent.graph.ainvoke({
-                "doc_name": doc_name,
-                "doc_path": json_path,
-                "doc_type": "url",
-                "is_complete": False,
-            })
+            result = await indexing_agent.index_document(
+                doc_name=doc_name,
+                doc_path=json_path,
+                doc_type="url",
+            )
 
-            if result_state.get("error") or result_state.get("status") == "error":
-                raise RuntimeError(result_state.get("error") or "IndexingAgent 索引失败，未返回具体错误")
+            error = result.get("error")
+            if error:
+                raise RuntimeError(error)
+            if not result.get("is_complete"):
+                raise RuntimeError("IndexingAgent 索引未完成，未返回具体错误")
 
-            index_path = result_state.get("index_path", "")
+            index_path = result.get("index_path", "")
             logger.info(f"✅ [CallIndexingAgent] 索引完成: {index_path}")
 
             return {
                 "success": True,
                 "doc_name": doc_name,
                 "index_path": index_path,
-                "doc_id": result_state.get("doc_id", ""),
+                "doc_id": result.get("doc_id", ""),
                 "indexed": True,
             }
 

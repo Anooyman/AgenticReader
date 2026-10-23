@@ -5,8 +5,10 @@ Indexing Agent - 文档索引构建Agent
 """
 
 from langgraph.graph import StateGraph, END
-from typing import Dict, Any
+from typing import Any, Callable, Dict, Optional
+import inspect
 import logging
+import traceback
 
 from ..base import AgentBase
 from .state import IndexingState
@@ -205,6 +207,113 @@ class IndexingAgent(AgentBase):
         return workflow.compile()
 
     # ==================== 对外接口方法 ====================
+
+    async def index_document(
+        self,
+        doc_name: str,
+        doc_path: str,
+        doc_type: str = "pdf",
+        *,
+        pdf_preset: Optional[str] = None,
+        progress_callback: Optional[Callable[..., Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        索引一个文档（唯一对外入口，内部跑已编译的主图）
+
+        5 个调用方（core/document_management/indexer.py、UI documents.py /
+        data.py、SearchAgent.call_indexing_agent、pipeline/process_pdf_queue.py）
+        的初始 state 语义并集集中在这里构造，调用方不再手拼 state、也不再
+        直接碰 self.graph——历史上手拼漏 doc_type 会让 parse 节点直接抛
+        "不支持的文档类型: None"，漏后缀/漏字段则是同类缺陷的根源。
+
+        Args:
+            doc_name: 文档名（不含扩展名，调用方自行去掉 .pdf）
+            doc_path: 文档路径。doc_type="pdf" 时是 PDF 文件路径；
+                doc_type="url" 时是 SearchAgent.save_web_content() 产出的 JSON 路径
+            doc_type: "pdf" | "url"
+            pdf_preset: 可选，覆盖构造期的 PDF 转图片预设
+                （'fast'/'balanced'/'high'/'ultra'）；为 None 时沿用构造期配置
+            progress_callback: 可选的进度回调，签名 ``cb(stage: str, progress: int,
+                message: str = "")``，同步或异步均可。只上报阶段，UI 侧写
+                task_service 的落库逻辑留在调用方回调里，不塞进 agent。
+
+        Returns:
+            {
+                "is_complete": bool,   # 整图是否成功跑完（register 的守卫保证
+                                       # 失败文档不会被标成 completed）
+                "index_path": str,     # 向量库目录（见 constants.get_vector_db_path）
+                "doc_id": str,         # DocumentRegistry 里的文档 ID
+                "error": str | None,   # 失败原因，成功时为 None
+                "status": str,         # 图最终 status（completed / error / ...）
+                "brief_summary": str,  # 便于 CLI 打印
+                "agenda_dict": dict,   # 便于 CLI 打印章节数
+            }
+        """
+        if pdf_preset:
+            # 调用期覆盖构造期配置（重跑一次目录/预设准备，幂等）
+            self._setup_pdf_config(pdf_preset)
+
+        async def _notify(stage: str, progress: int, message: str = "") -> None:
+            """进度上报（回调异常绝不影响索引主流程）"""
+            if progress_callback is None:
+                return
+            try:
+                outcome = progress_callback(stage, progress, message)
+                if inspect.isawaitable(outcome):
+                    await outcome
+            except Exception as cb_e:  # noqa: BLE001 - 进度上报失败不应影响索引
+                logger.warning(f"[IndexDocument] 进度回调异常({stage}): {cb_e}")
+
+        initial_state: IndexingState = {
+            "doc_name": doc_name,
+            "doc_path": doc_path,
+            "doc_type": doc_type,
+            "status": "pending",
+            "is_complete": False,
+            "error": None,
+        }
+
+        logger.info(f"🚀 [IndexDocument] 开始索引: {doc_name} (type={doc_type})")
+        await _notify("start", 0, doc_name)
+
+        try:
+            await _notify("graph", 10, doc_name)
+            result_state = await self.graph.ainvoke(initial_state)
+        except Exception as e:
+            logger.error(f"❌ [IndexDocument] 索引异常: {doc_name}: {e}")
+            logger.error(traceback.format_exc())
+            await _notify("error", 100, str(e))
+            return {
+                "is_complete": False,
+                "index_path": "",
+                "doc_id": "",
+                "error": str(e),
+                "status": "error",
+                "brief_summary": "",
+                "agenda_dict": {},
+            }
+
+        error = result_state.get("error")
+        is_complete = bool(result_state.get("is_complete", False))
+        message = error or f"索引完成: {doc_name}"
+        await _notify("error" if error or not is_complete else "done", 100, message)
+
+        if error:
+            logger.error(f"❌ [IndexDocument] 索引失败: {doc_name}: {error}")
+        elif not is_complete:
+            logger.warning(f"⚠️  [IndexDocument] 索引未完成: {doc_name}")
+        else:
+            logger.info(f"✅ [IndexDocument] 索引完成: {doc_name}")
+
+        return {
+            "is_complete": is_complete,
+            "index_path": result_state.get("index_path", "") or "",
+            "doc_id": result_state.get("doc_id", "") or "",
+            "error": error,
+            "status": result_state.get("status", "") or "",
+            "brief_summary": result_state.get("brief_summary", "") or "",
+            "agenda_dict": result_state.get("agenda_dict", {}) or {},
+        }
 
     async def rebuild_from_structure(
         self,

@@ -71,14 +71,13 @@ def download_pdf(pdf_url: str, dest_path: Path) -> None:
 
 async def index_document(doc_name: str, pdf_path: Path, provider: str):
     agent = IndexingAgent(provider=provider, pdf_preset="high")
-    result = await agent.graph.ainvoke({
-        "doc_name": doc_name,
-        "doc_path": str(pdf_path),
-        "doc_type": "pdf",
-        "is_complete": False,
-    })
-    if result.get("error") or result.get("status") == "error":
-        raise RuntimeError(result.get("error") or "IndexingAgent 索引失败，未返回具体错误")
+    result = await agent.index_document(
+        doc_name=doc_name,
+        doc_path=str(pdf_path),
+        doc_type="pdf",
+    )
+    if result.get("error") or not result.get("is_complete"):
+        raise RuntimeError(result.get("error") or "IndexingAgent 索引未完成，未返回具体错误")
     return result
 
 

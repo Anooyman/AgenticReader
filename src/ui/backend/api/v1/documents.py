@@ -6,7 +6,13 @@ from pydantic import BaseModel
 import shutil
 from pathlib import Path
 
-from ...config import PDF_DIR, JSON_DATA_DIR, VECTOR_DB_DIR, PDF_IMAGE_DIR, OUTPUT_DIR, DATA_DIR
+from ...config import PDF_DIR, JSON_DATA_DIR, PDF_IMAGE_DIR, DATA_DIR
+
+from src.config.constants import (
+    get_metadata_db_path,
+    get_summary_paths,
+    get_vector_db_path,
+)
 from src.core.document_management import DocumentRegistry
 from src.utils.path_guard import safe_path
 
@@ -225,17 +231,18 @@ async def _index_document_task(doc_name: str, provider: str, pdf_preset: str):
         # 创建索引代理
         indexing_agent = IndexingAgent(provider=provider, pdf_preset=pdf_preset)
 
-        # 执行索引
-        result = await indexing_agent.graph.ainvoke({
-            "doc_name": doc_name_clean,
-            "doc_path": str(pdf_path),
-            "is_complete": False
-        })
+        # 执行索引（初始 state 由 IndexingAgent.index_document 统一构造，
+        # 其中包含 doc_type——历史上这里手拼 state 漏了 doc_type）
+        result = await indexing_agent.index_document(
+            doc_name=doc_name_clean,
+            doc_path=str(pdf_path),
+            doc_type="pdf",
+        )
 
         if result.get("is_complete"):
             print(f"✅ 文档索引完成: {doc_name}")
         else:
-            print(f"❌ 文档索引失败: {doc_name}")
+            print(f"❌ 文档索引失败: {doc_name}, 错误: {result.get('error') or '未知错误'}")
 
     except Exception as e:
         print(f"❌ 索引任务执行失败: {e}")
@@ -277,8 +284,9 @@ async def delete_document(doc_name: str) -> Dict[str, Any]:
             deleted_items.append("JSON数据")
             freed_space_mb += size
 
-        # 删除向量数据库
-        vector_db_path = VECTOR_DB_DIR / doc_name_base
+        # 删除向量数据库（目录名由 constants helper 统一生成，手抄漏后缀就会
+        # 删不到 → FAISS 目录成为孤儿）
+        vector_db_path = get_vector_db_path(doc_name_base)
         if vector_db_path.exists():
             size = sum(f.stat().st_size for f in vector_db_path.rglob('*') if f.is_file()) / (1024 * 1024)
             shutil.rmtree(vector_db_path)
@@ -293,13 +301,13 @@ async def delete_document(doc_name: str) -> Dict[str, Any]:
             deleted_items.append("PDF图像")
             freed_space_mb += size
 
-        # 删除输出文件（摘要）
-        for ext in ['.md', '.pdf']:
-            output_file = OUTPUT_DIR / f"{doc_name_base}{ext}"
+        # 删除输出文件（摘要）：与数据管理页 delete_document_parts 同一套命名，
+        # 覆盖 {doc}_brief_summary / {doc}_summary / {doc} × .md/.pdf
+        for output_file in get_summary_paths(doc_name_base):
             if output_file.exists():
                 size = output_file.stat().st_size / (1024 * 1024)
                 output_file.unlink()
-                deleted_items.append(f"输出文件({ext})")
+                deleted_items.append(f"输出文件({output_file.suffix})")
                 freed_space_mb += size
 
         # 从 DocumentRegistry 中删除
@@ -309,9 +317,7 @@ async def delete_document(doc_name: str) -> Dict[str, Any]:
             if doc_id:
                 # 删除元数据向量数据库记录（仅在索引文件存在时尝试）
                 try:
-                    from pathlib import Path
-                    from src.config.settings import DATA_ROOT
-                    metadata_index_file = Path(DATA_ROOT) / "vector_db" / "_metadata" / "index.faiss"
+                    metadata_index_file = get_metadata_db_path() / "index.faiss"
 
                     if metadata_index_file.exists():
                         from src.core.vector_db.metadata_db import MetadataVectorDB

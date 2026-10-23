@@ -468,17 +468,28 @@ class IndexingTools:
             os.remove(chunks_path)
             logger.info(f"   ✅ 删除 chunks.json")
 
-        # 删除旧的摘要文件
-        from src.config.constants import PathConstants
-        output_folder = os.path.join(PathConstants.OUTPUT_DIR, doc_name)
-        if os.path.exists(output_folder):
+        # 删除旧的摘要文件（含历史命名），路径与 generate_brief_summary 落盘处同源
+        from src.config.constants import get_output_dir, get_summary_paths, get_vector_db_path
+
+        for summary_file in get_summary_paths(doc_name):
+            if summary_file.exists():
+                try:
+                    summary_file.unlink()
+                    logger.info(f"   ✅ 删除摘要文件: {summary_file}")
+                except Exception as e:
+                    logger.warning(f"   ⚠️  删除摘要文件失败: {summary_file} ({e})")
+
+        # 删除历史遗留的按文档分目录（{data_root}/output/{doc_name}）
+        output_folder = get_output_dir(doc_name)
+        if output_folder.exists():
             import shutil
             shutil.rmtree(output_folder)
             logger.info(f"   ✅ 删除输出文件夹: {output_folder}")
 
-        # 删除旧的向量数据库
-        vector_db_folder = os.path.join(PathConstants.VECTOR_DB_DIR, doc_name)
-        if os.path.exists(vector_db_folder):
+        # 删除旧的向量数据库（目录名由 constants helper 统一生成；历史上手抄漏了
+        # 索引后缀且用了相对路径，导致这里永远删不到 → 留下孤儿索引目录）
+        vector_db_folder = get_vector_db_path(doc_name)
+        if vector_db_folder.exists():
             import shutil
             shutil.rmtree(vector_db_folder)
             logger.info(f"   ✅ 删除向量数据库: {vector_db_folder}")

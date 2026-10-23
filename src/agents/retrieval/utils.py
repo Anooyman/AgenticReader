@@ -33,12 +33,10 @@ class RetrievalUtils:
         Returns:
             向量数据库的完整路径
         """
-        from pathlib import Path
-        from src.config.settings import DATA_ROOT
+        from src.config.constants import get_vector_db_path
 
-        # 注意：必须与 IndexingAgent 的路径格式保持一致
-        db_path = Path(DATA_ROOT) / "vector_db" / f"{doc_name}_data_index"
-        return str(db_path)
+        # 与 IndexingAgent 的落盘路径同源（同一个 helper，不再手抄目录名）
+        return str(get_vector_db_path(doc_name))
 
     def create_vector_db_client(self, doc_name: str):
         """

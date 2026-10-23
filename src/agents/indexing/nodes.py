@@ -12,6 +12,10 @@ import json
 from pathlib import Path
 
 from .state import IndexingState
+from src.config.constants import (
+    get_brief_summary_path,
+    get_vector_db_path,
+)
 
 if TYPE_CHECKING:
     from .agent import IndexingAgent
@@ -52,14 +56,13 @@ class IndexingNodes:
         }
 
         # 定义所有文件路径
-        from src.config.settings import DATA_ROOT
         doc_json_folder = os.path.join(self.agent.json_data_path, doc_name)
         json_path = os.path.join(doc_json_folder, "data.json")
         structure_json_path = os.path.join(doc_json_folder, "structure.json")
         chunk_json_path = os.path.join(doc_json_folder, "chunks.json")
         image_folder = os.path.join(self.agent.pdf_image_path, doc_name)
-        vector_db_path = Path(DATA_ROOT) / "vector_db" / f"{doc_name}_data_index"
-        summary_txt_path = os.path.join(DATA_ROOT, "output", f"{doc_name}_brief_summary.md")
+        vector_db_path = get_vector_db_path(doc_name)
+        summary_txt_path = str(get_brief_summary_path(doc_name))
 
         # 检查每个阶段的文件
         logger.info(f"🔍 [CheckCache] 开始检查各阶段文件...")
@@ -761,8 +764,7 @@ class IndexingNodes:
         doc_name = state["doc_name"]
 
         # 构建索引路径
-        from src.config.settings import DATA_ROOT
-        index_path = str(Path(DATA_ROOT) / "vector_db" / f"{doc_name}_data_index")
+        index_path = str(get_vector_db_path(doc_name))
 
         try:
             from langchain.docstore.document import Document
@@ -840,8 +842,8 @@ class IndexingNodes:
 
             logger.info(f"Document 对象构建完成: {len(vector_db_docs)} 个文档")
 
-            # 构建索引路径
-            index_dir = Path(DATA_ROOT) / "vector_db" / f"{doc_name}_data_index"
+            # 构建索引路径（与上面的 index_path 同源，这里只负责建目录）
+            index_dir = get_vector_db_path(doc_name)
             index_dir.mkdir(parents=True, exist_ok=True)
             index_path = str(index_dir)
 
@@ -910,8 +912,7 @@ class IndexingNodes:
         doc_name = state["doc_name"]
 
         # 定义摘要文件路径
-        from src.config.settings import DATA_ROOT
-        summary_txt_path = os.path.join(DATA_ROOT, "output", f"{doc_name}_brief_summary.md")
+        summary_txt_path = str(get_brief_summary_path(doc_name))
 
         try:
             chapter_summaries = state.get("chapter_summaries", {})

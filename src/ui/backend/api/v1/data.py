@@ -16,6 +16,11 @@ from ...config import (
     PDF_IMAGE_DIR, OUTPUT_DIR, DATA_DIR
 )
 from src.core.document_management import DocumentRegistry
+from src.config.constants import (
+    get_metadata_db_path,
+    get_summary_paths,
+    get_vector_db_path,
+)
 from src.utils.path_guard import safe_path
 from ...services.task_service import task_manager
 
@@ -192,8 +197,8 @@ def get_document_data_sizes(doc_name: str, doc_info: Dict) -> Dict[str, float]:
         sizes["json_size_mb"] = get_dir_size(json_dir)
         sizes["has_json"] = True
 
-    # Vector DB (in vector_db/{doc_name_base}_data_index/ directory)
-    vector_db_path = VECTOR_DB_DIR / f"{doc_name_base}_data_index"
+    # Vector DB（目录名 = 文档名 + 索引后缀，由 constants helper 统一生成）
+    vector_db_path = get_vector_db_path(doc_name_base)
     if vector_db_path.exists():
         sizes["vector_db_size_mb"] = get_dir_size(vector_db_path)
         sizes["has_vector_db"] = True
@@ -205,13 +210,11 @@ def get_document_data_sizes(doc_name: str, doc_info: Dict) -> Dict[str, float]:
         sizes["has_images"] = True
 
     # Summary files (MD and PDF in output directory)
-    # Summary files are named as {doc_name_base}_brief_summary.md or {doc_name_base}_summary.md
-    for suffix in ['_brief_summary', '_summary', '']:
-        for ext in ['.md', '.pdf']:
-            summary_file = OUTPUT_DIR / f"{doc_name_base}{suffix}{ext}"
-            if summary_file.exists():
-                sizes["summary_size_mb"] += get_dir_size(summary_file)
-                sizes["has_summary"] = True
+    # 摘要命名（_brief_summary / _summary / 无后缀 × .md/.pdf）与索引落盘处同源
+    for summary_file in get_summary_paths(doc_name_base):
+        if summary_file.exists():
+            sizes["summary_size_mb"] += get_dir_size(summary_file)
+            sizes["has_summary"] = True
 
     # Source PDF file (in pdf/ directory or registered doc_path)
     source_pdf = get_source_pdf_path(doc_name_base, doc_info)
@@ -589,14 +592,19 @@ async def _index_pdf_background(task_id: str, filename: str, pdf_path: Path):
 
         print(f"🔄 后台索引任务开始: {filename} (task_id: {task_id})")
 
-        # 执行索引
-        result = await indexing_agent.graph.ainvoke({
-            "doc_name": doc_name_base,
-            "doc_path": str(pdf_path),
-            "doc_type": "pdf",
-            "is_complete": False,
-            "status": "pending"
-        })
+        # 进度回调：agent 只上报阶段，任务落库逻辑留在 UI 侧
+        def _on_index_progress(stage: str, progress: int, message: str = "") -> None:
+            stage_progress = {"start": 30, "graph": 40}.get(stage)
+            if stage_progress is not None:
+                task_manager.update_task(task_id, progress=stage_progress)
+
+        # 执行索引（初始 state 由 IndexingAgent.index_document 统一构造）
+        result = await indexing_agent.index_document(
+            doc_name=doc_name_base,
+            doc_path=str(pdf_path),
+            doc_type="pdf",
+            progress_callback=_on_index_progress,
+        )
 
         task_manager.update_task(task_id, progress=90)
 
@@ -739,9 +747,9 @@ async def delete_document_parts(doc_name: str, request: DeletePartsRequest):
                 except Exception as e:
                     failed_items.append(f"JSON 数据: {e}")
 
-        # 删除向量数据库
+        # 删除向量数据库（路径 helper 统一生成，缺后缀会留下孤儿 FAISS 目录）
         if "vector_db" in parts:
-            vector_db_path = VECTOR_DB_DIR / f"{doc_name_base}_data_index"
+            vector_db_path = get_vector_db_path(doc_name_base)
             if vector_db_path.exists():
                 try:
                     size = get_dir_size(vector_db_path)
@@ -765,18 +773,16 @@ async def delete_document_parts(doc_name: str, request: DeletePartsRequest):
 
         # 删除摘要文件
         if "summary" in parts:
-            # Check for different summary file naming patterns
-            for suffix in ['_brief_summary', '_summary', '']:
-                for ext in ['.md', '.pdf']:
-                    summary_file = OUTPUT_DIR / f"{doc_name_base}{suffix}{ext}"
-                    if summary_file.exists():
-                        try:
-                            size = get_dir_size(summary_file)
-                            summary_file.unlink()
-                            deleted_items.append(f"摘要 ({ext}) ({size:.2f} MB)")
-                            freed_space_mb += size
-                        except Exception as e:
-                            failed_items.append(f"摘要 ({ext}): {e}")
+            # 覆盖历史命名的全部摘要产物（见 constants.get_summary_paths）
+            for summary_file in get_summary_paths(doc_name_base):
+                if summary_file.exists():
+                    try:
+                        size = get_dir_size(summary_file)
+                        summary_file.unlink()
+                        deleted_items.append(f"摘要 ({summary_file.suffix}) ({size:.2f} MB)")
+                        freed_space_mb += size
+                    except Exception as e:
+                        failed_items.append(f"摘要 ({summary_file.suffix}): {e}")
 
         # 删除本地源 PDF 文件（需显式指定 "pdf"，"all" 不包含它）
         if "pdf" in parts:
@@ -803,7 +809,7 @@ async def delete_document_parts(doc_name: str, request: DeletePartsRequest):
                 # 这样 MetadataDB.delete_document() 可以从 Registry 中获取 doc_name 用于日志
                 # 仅在元数据索引文件存在时尝试加载和删除
                 try:
-                    metadata_index_file = DATA_DIR / "vector_db" / "_metadata" / "index.faiss"
+                    metadata_index_file = get_metadata_db_path() / "index.faiss"
 
                     if metadata_index_file.exists():
                         from src.core.vector_db.metadata_db import MetadataVectorDB

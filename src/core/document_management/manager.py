@@ -17,6 +17,11 @@ from typing import Optional, Dict, List
 import shutil
 import os
 
+from src.config.constants import (
+    PathConstants,
+    get_brief_summary_path,
+    get_vector_db_path,
+)
 from src.core.document_management import DocumentRegistry
 
 # 获取 DATA_ROOT，如果导入失败则使用默认值
@@ -78,13 +83,13 @@ def get_document_files(doc_name: str) -> Dict[str, Path]:
         return {}
 
     try:
-        data_root = Path(DATA_ROOT)
-
+        # 向量库/摘要路径统一由 constants helper 生成（历史上这里手抄过后缀，
+        # 与索引落盘处必须一致）
         files = {
-            "vector_db": data_root / "vector_db" / f"{doc_name}_data_index",
-            "json_folder": data_root / "json_data" / doc_name,  # 所有 JSON 文件的文件夹
-            "pdf_image": data_root / "pdf_image" / doc_name,
-            "brief_summary": data_root / "output" / f"{doc_name}_brief_summary.md",
+            "vector_db": get_vector_db_path(doc_name),
+            "json_folder": Path(DATA_ROOT) / PathConstants.JSON_DATA_DIR / doc_name,  # 所有 JSON 文件的文件夹
+            "pdf_image": Path(DATA_ROOT) / PathConstants.PDF_IMAGE_DIR / doc_name,
+            "brief_summary": get_brief_summary_path(doc_name),
         }
 
         return files

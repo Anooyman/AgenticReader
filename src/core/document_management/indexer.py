@@ -179,14 +179,14 @@ async def index_pdf_document(
         indexing_agent = factory(provider=provider, pdf_preset=pdf_preset)
         logger.info("✅ IndexingAgent 初始化完成")
 
-        # 调用 graph 进行索引
+        # 调用统一入口进行索引（初始 state 由 IndexingAgent.index_document 构造，
+        # 含 doc_type；core 层不直接碰 agent 内部图）
         logger.info(f"\n🚀 开始索引流程...\n")
-        result = await indexing_agent.graph.ainvoke({
-            "doc_path": str(pdf_path),  # 注意：使用 doc_path 而不是 pdf_path
-            "doc_name": doc_name,
-            "doc_type": "pdf",  # 指定文档类型
-            "is_complete": False
-        })
+        result = await indexing_agent.index_document(
+            doc_name=doc_name,
+            doc_path=str(pdf_path),  # 注意：使用 doc_path 而不是 pdf_path
+            doc_type="pdf",
+        )
 
         # 检查结果
         is_complete = result.get("is_complete", False)
