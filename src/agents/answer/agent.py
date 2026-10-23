@@ -5,11 +5,10 @@ Answer Agent - 用户对话接口Agent（确定性工具规划架构）
 0. rewrite_query - 根据对话历史改写查询，补全上下文
 1. plan - 按用户启用的工具确定性构造工具调用（无 LLM 决策）
 2. execute - 执行工具调用
-3. evaluate - 判断内容是否足够（仅作终止标记，不再回环到 plan）
-4. generate - 生成最终答案
+3. generate - 生成最终答案
 
 图结构：
-    rewrite_query → plan → (execute → evaluate → generate | generate) → END
+    rewrite_query → plan → (execute → generate | generate) → END
 
 工具：
 - retrieve_documents: 统一文档检索（单文档/多文档/自动选择）
@@ -28,18 +27,54 @@ from .nodes import AnswerNodes
 logger = logging.getLogger(__name__)
 
 
+def _build_initial_state(
+    user_query: str,
+    enabled_tools: Optional[list] = None,
+    selected_docs: Optional[list] = None,
+) -> AnswerState:
+    """
+    构造 AnswerAgent 图的初始 AnswerState（单轮确定性流水线）。
+
+    统一此前散落在 query() / main.py / deep_dive 等处的手拼 state，保证所有入口
+    得到字段完整、初值一致的初始状态：
+    - rewritten_query 预置空串，由 rewrite_query 节点写入
+    - tool_calls / tool_results 预置空列表
+    - final_answer / is_complete / error 预置终止前的默认值
+    - current_iteration / max_iterations 保留字段（单轮架构不驱动多轮回环）
+    - selected_docs 仅在给定时写入，保持"未选择"与"空列表"语义一致
+
+    注意：图内节点原地读写该 dict，LangGraph 每次 ainvoke 都从这份全新副本开始，
+    因此跨查询（含并发同 doc 的两问）之间不会共享这些输出字段。
+    """
+    state: AnswerState = {
+        "user_query": user_query,
+        "rewritten_query": "",
+        "enabled_tools": list(enabled_tools or []),
+        "tool_calls": [],
+        "tool_results": [],
+        "current_iteration": 0,
+        "max_iterations": 3,
+        "final_answer": "",
+        "is_complete": False,
+        "error": None,
+    }
+    if selected_docs:
+        state["selected_docs"] = list(selected_docs)
+    return state
+
+
 class AnswerAgent(AgentBase):
     """
     对话Agent（确定性工具规划架构）
 
     工作流程：
-    rewrite_query → plan → execute_tools → evaluate → generate → END
+    rewrite_query → plan → execute_tools → generate → END
     （plan 若判无需工具则直接 → generate）
 
     特点：
     - 上下文查询改写：根据历史对话补全省略、指代
     - plan 节点按 enabled_tools 确定性构造工具调用，不再依赖 LLM 动态规划
-    - 单轮架构：evaluate 之后直接进入 generate，不再回环到 plan 做二次规划
+    - 单轮架构：execute 之后直接进入 generate，不再回环到 plan 做二次规划
     - 新工具通过注册即可接入
     - current_doc/manual_selected_docs 作为上下文提示传给 generate
     """
@@ -79,12 +114,11 @@ class AnswerAgent(AgentBase):
         """
         构建单轮确定性工作流
 
-        rewrite_query → plan → (execute → evaluate → generate | generate) → END
+        rewrite_query → plan → (execute → generate | generate) → END
 
         - rewrite_query: 根据对话历史改写查询，补全上下文
         - plan: 按 enabled_tools 确定性构造工具调用（无 LLM 决策）
         - execute: 并行执行工具调用
-        - evaluate: 判断内容是否充分，仅作终止标记
         - generate: 生成最终答案
         """
         workflow = StateGraph(AnswerState)
@@ -93,7 +127,6 @@ class AnswerAgent(AgentBase):
         workflow.add_node("rewrite_query", self.nodes.rewrite_query)
         workflow.add_node("plan", self.nodes.plan)
         workflow.add_node("execute", self.nodes.execute_tools)
-        workflow.add_node("evaluate", self.nodes.evaluate)
         workflow.add_node("generate", self.nodes.generate_answer)
 
         # 设置入口
@@ -112,11 +145,8 @@ class AnswerAgent(AgentBase):
             }
         )
 
-        # execute → evaluate
-        workflow.add_edge("execute", "evaluate")
-
-        # evaluate → generate（单轮架构：评估完成后直接进入生成，不再回环到 plan）
-        workflow.add_edge("evaluate", "generate")
+        # execute → generate（单轮架构：执行完成后直接进入生成，不再回环到 plan）
+        workflow.add_edge("execute", "generate")
 
         # generate → END
         workflow.add_edge("generate", END)
@@ -178,6 +208,10 @@ class AnswerAgent(AgentBase):
 
         tasks = []
         tasks.append((self.llm, "tool_planning", "Answer Agent"))
+        # answer 实例自身的改写/生成会话一并清空：复用实例（如 deep_dive 缓存）时，
+        # 保证跨查询不在这些 session 上串上下文。
+        tasks.append((self.llm, "rewrite_query_session", "Answer Agent (rewrite)"))
+        tasks.append((self.llm, "generate_answer", "Answer Agent (generate)"))
         for doc_name, retrieval_agent in self.retrieval_agents.items():
             tasks.append((retrieval_agent.llm, "rewrite_query", f"Retrieval Agent ({doc_name})"))
 
@@ -228,14 +262,12 @@ class AnswerAgent(AgentBase):
         elif not selected_docs:
             self.current_doc = None
 
-        # 创建初始状态
-        state: AnswerState = {
-            "user_query": user_query,
-            "enabled_tools": enabled_tools or [],
-        }
-
-        if selected_docs:
-            state["selected_docs"] = selected_docs
+        # 创建初始状态（统一走 _build_initial_state，避免手拼遗漏字段）
+        state = _build_initial_state(
+            user_query=user_query,
+            enabled_tools=enabled_tools,
+            selected_docs=selected_docs,
+        )
 
         # 执行查询
         result = await self.graph.ainvoke(state)

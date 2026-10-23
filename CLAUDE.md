@@ -80,7 +80,7 @@ src/
 │   ├── common/               # 跨 agent 共享 prompts + tool_response_format
 │   ├── indexing/             # IndexingAgent（解析→结构→摘要→向量化→注册）
 │   │   └── components/metadata_extractor.py  # 注册时的元数据提取
-│   ├── answer/               # AnswerAgent（确定性 plan→execute→evaluate→generate）
+│   ├── answer/               # AnswerAgent（确定性 plan→execute→generate，evaluate 节点已删）
 │   │   └── components/       # document_selector / cross_doc_synthesizer / formatter
 │   ├── retrieval/            # RetrievalAgent（ReAct 单文档/多文档检索）
 │   ├── search/               # SearchAgent（搜索引擎 + URL 分析，MCP 驱动）
@@ -126,7 +126,7 @@ src/
 | 文件 | 作用 |
 |---|---|
 | `main.py` | CLI 入口：菜单选择模式后驱动 AnswerAgent / SearchAgent |
-| `src/agents/answer/agent.py:80-126` | AnswerAgent 的图：`rewrite_query → plan →(execute→evaluate→generate \| generate)→ END`，plan 是**确定性**的（按 `enabled_tools` 构造调用，无 LLM 决策），evaluate 只作终止标记、不回环 |
+| `src/agents/answer/agent.py:113-154` | AnswerAgent 的图：`rewrite_query → plan →(execute→generate \| generate)→ END`，plan 是**确定性**的（按 `enabled_tools` 构造调用，无 LLM 决策），单轮无回环（execute 之后直接进 generate，不再经过 evaluate 节点） |
 | `src/agents/indexing/agent.py:118-207` | IndexingAgent 主图与 rebuild 图；`_route_on_error` 使任一节点出错都短路直达 register |
 | `src/agents/indexing/nodes.py:986-1001` | `register_document` 的失败守卫：state 里有 error 就不把文档注册为 completed |
 | `src/core/document_management/registry.py:47` | `DocumentRegistry`：`data/doc_registry.json`，fcntl 跨进程锁 + 原子落盘，锁内重读-改-写事务 |

@@ -144,13 +144,12 @@ async def test_single_turn(
         logger.info(f"📝 用户问题: {query}")
         logger.info(f"📄 目标文档: {doc_name}")
 
-        # 调用AnswerAgent的graph
-        result = await answer_agent.graph.ainvoke({
-            "user_query": query,
-            "current_doc": doc_name,
-            "needs_retrieval": False,
-            "is_complete": False
-        })
+        # 调用 AnswerAgent（统一走 query()，内部由 _build_initial_state 构造初始状态）
+        result = await answer_agent.query(
+            user_query=query,
+            enabled_tools=["retrieve_documents"],
+            selected_docs=[doc_name],
+        )
 
         # 检查结果
         is_complete = result.get("is_complete", False)

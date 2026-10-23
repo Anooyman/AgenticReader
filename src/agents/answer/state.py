@@ -1,7 +1,7 @@
 """
 Answer Agent状态定义
 
-确定性工具架构：rewrite_query → plan → execute → evaluate → generate
+确定性工具架构：rewrite_query → plan → execute → generate
 用户通过 enabled_tools 和 selected_docs 控制工具使用。
 """
 
@@ -13,18 +13,18 @@ class AnswerState(TypedDict, total=False):
     Answer Agent的状态（确定性工具架构 / 单轮流水线）
 
     工作流程：
-    rewrite_query → plan → (execute → evaluate → generate | generate) → END
+    rewrite_query → plan → (execute → generate | generate) → END
 
     工具选择由用户控制：
     - enabled_tools: 用户启用的工具列表（空=纯对话）
     - selected_docs: 用户选择的文档列表（PDF检索时使用）
     - rewrite_query节点根据历史对话重写用户查询（补全上下文）
     - plan节点根据用户选择确定性地构造工具调用，仅做寒暄过滤
-    - evaluate节点判断内容充分性后直接进入 generate，不再回环到 plan
+    - 单轮架构：execute 之后直接进入 generate，不再回环到 plan
 
     说明：
     - current_iteration / max_iterations 字段保留以兼容旧代码引用，
-      当前单轮架构下不再驱动多轮规划（evaluate → plan 循环边已移除）。
+      当前单轮架构下不再驱动多轮规划（无回环边）。
     """
 
     # ============ 输入 ============

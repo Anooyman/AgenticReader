@@ -682,11 +682,11 @@ async def manual_selection_chat_mode(selected_docs: list):
                 continue
 
             # 调用 AnswerAgent（手动选择模式）
-            result = await answer_agent.graph.ainvoke({
-                "user_query": user_input,
-                "enabled_tools": ["retrieve_documents"],
-                "selected_docs": valid_docs,
-            })
+            result = await answer_agent.query(
+                user_query=user_input,
+                enabled_tools=["retrieve_documents"],
+                selected_docs=valid_docs,
+            )
 
             # 提取回答
             final_answer = result.get("final_answer", "")

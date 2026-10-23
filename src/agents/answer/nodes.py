@@ -1,8 +1,8 @@
 """
 AnswerAgent Workflow节点方法
 
-单轮确定性架构：rewrite_query → plan → execute → evaluate → generate
-（不再回环到 plan 做二次规划，evaluate 仅作终止标记）
+单轮确定性架构：rewrite_query → plan → execute → generate
+（不再回环到 plan 做二次规划）
 """
 
 from __future__ import annotations
@@ -505,58 +505,7 @@ class AnswerNodes:
         else:
             return {"success": False, "error": f"未知工具: {tool_name}"}
 
-    # ==================== Node 3: evaluate ====================
-
-    async def evaluate(self, state: AnswerState) -> AnswerState:
-        """
-        Evaluate 节点
-
-        评估是否已有足够信息回答用户问题，设置 is_complete 终止标记。
-        在当前单轮架构下，该节点后直接进入 generate，不再回环到 plan，
-        因此不再依赖 current_iteration / max_iterations 做迭代终止判断
-        （这两个字段仅保留以兼容旧代码引用）。
-        """
-        logger.info("=" * 80)
-        logger.info("📊 [Evaluate] ========== 评估完整性 ==========")
-        logger.info("=" * 80)
-
-        tool_results = state.get("tool_results", [])
-
-        # 终止条件1：所有工具调用都失败
-        if tool_results:
-            all_failed = all(not r.get("success", False) for r in tool_results)
-            if all_failed:
-                logger.warning(f"⚠️ [Evaluate] 所有工具调用都失败，进入生成")
-                state["is_complete"] = True
-                return state
-
-        # 终止条件2：有成功的工具结果（单轮架构下一轮成功即足够）
-        # 对于大多数文档检索场景，一轮检索已足够
-        has_success = any(r.get("success", False) for r in tool_results)
-        if has_success:
-            # 检查最近一轮的结果是否有实质内容
-            latest_results = [r for r in tool_results if r.get("success", False)]
-            has_content = False
-            for r in latest_results:
-                result_data = r.get("result", {})
-                answer = result_data.get("answer", "") if isinstance(result_data, dict) else ""
-                if answer and len(answer) > 10:
-                    has_content = True
-                    break
-
-            if has_content:
-                logger.info(f"✅ [Evaluate] 有充足的工具结果，准备生成答案")
-            else:
-                logger.info(f"ℹ️  [Evaluate] 工具成功但内容较少，单轮架构下直接进入 generate")
-            state["is_complete"] = True
-            return state
-
-        # 没有工具结果（不应该到这里，但安全起见）
-        logger.info(f"⚠️ [Evaluate] 无工具结果，标记完成")
-        state["is_complete"] = True
-        return state
-
-    # ==================== Node 4: generate_answer ====================
+    # ==================== Node 3: generate_answer ====================
 
     async def generate_answer(self, state: AnswerState) -> AnswerState:
         """
