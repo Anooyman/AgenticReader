@@ -238,12 +238,11 @@ async def test_cross_doc_retrieval(test_query: str = None):
 
         # 执行查询
         logger.info(f"\n🚀 开始跨文档检索...")
-        result = await answer_agent.graph.ainvoke({
-            "user_query": test_query,
-            "current_doc": None,  # 触发跨文档模式
-            "needs_retrieval": False,
-            "is_complete": False
-        })
+        # 统一走 query()（唯一 state 入口，见 answer/agent.py:_build_initial_state）
+        result = await answer_agent.query(
+            user_query=test_query,
+            enabled_tools=["retrieve_documents"],  # 跨文档：不带 selected_docs
+        )
 
         # 提取结果
         final_answer = result.get("final_answer", "")
@@ -313,12 +312,11 @@ async def test_single_doc_compatibility():
 
         # 执行查询
         logger.info(f"\n🚀 开始单文档检索...")
-        result = await answer_agent.graph.ainvoke({
-            "user_query": test_query,
-            "current_doc": test_doc,
-            "needs_retrieval": False,
-            "is_complete": False
-        })
+        result = await answer_agent.query(
+            user_query=test_query,
+            enabled_tools=["retrieve_documents"],
+            selected_docs=[test_doc],
+        )
 
         # 提取结果
         final_answer = result.get("final_answer", "")

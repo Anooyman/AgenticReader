@@ -59,22 +59,20 @@ async def test_manual_selection_mode():
         logger.error("❌ 没有有效的文档可以使用")
         return
 
-    # 5. 构建状态，使用手动选择模式
-    state = {
-        "user_query": "这些文档的主要内容是什么？请总结它们的核心观点。",
-        "current_doc": None,  # 跨文档模式
-        "manual_selected_docs": valid_docs,  # 手动选择的文档列表
-        "needs_retrieval": True,  # 需要检索
-        "is_complete": False
-    }
+    # 5. 手动选择模式：统一走 query()（唯一 state 入口），不再手拼字段
+    user_query = "这些文档的主要内容是什么？请总结它们的核心观点。"
 
     logger.info(f"\n🚀 开始执行手动选择模式查询:")
-    logger.info(f"   - 查询: {state['user_query']}")
+    logger.info(f"   - 查询: {user_query}")
     logger.info(f"   - 选择的文档: {valid_docs}")
 
     # 6. 执行查询
     try:
-        result = await answer_agent.graph.ainvoke(state)
+        result = await answer_agent.query(
+            user_query=user_query,
+            enabled_tools=["retrieve_documents"],
+            selected_docs=valid_docs,
+        )
 
         logger.info("\n" + "=" * 80)
         logger.info("✅ 查询完成")
