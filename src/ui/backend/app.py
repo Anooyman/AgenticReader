@@ -84,7 +84,8 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 # 导入并注册路由
 from .api import pages, websocket
 from .api.v1 import (
-    documents, chat, pdf, structure, config, sessions, data,
+    documents, chat, pdf, structure, config, sessions,
+    data, data_storage, data_ops,
     briefs, jobs, memory, speech, llmmemory,
 )
 
@@ -96,7 +97,12 @@ app.include_router(pdf.router, prefix="/api/v1/pdf", tags=["PDF"])
 app.include_router(structure.router, prefix="/api/v1/structure", tags=["Structure"])
 app.include_router(config.router, prefix="/api/v1/config", tags=["Config"])
 app.include_router(sessions.router, prefix="/api/v1/sessions", tags=["Sessions"])
+# /data 页后端按职责拆为三模块（REFACTOR_REPORT P2-4）：documents 域在
+# data.py，存储域在 data_storage.py，任务运维域在 data_ops.py；
+# 三者共用同一前缀与 tag，路由逐条与拆分前一致。
 app.include_router(data.router, prefix="/api/v1/data", tags=["Data Management"])
+app.include_router(data_storage.router, prefix="/api/v1/data", tags=["Data Management"])
+app.include_router(data_ops.router, prefix="/api/v1/data", tags=["Data Management"])
 app.include_router(briefs.router, prefix="/api/v1/briefs", tags=["Briefs"])
 app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["Jobs"])
 app.include_router(memory.router, prefix="/api/v1/memory", tags=["Memory"])

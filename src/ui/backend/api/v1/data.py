@@ -1,18 +1,23 @@
-"""数据管理 API
+"""数据管理 API——文档产物域（REFACTOR_REPORT P2-4，原 data.py 拆分后保留本域）
 
-提供文档数据、会话数据和存储管理功能
+本模块负责 /data 页的文档类端点：文档产物详细清单（GET /documents，含
+元数据与 JSON/向量库/图片/摘要/PDF 五类大小）、单文档摘要（GET
+/documents/{doc_name}/summary）、部分删除（DELETE /documents/{doc_name}/parts）
+与批量完全删除（DELETE /documents）。
+
+存储类（overview / pending PDFs / sessions stats / smart cleanup）在
+``data_storage.py``，任务类（index 启动 / tasks 查询）在 ``data_ops.py``，
+跨模块共享 helper 在 ``data_common.py``。URL 前缀 ``/api/v1/data`` 由
+app.py 的 include_router 统一提供，各模块路由路径与拆分前逐条一致。
 """
 
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 from pathlib import Path
-import json
-from datetime import datetime, timedelta
 
 from ...config import (
-    PDF_DIR, JSON_DATA_DIR, VECTOR_DB_DIR,
-    PDF_IMAGE_DIR, OUTPUT_DIR, DATA_DIR
+    JSON_DATA_DIR, PDF_IMAGE_DIR, DATA_DIR
 )
 from src.core.document_management import DocumentRegistry
 # 删除的唯一权威实现（REFACTOR_REPORT P2-1）：rmtree / registry 注销 / brief 清理
@@ -27,21 +32,12 @@ from src.config.constants import (
     get_vector_db_path,
 )
 from src.utils.path_guard import safe_path
-from ...services.task_service import task_manager
+from .data_common import get_dir_size
 
 router = APIRouter()
 
 
 # ==================== Pydantic Models ====================
-
-class StorageOverview(BaseModel):
-    """存储概览"""
-    total_documents: int
-    total_sessions: int
-    total_storage_mb: float
-    last_cleanup: Optional[str] = None
-    breakdown: Dict[str, Dict[str, Any]]
-
 
 class DocumentDetail(BaseModel):
     """文档详细信息（含元数据）"""
@@ -76,14 +72,6 @@ class DocumentDetail(BaseModel):
     indexed_at: Optional[str] = None
 
 
-class SessionStats(BaseModel):
-    """会话统计信息"""
-    total_sessions: int
-    by_mode: Dict[str, int]
-    total_messages: int
-    last_activity: Optional[str] = None
-
-
 class DeletePartsRequest(BaseModel):
     """删除部分数据的请求"""
     parts: List[str]  # ["json", "vector_db", "images", "summary", "pdf", "all"]
@@ -95,47 +83,7 @@ class BatchDeleteRequest(BaseModel):
     delete_source: bool = False  # 是否同时删除本地源 PDF 文件
 
 
-class PendingPDFDeleteRequest(BaseModel):
-    """删除未索引 PDF 源文件的请求"""
-    filenames: List[str]
-
-
-class PendingPDF(BaseModel):
-    """待索引PDF信息"""
-    filename: str
-    file_path: str
-    size_mb: float
-    created_at: str
-
-
 # ==================== Helper Functions ====================
-
-def get_dir_size(path: Path) -> float:
-    """
-    计算目录大小（MB）
-
-    Args:
-        path: 目录路径
-
-    Returns:
-        目录大小（MB）
-    """
-    if not path.exists():
-        return 0.0
-
-    total_size = 0
-    if path.is_file():
-        total_size = path.stat().st_size
-    elif path.is_dir():
-        for item in path.rglob('*'):
-            if item.is_file():
-                try:
-                    total_size += item.stat().st_size
-                except (OSError, PermissionError):
-                    continue
-
-    return total_size / (1024 * 1024)  # Convert to MB
-
 
 def get_source_pdf_path(doc_name_base: str, doc_info: Optional[Dict] = None) -> Optional[Path]:
     """
@@ -218,115 +166,47 @@ def get_document_data_sizes(doc_name: str, doc_info: Dict) -> Dict[str, float]:
     return sizes
 
 
-def count_sessions() -> Dict[str, Any]:
-    """
-    统计会话信息（扫描平级目录）
+#: core 部件名 → 本端点历史响应体里的条目文案模板（字段与文案口径保持不变，
+#: 前端 manage.js 零改动）
+_PART_DELETED_LABELS = {
+    "json_data": "JSON 数据 ({size:.2f} MB)",
+    "vector_db": "向量数据库 ({size:.2f} MB)",
+    "images": "图片 ({size:.2f} MB)",
+    "summary": "摘要 ({detail}) ({size:.2f} MB)",
+    "brief": "摘要 ({detail}) ({size:.2f} MB)",
+    "generated": "登记产物 ({name}) ({size:.2f} MB)",
+    "source_pdf": "源 PDF 文件 ({size:.2f} MB)",
+    "metadata_db": "元数据向量数据库记录",
+}
 
-    Returns:
-        会话统计字典
-    """
-    sessions_dir = DATA_DIR / "sessions"
+_PART_FAILED_LABELS = {
+    "json_data": "JSON 数据",
+    "vector_db": "向量数据库",
+    "images": "图片",
+    "summary": "摘要 ({detail})",
+    "brief": "摘要 ({detail})",
+    "generated": "登记产物 ({name})",
+    "source_pdf": "源 PDF 文件",
+    "metadata_db": "元数据向量数据库",
+    "registry": "注册表记录",
+}
 
-    if not sessions_dir.exists():
-        return {
-            "total": 0,
-            "by_mode": {"single": 0, "cross": 0, "manual": 0},
-            "total_messages": 0,
-            "last_activity": None
-        }
 
-    stats = {
-        "total": 0,
-        "by_mode": {"single": 0, "cross": 0, "manual": 0},
-        "total_messages": 0,
-        "last_activity": None
-    }
+def _part_deleted_label(item: DeleteItem) -> str:
+    """core 的成功记录 → 历史 deleted 条目文案。"""
+    template = _PART_DELETED_LABELS.get(item.part, item.part + " ({size:.2f} MB)")
+    name = Path(item.path).name if item.path else ""
+    return template.format(size=item.size_mb, detail=item.detail or "", name=name)
 
-    last_update = None
 
-    for session_file in sessions_dir.glob("*.json"):
-        if session_file.name == "metadata.json":
-            continue
-        try:
-            with open(session_file, 'r', encoding='utf-8') as f:
-                session_data = json.load(f)
-                stats["total"] += 1
-
-                # 按 mode 字段统计
-                mode = session_data.get("mode", "cross")
-                if mode in stats["by_mode"]:
-                    stats["by_mode"][mode] += 1
-
-                messages = session_data.get("messages", [])
-                stats["total_messages"] += len(messages)
-
-                updated_at = session_data.get("updated_at")
-                if updated_at:
-                    if last_update is None or updated_at > last_update:
-                        last_update = updated_at
-        except Exception:
-            continue
-
-    stats["last_activity"] = last_update
-    return stats
+def _part_failed_label(item: DeleteItem) -> str:
+    """core 的失败记录 → 历史 failed 条目文案。"""
+    template = _PART_FAILED_LABELS.get(item.part, item.part)
+    name = Path(item.path).name if item.path else ""
+    return f"{template.format(detail=item.detail or '', name=name)}: {item.error}"
 
 
 # ==================== API Endpoints ====================
-
-@router.get("/overview", response_model=StorageOverview)
-async def get_storage_overview():
-    """
-    获取存储概览
-
-    Returns:
-        存储概览信息
-    """
-    try:
-        registry = DocumentRegistry()
-        doc_count = registry.count()
-
-        session_stats = count_sessions()
-
-        # Calculate storage breakdown
-        breakdown = {
-            "documents": {
-                "count": doc_count,
-                "size_mb": get_dir_size(PDF_DIR)
-            },
-            "json_data": {
-                "size_mb": get_dir_size(JSON_DATA_DIR)
-            },
-            "vector_db": {
-                "size_mb": get_dir_size(VECTOR_DB_DIR)
-            },
-            "images": {
-                "size_mb": get_dir_size(PDF_IMAGE_DIR)
-            },
-            "summaries": {
-                "size_mb": get_dir_size(OUTPUT_DIR)
-            },
-            "sessions": {
-                "count": session_stats["total"],
-                "size_mb": get_dir_size(DATA_DIR / "sessions")
-            }
-        }
-
-        total_storage = sum(
-            item.get("size_mb", 0) for item in breakdown.values()
-        )
-
-        return StorageOverview(
-            total_documents=doc_count,
-            total_sessions=session_stats["total"],
-            total_storage_mb=total_storage,
-            last_cleanup=None,  # TODO: Track cleanup history
-            breakdown=breakdown
-        )
-
-    except Exception as e:
-        print(f"❌ 获取存储概览失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.get("/documents", response_model=List[DocumentDetail])
 async def get_documents_detailed():
@@ -428,311 +308,6 @@ async def get_document_summary(doc_name: str):
     except Exception as e:
         print(f"❌ 获取文档摘要失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/documents/pending", response_model=List[PendingPDF])
-async def get_pending_pdfs():
-    """
-    获取待索引的PDF文件列表
-
-    Returns:
-        待索引PDF列表
-    """
-    try:
-        registry = DocumentRegistry()
-        indexed_pdfs = set()
-
-        # 获取所有已索引的PDF文件名
-        all_docs = registry.list_all()
-        for doc in all_docs:
-            doc_name = doc.get("doc_name", "")
-            # 确保添加.pdf扩展名
-            if not doc_name.endswith('.pdf'):
-                doc_name += '.pdf'
-            indexed_pdfs.add(doc_name)
-
-        # 扫描PDF目录
-        pending_pdfs = []
-        if PDF_DIR.exists():
-            for pdf_file in PDF_DIR.glob("*.pdf"):
-                if pdf_file.name not in indexed_pdfs:
-                    # 未索引的PDF
-                    stat = pdf_file.stat()
-                    pending_pdfs.append(PendingPDF(
-                        filename=pdf_file.name,
-                        file_path=str(pdf_file),
-                        size_mb=stat.st_size / (1024 * 1024),
-                        created_at=datetime.fromtimestamp(stat.st_ctime).isoformat()
-                    ))
-
-        # 按创建时间排序（最新的在前）
-        pending_pdfs.sort(key=lambda x: x.created_at, reverse=True)
-
-        return pending_pdfs
-
-    except Exception as e:
-        print(f"❌ 获取待索引PDF列表失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/pdfs")
-async def delete_pdf_source_files(request: PendingPDFDeleteRequest):
-    """
-    直接删除 data/pdf/ 下的 PDF 源文件（用于清理未索引或遗留的文件）
-
-    出于安全考虑：
-    - 只接受 data/pdf/ 目录内的文件名（禁止路径穿越）
-    - 仍被索引的文档不会在此删除，需通过文档的"完全删除"处理
-
-    Args:
-        request: 要删除的文件名列表
-
-    Returns:
-        删除结果
-    """
-    if not request.filenames:
-        raise HTTPException(status_code=400, detail="未指定要删除的文件")
-
-    try:
-        registry = DocumentRegistry()
-        indexed_names = set()
-        for doc in registry.list_all():
-            name = doc.get("doc_name", "")
-            indexed_names.add(name if name.endswith(".pdf") else f"{name}.pdf")
-
-        pdf_root = PDF_DIR.resolve()
-        deleted_items = []
-        failed_items = []
-        freed_space_mb = 0.0
-
-        for filename in request.filenames:
-            raw = str(filename).strip()
-
-            # 禁止目录穿越 / 子路径
-            if not raw or '/' in raw or '\\' in raw or raw.startswith('.'):
-                failed_items.append(f"{filename}: 非法文件名")
-                continue
-
-            candidate = raw if raw.lower().endswith(".pdf") else f"{raw}.pdf"
-
-            # 路径拼装统一过 path_guard 的唯一实现（与上面的手工检查同语义，
-            # 收敛后删除类路径不再各写一套校验）
-            try:
-                safe_path(PDF_DIR, candidate)
-            except ValueError as guard_e:
-                failed_items.append(f"{candidate}: 非法文件名")
-                continue
-
-            file_path = PDF_DIR / candidate
-
-            try:
-                if not file_path.is_file():
-                    failed_items.append(f"{candidate}: 文件不存在")
-                    continue
-                if pdf_root not in file_path.resolve().parents:
-                    failed_items.append(f"{candidate}: 不在 PDF 目录内")
-                    continue
-            except OSError as e:
-                failed_items.append(f"{candidate}: {e}")
-                continue
-
-            if candidate in indexed_names:
-                failed_items.append(f"{candidate}: 文档仍处于索引状态，请使用文档的“完全删除”")
-                continue
-
-            try:
-                size = file_path.stat().st_size / (1024 * 1024)
-                file_path.unlink()
-                deleted_items.append(f"{candidate} ({size:.2f} MB)")
-                freed_space_mb += size
-                print(f"✓ 已删除 PDF 源文件: {file_path}")
-            except Exception as e:
-                failed_items.append(f"{candidate}: {e}")
-
-        return {
-            "status": "success" if not failed_items else "partial",
-            "deleted": deleted_items,
-            "failed": failed_items,
-            "count": len(deleted_items),
-            "freed_mb": round(freed_space_mb, 2)
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"❌ 删除 PDF 源文件失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-async def _index_pdf_background(task_id: str, filename: str, pdf_path: Path):
-    """
-    后台索引任务
-
-    Args:
-        task_id: 任务ID
-        filename: PDF文件名
-        pdf_path: PDF文件路径
-    """
-    try:
-        from src.agents.indexing import IndexingAgent
-        from .config import load_config
-
-        doc_name_base = filename.replace('.pdf', '') if filename.endswith('.pdf') else filename
-
-        # 更新任务进度
-        task_manager.update_task(task_id, progress=10, status="running")
-
-        # 从配置加载 provider 和 pdf_preset
-        config = load_config()
-        provider = config.get("provider", "openai")
-        pdf_preset = config.get("pdf_preset", "high")
-        print(f"📌 使用配置: provider={provider}, pdf_preset={pdf_preset}")
-
-        # 创建索引agent
-        indexing_agent = IndexingAgent(provider=provider, pdf_preset=pdf_preset)
-        task_manager.update_task(task_id, progress=20)
-
-        print(f"🔄 后台索引任务开始: {filename} (task_id: {task_id})")
-
-        # 进度回调：agent 只上报阶段，任务落库逻辑留在 UI 侧
-        def _on_index_progress(stage: str, progress: int, message: str = "") -> None:
-            stage_progress = {"start": 30, "graph": 40}.get(stage)
-            if stage_progress is not None:
-                task_manager.update_task(task_id, progress=stage_progress)
-
-        # 执行索引（初始 state 由 IndexingAgent.index_document 统一构造）
-        result = await indexing_agent.index_document(
-            doc_name=doc_name_base,
-            doc_path=str(pdf_path),
-            doc_type="pdf",
-            progress_callback=_on_index_progress,
-        )
-
-        task_manager.update_task(task_id, progress=90)
-
-        if result.get("is_complete"):
-            task_manager.complete_task(task_id, success=True)
-            print(f"✅ 后台索引任务完成: {filename}")
-        else:
-            error_msg = result.get("error", "未知错误")
-            task_manager.complete_task(task_id, success=False, error=error_msg)
-            print(f"❌ 后台索引任务失败: {filename}, 错误: {error_msg}")
-
-    except Exception as e:
-        error_msg = str(e)
-        task_manager.complete_task(task_id, success=False, error=error_msg)
-        print(f"❌ 后台索引任务异常: {filename}, 错误: {error_msg}")
-        import traceback
-        traceback.print_exc()
-
-
-@router.post("/documents/{filename}/index")
-async def index_pdf(filename: str, background_tasks: BackgroundTasks):
-    """
-    启动PDF索引后台任务
-
-    Args:
-        filename: PDF文件名
-        background_tasks: FastAPI后台任务
-
-    Returns:
-        任务信息
-    """
-    try:
-        # 检查PDF文件是否存在
-        pdf_path = PDF_DIR / filename
-        if not pdf_path.exists():
-            raise HTTPException(status_code=404, detail=f"PDF文件不存在: {filename}")
-
-        # 检查是否已经索引
-        registry = DocumentRegistry()
-        doc_name_base = filename.replace('.pdf', '') if filename.endswith('.pdf') else filename
-        if registry.get_by_name(doc_name_base):
-            raise HTTPException(status_code=400, detail=f"文档已索引: {filename}")
-
-        # 创建后台任务
-        task_id = task_manager.create_task(
-            task_type="pdf_index",
-            filename=filename,
-            doc_name=doc_name_base
-        )
-
-        # 添加后台任务
-        background_tasks.add_task(_index_pdf_background, task_id, filename, pdf_path)
-
-        print(f"📋 索引任务已创建: {filename} (task_id: {task_id})")
-
-        return {
-            "status": "started",
-            "task_id": task_id,
-            "filename": filename,
-            "message": f"索引任务已启动"
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"❌ 创建索引任务失败: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/tasks/{task_id}")
-async def get_task_status(task_id: str):
-    """
-    查询任务状态
-
-    Args:
-        task_id: 任务ID
-
-    Returns:
-        任务状态信息
-    """
-    task = task_manager.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    return task
-
-
-#: core 部件名 → 本端点历史响应体里的条目文案模板（字段与文案口径保持不变，
-#: 前端 manage.js 零改动）
-_PART_DELETED_LABELS = {
-    "json_data": "JSON 数据 ({size:.2f} MB)",
-    "vector_db": "向量数据库 ({size:.2f} MB)",
-    "images": "图片 ({size:.2f} MB)",
-    "summary": "摘要 ({detail}) ({size:.2f} MB)",
-    "brief": "摘要 ({detail}) ({size:.2f} MB)",
-    "generated": "登记产物 ({name}) ({size:.2f} MB)",
-    "source_pdf": "源 PDF 文件 ({size:.2f} MB)",
-    "metadata_db": "元数据向量数据库记录",
-}
-
-_PART_FAILED_LABELS = {
-    "json_data": "JSON 数据",
-    "vector_db": "向量数据库",
-    "images": "图片",
-    "summary": "摘要 ({detail})",
-    "brief": "摘要 ({detail})",
-    "generated": "登记产物 ({name})",
-    "source_pdf": "源 PDF 文件",
-    "metadata_db": "元数据向量数据库",
-    "registry": "注册表记录",
-}
-
-
-def _part_deleted_label(item: DeleteItem) -> str:
-    """core 的成功记录 → 历史 deleted 条目文案。"""
-    template = _PART_DELETED_LABELS.get(item.part, item.part + " ({size:.2f} MB)")
-    name = Path(item.path).name if item.path else ""
-    return template.format(size=item.size_mb, detail=item.detail or "", name=name)
-
-
-def _part_failed_label(item: DeleteItem) -> str:
-    """core 的失败记录 → 历史 failed 条目文案。"""
-    template = _PART_FAILED_LABELS.get(item.part, item.part)
-    name = Path(item.path).name if item.path else ""
-    return f"{template.format(detail=item.detail or '', name=name)}: {item.error}"
 
 
 @router.delete("/documents/{doc_name}/parts")
@@ -864,80 +439,4 @@ async def batch_delete_documents(request: BatchDeleteRequest):
 
     except Exception as e:
         print(f"❌ 批量删除失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/sessions/stats", response_model=SessionStats)
-async def get_session_stats():
-    """
-    获取会话统计信息
-
-    Returns:
-        会话统计
-    """
-    try:
-        stats = count_sessions()
-
-        return SessionStats(
-            total_sessions=stats["total"],
-            by_mode=stats["by_mode"],
-            total_messages=stats["total_messages"],
-            last_activity=stats["last_activity"]
-        )
-
-    except Exception as e:
-        print(f"❌ 获取会话统计失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/cleanup/smart")
-async def smart_cleanup(days: int = Query(default=30, ge=1, le=365)):
-    """
-    智能清理旧数据
-
-    Args:
-        days: 清理多少天前的数据（默认30天）
-
-    Returns:
-        清理结果
-    """
-    try:
-        cutoff_date = datetime.now() - timedelta(days=days)
-        cutoff_str = cutoff_date.isoformat()
-
-        registry = DocumentRegistry()
-        all_docs = registry.list_all()
-
-        deleted_docs = []
-        freed_space_mb = 0.0
-
-        for doc in all_docs:
-            indexed_at = doc.get("indexed_at", doc.get("created_at", ""))
-
-            if indexed_at and indexed_at < cutoff_str:
-                doc_name = doc.get("doc_name", "")
-
-                # Delete this document
-                try:
-                    result = await delete_document_parts(
-                        doc_name,
-                        DeletePartsRequest(parts=["all"])
-                    )
-
-                    deleted_docs.append(doc_name)
-                    freed_space_mb += result["freed_space_mb"]
-
-                except Exception as e:
-                    print(f"⚠️  清理文档 {doc_name} 失败: {e}")
-
-        return {
-            "status": "success",
-            "cutoff_date": cutoff_str,
-            "deleted_documents": deleted_docs,
-            "count": len(deleted_docs),
-            "freed_mb": round(freed_space_mb, 2)
-        }
-
-    except Exception as e:
-        print(f"❌ 智能清理失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
