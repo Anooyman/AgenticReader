@@ -5,6 +5,7 @@
 1. 列出所有已索引的文档
 2. 查看文档详细信息
 3. 删除文档及其所有相关数据（vector_db, json, md, pdf_image 等）
+   ——实际清理统一委托 delete_service.delete_document_service()（唯一权威实现）
 4. 从 DocumentRegistry 中注销文档
 
 运行方式：
@@ -13,16 +14,17 @@
 """
 import logging
 from pathlib import Path
-from typing import Optional, Dict, List
-import shutil
+from typing import Dict
 import os
 
-from src.config.constants import (
-    PathConstants,
-    get_brief_summary_path,
-    get_vector_db_path,
-)
 from src.core.document_management import DocumentRegistry
+# 删除的唯一权威实现（REFACTOR_REPORT P2-1）：registry 注销、索引目录删除、
+# brief 文件清理都只在 delete_service 里做，CLI 与 UI 共用同一路。
+from src.core.document_management.delete_service import (
+    PART_METADATA_DB,
+    delete_document_service,
+    document_paths,
+)
 
 # 获取 DATA_ROOT，如果导入失败则使用默认值
 try:
@@ -68,11 +70,14 @@ def get_document_files(doc_name: str) -> Dict[str, Path]:
     """
     获取文档的所有相关文件路径
 
+    路径拼装统一走 delete_service.document_paths()——删除与统计共用同一处，
+    避免「显示出来的」和「实际被删掉的」两套路径各拼一份而漂移（D3 的教训）。
+
     Args:
         doc_name: 文档名称（不含扩展名）
 
     Returns:
-        dict: 文件类型到路径的映射
+        dict: 文件类型到路径的映射（键名保持历史约定，供列表展示使用）
     """
     if not doc_name:
         logger.error("文档名称为空")
@@ -84,12 +89,14 @@ def get_document_files(doc_name: str) -> Dict[str, Path]:
 
     try:
         # 向量库/摘要路径统一由 constants helper 生成（历史上这里手抄过后缀，
-        # 与索引落盘处必须一致）
+        # 与索引落盘处必须一致）；目录穿越校验在 document_paths 内部过 safe_path
+        paths = document_paths(doc_name)
+
         files = {
-            "vector_db": get_vector_db_path(doc_name),
-            "json_folder": Path(DATA_ROOT) / PathConstants.JSON_DATA_DIR / doc_name,  # 所有 JSON 文件的文件夹
-            "pdf_image": Path(DATA_ROOT) / PathConstants.PDF_IMAGE_DIR / doc_name,
-            "brief_summary": get_brief_summary_path(doc_name),
+            "vector_db": paths.vector_db,
+            "json_folder": paths.json_data,  # 所有 JSON 文件的文件夹
+            "pdf_image": paths.images,
+            "brief_summary": paths.brief,
         }
 
         return files
@@ -240,18 +247,45 @@ def display_document_info(doc_name: str, doc_data: Dict):
     print()
 
 
+# CLI 展示用的部件名 → 历史打印文案（保持旧版清单的可读性）
+_CLI_PART_LABELS = {
+    "json_data": "json_folder",
+    "vector_db": "vector_db",
+    "images": "pdf_image",
+    "summary": "输出文件(摘要)",
+    "brief": "brief_summary",
+    "generated": "注册表登记产物",
+    "source_pdf": "源 PDF",
+    PART_METADATA_DB: "元数据向量数据库",
+}
+
+
 def delete_document_files(doc_name: str, confirm: bool = True) -> bool:
     """
-    删除文档的所有相关文件
+    删除文档的所有相关文件（CLI 入口）
+
+    真正的清理逻辑在唯一权威实现
+    :func:`src.core.document_management.delete_service.delete_document_service`
+    （registry 注销、索引目录删除、brief 文件清理的唯一出处）；本函数只保留
+    CLI 才需要的两件事：删除前列出清单与体积、可选的 ``input()`` 交互确认。
+
+    语义与其它入口一致（parts=None 即全删，不含源 PDF）。
 
     Args:
         doc_name: 文档名称
         confirm: 是否需要用户确认
 
     Returns:
-        bool: 是否成功删除
+        bool: 是否成功删除（无任何失败项，且确实清掉了东西或注销了记录）
     """
     logger.info(f"\n准备删除文档: {doc_name}")
+
+    # 非法名（空 / 目录穿越）直接拒绝，不进入交互
+    try:
+        document_paths(doc_name)
+    except ValueError as e:
+        logger.error(f"❌ 非法文档名: {e}")
+        return False
 
     # 获取文档文件
     files = get_document_files(doc_name)
@@ -278,35 +312,7 @@ def delete_document_files(doc_name: str, confirm: bool = True) -> bool:
             logger.debug(f"文件不存在: {file_type} - {file_path}")
 
     if not existing_files:
-        logger.warning("⚠️  没有找到任何相关文件")
-
-        # 尝试从 DocumentRegistry 和 MetadataVectorDB 注销（即使文件不存在）
-        try:
-            doc_registry = DocumentRegistry()
-            doc_info = doc_registry.get_by_name(doc_name)
-            if doc_info:
-                doc_id = doc_info.get("doc_id")
-                if doc_id:
-                    # 从 DocumentRegistry 注销
-                    doc_registry.delete(doc_id)
-                    logger.info("✓ 已从 DocumentRegistry 中注销")
-                    print("\n📝 已从文档注册表中移除记录")
-
-                    # 从 MetadataVectorDB 删除元数据
-                    try:
-                        from src.core.vector_db.metadata_db import MetadataVectorDB
-                        metadata_db = MetadataVectorDB()
-                        if metadata_db.delete_document(doc_id):
-                            logger.info("✓ 已从 MetadataVectorDB 中删除元数据")
-                            print("📝 已从元数据向量数据库中移除")
-                    except Exception as meta_e:
-                        logger.error(f"✗ 从 MetadataVectorDB 删除失败: {meta_e}")
-
-                    return True
-        except Exception as e:
-            logger.error(f"✗ 从 DocumentRegistry 注销失败: {e}")
-
-        return False
+        logger.warning("⚠️  没有找到任何相关文件（仍会尝试注销注册表记录）")
 
     print(f"\n总计: {format_size(total_size)}")
 
@@ -318,73 +324,43 @@ def delete_document_files(doc_name: str, confirm: bool = True) -> bool:
             logger.info("已取消删除")
             return False
 
-    # 执行删除
+    # 执行删除：交给唯一权威实现，CLI 不再自己 rmtree / 写注册表
     logger.info("\n开始删除文件...")
     print("\n正在删除:")
-    deleted_count = 0
-    failed_files = []
 
-    for file_type, file_path, size in existing_files:
-        try:
-            logger.debug(f"尝试删除: {file_type} - {file_path}")
-            if file_path.is_file():
-                logger.debug(f"  类型: 文件")
-                file_path.unlink()
-                logger.info(f"  ✓ 已删除文件: {file_type}")
-                print(f"  ✓ {file_type} (文件)")
-            elif file_path.is_dir():
-                logger.debug(f"  类型: 目录")
-                shutil.rmtree(file_path)
-                logger.info(f"  ✓ 已删除目录: {file_type}")
-                print(f"  ✓ {file_type} (目录)")
-            else:
-                logger.warning(f"  ⚠️  路径既不是文件也不是目录: {file_path}")
-                print(f"  ⚠️  {file_type} (未知类型，跳过)")
-                continue
-            deleted_count += 1
-        except PermissionError as e:
-            logger.error(f"  ✗ 权限不足，无法删除 {file_type}: {e}")
-            print(f"  ✗ {file_type} (权限不足)")
-            failed_files.append(file_type)
-        except Exception as e:
-            logger.error(f"  ✗ 删除失败 {file_type}: {e}")
-            print(f"  ✗ {file_type} (错误: {str(e)})")
-            failed_files.append(file_type)
+    result = delete_document_service(doc_name)
 
-    # 从 DocumentRegistry 和 MetadataVectorDB 中删除
-    try:
-        doc_registry = DocumentRegistry()
-        doc_info = doc_registry.get_by_name(doc_name)
-        if doc_info:
-            doc_id = doc_info.get("doc_id")
-            if doc_id:
-                # 从 DocumentRegistry 注销
-                doc_registry.delete(doc_id)
-                logger.info("✓ 已从 DocumentRegistry 中注销")
+    for item in result.deleted:
+        label = _CLI_PART_LABELS.get(item.part, item.part)
+        suffix = f" ({item.size_mb:.2f} MB)" if item.size_mb else ""
+        logger.info(f"  ✓ 已删除: {item.part}")
+        print(f"  ✓ {label}{suffix}")
 
-                # 从 MetadataVectorDB 删除元数据
-                try:
-                    from src.core.vector_db.metadata_db import MetadataVectorDB
-                    metadata_db = MetadataVectorDB()
-                    if metadata_db.delete_document(doc_id):
-                        logger.info("✓ 已从 MetadataVectorDB 中删除元数据")
-                        print("  ✓ 元数据向量数据库已清理")
-                    else:
-                        logger.warning("⚠️  元数据删除未完全成功")
-                except Exception as meta_e:
-                    logger.error(f"✗ 从 MetadataVectorDB 删除失败: {meta_e}")
-                    print(f"  ⚠️  元数据清理失败: {meta_e}")
-    except Exception as e:
-        logger.error(f"✗ 从 DocumentRegistry 注销失败: {e}")
+    if PART_METADATA_DB in result.deleted_parts:
+        logger.info("✓ 已从 MetadataVectorDB 中删除元数据")
+        print("  ✓ 元数据向量数据库已清理")
+
+    if result.registry_removed:
+        logger.info("✓ 已从 DocumentRegistry 中注销")
+        print("\n📝 已从文档注册表中移除记录")
 
     # 总结
     print(f"\n删除完成:")
-    print(f"  - 成功删除: {deleted_count} 项")
-    if failed_files:
-        print(f"  - 删除失败: {len(failed_files)} 项")
-        print(f"    失败项: {', '.join(failed_files)}")
+    print(f"  - 成功删除: {len(result.deleted)} 项")
+    if result.failed:
+        failed_parts = sorted({i.part for i in result.failed})
+        print(f"  - 删除失败: {len(result.failed)} 项")
+        print(f"    失败项: {', '.join(failed_parts)}")
+        for item in result.failed:
+            logger.error(f"  ✗ 删除失败 {item.part}: {item.error}")
+        return False
 
-    return len(failed_files) == 0
+    if not result.anything_done:
+        # 既没有产物，注册表里也没有记录——与旧版一致地返回 False
+        logger.warning("⚠️  没有找到任何相关文件")
+        return False
+
+    return True
 
 
 def interactive_manage():

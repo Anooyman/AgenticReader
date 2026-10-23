@@ -7,7 +7,6 @@ from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from pathlib import Path
-import shutil
 import json
 from datetime import datetime, timedelta
 
@@ -16,8 +15,14 @@ from ...config import (
     PDF_IMAGE_DIR, OUTPUT_DIR, DATA_DIR
 )
 from src.core.document_management import DocumentRegistry
+# 删除的唯一权威实现（REFACTOR_REPORT P2-1）：rmtree / registry 注销 / brief 清理
+# 全部在 core 里，本模块只做 parts 映射与响应体（status / deleted / failed）的翻译。
+from src.core.document_management.delete_service import (
+    DeleteItem,
+    delete_document_service,
+    find_source_pdf,
+)
 from src.config.constants import (
-    get_metadata_db_path,
     get_summary_paths,
     get_vector_db_path,
 )
@@ -136,6 +141,9 @@ def get_source_pdf_path(doc_name_base: str, doc_info: Optional[Dict] = None) -> 
     """
     定位文档的本地源 PDF 文件
 
+    委托 core 层唯一实现 ``delete_service.find_source_pdf``——数据管理页统计的
+    has_pdf / pdf_size_mb 与「完全删除」实际删掉的那个文件因此不会各拼一套。
+
     优先使用 data/pdf/{name}.pdf（上传/索引时使用的目录），
     其次回退到注册表里记录的 doc_path（可能是外部路径）。
 
@@ -146,22 +154,7 @@ def get_source_pdf_path(doc_name_base: str, doc_info: Optional[Dict] = None) -> 
     Returns:
         存在的源文件路径，找不到则返回 None
     """
-    candidates = []
-    if PDF_DIR.exists():
-        candidates.append(PDF_DIR / f"{doc_name_base}.pdf")
-    if doc_info:
-        doc_path = doc_info.get("doc_path")
-        if doc_path:
-            candidates.append(Path(doc_path))
-
-    for path in candidates:
-        try:
-            if path.is_file():
-                return path
-        except OSError:
-            continue
-
-    return None
+    return find_source_pdf(doc_name_base, doc_info)
 
 
 def get_document_data_sizes(doc_name: str, doc_info: Dict) -> Dict[str, float]:
@@ -521,6 +514,15 @@ async def delete_pdf_source_files(request: PendingPDFDeleteRequest):
                 continue
 
             candidate = raw if raw.lower().endswith(".pdf") else f"{raw}.pdf"
+
+            # 路径拼装统一过 path_guard 的唯一实现（与上面的手工检查同语义，
+            # 收敛后删除类路径不再各写一套校验）
+            try:
+                safe_path(PDF_DIR, candidate)
+            except ValueError as guard_e:
+                failed_items.append(f"{candidate}: 非法文件名")
+                continue
+
             file_path = PDF_DIR / candidate
 
             try:
@@ -693,10 +695,57 @@ async def get_task_status(task_id: str):
     return task
 
 
+#: core 部件名 → 本端点历史响应体里的条目文案模板（字段与文案口径保持不变，
+#: 前端 manage.js 零改动）
+_PART_DELETED_LABELS = {
+    "json_data": "JSON 数据 ({size:.2f} MB)",
+    "vector_db": "向量数据库 ({size:.2f} MB)",
+    "images": "图片 ({size:.2f} MB)",
+    "summary": "摘要 ({detail}) ({size:.2f} MB)",
+    "brief": "摘要 ({detail}) ({size:.2f} MB)",
+    "generated": "登记产物 ({name}) ({size:.2f} MB)",
+    "source_pdf": "源 PDF 文件 ({size:.2f} MB)",
+    "metadata_db": "元数据向量数据库记录",
+}
+
+_PART_FAILED_LABELS = {
+    "json_data": "JSON 数据",
+    "vector_db": "向量数据库",
+    "images": "图片",
+    "summary": "摘要 ({detail})",
+    "brief": "摘要 ({detail})",
+    "generated": "登记产物 ({name})",
+    "source_pdf": "源 PDF 文件",
+    "metadata_db": "元数据向量数据库",
+    "registry": "注册表记录",
+}
+
+
+def _part_deleted_label(item: DeleteItem) -> str:
+    """core 的成功记录 → 历史 deleted 条目文案。"""
+    template = _PART_DELETED_LABELS.get(item.part, item.part + " ({size:.2f} MB)")
+    name = Path(item.path).name if item.path else ""
+    return template.format(size=item.size_mb, detail=item.detail or "", name=name)
+
+
+def _part_failed_label(item: DeleteItem) -> str:
+    """core 的失败记录 → 历史 failed 条目文案。"""
+    template = _PART_FAILED_LABELS.get(item.part, item.part)
+    name = Path(item.path).name if item.path else ""
+    return f"{template.format(detail=item.detail or '', name=name)}: {item.error}"
+
+
 @router.delete("/documents/{doc_name}/parts")
 async def delete_document_parts(doc_name: str, request: DeletePartsRequest):
     """
     删除文档的指定部分数据（粒度控制）
+
+    清理逻辑不在本模块：一律委托 core 层唯一实现
+    :func:`src.core.document_management.delete_service.delete_document_service`
+    （registry 注销、索引目录删除、brief 文件清理的唯一权威出处；路径统一过
+    ``safe_path``，删完向量库还会作废读侧索引缓存）。本端点只做 parts 映射与
+    响应体（status / deleted / failed / freed_space_mb）的翻译，
+    非法文档名 → 400、什么都没删到 → 404 的既有语义不变。
 
     Args:
         doc_name: 文档名称
@@ -706,137 +755,26 @@ async def delete_document_parts(doc_name: str, request: DeletePartsRequest):
         删除结果
     """
     try:
-        registry = DocumentRegistry()
-        doc_info = registry.get_by_name(doc_name)
-
-        # 目录穿越防护：doc_name 会派生出多个数据目录路径，
-        # 统一校验名称不越过 DATA_DIR，杜绝通过 "../" 等操作删除数据目录外的内容
+        # 注意：即使 Registry 中没有记录，core 也会继续尝试删除文件，
+        # 这样可以清理孤立的文件（Registry 已被删除但文件还在的情况）
         try:
-            safe_path(DATA_DIR, doc_name)
+            result = delete_document_service(doc_name, parts=request.parts)
         except ValueError as guard_e:
+            # 目录穿越防护：doc_name 会派生出多个数据目录路径，
+            # core 内部统一校验名称不越过 DATA_DIR，杜绝通过 "../" 删除外部内容
             raise HTTPException(status_code=400, detail=f"非法文档名: {guard_e}")
 
-        # 注意：即使Registry中没有记录，也继续尝试删除文件
-        # 这样可以清理孤立的文件（Registry已被删除但文件还在的情况）
+        deleted_items = [_part_deleted_label(item) for item in result.deleted]
+        if result.registry_removed:
+            deleted_items.append("注册表记录")
+        failed_items = [_part_failed_label(item) for item in result.failed]
+        freed_space_mb = result.freed_space_mb
 
-        # Strip .pdf extension for correct path lookups
-        doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
-
-        deleted_items = []
-        failed_items = []
-        freed_space_mb = 0.0
-
-        parts = request.parts
-
-        # 如果包含 "all"，则删除所有派生数据
-        # 注意："all" 不包含本地源 PDF 文件，需显式指定 "pdf"
-        if "all" in parts:
-            parts = ["json", "vector_db", "images", "summary", "registry"] + (
-                ["pdf"] if "pdf" in parts else []
-            )
-
-        # 删除 JSON 数据
-        if "json" in parts:
-            json_dir = JSON_DATA_DIR / doc_name_base
-            if json_dir.exists():
-                try:
-                    size = get_dir_size(json_dir)
-                    shutil.rmtree(json_dir)
-                    deleted_items.append(f"JSON 数据 ({size:.2f} MB)")
-                    freed_space_mb += size
-                except Exception as e:
-                    failed_items.append(f"JSON 数据: {e}")
-
-        # 删除向量数据库（路径 helper 统一生成，缺后缀会留下孤儿 FAISS 目录）
-        if "vector_db" in parts:
-            vector_db_path = get_vector_db_path(doc_name_base)
-            if vector_db_path.exists():
-                try:
-                    size = get_dir_size(vector_db_path)
-                    shutil.rmtree(vector_db_path)
-                    deleted_items.append(f"向量数据库 ({size:.2f} MB)")
-                    freed_space_mb += size
-                except Exception as e:
-                    failed_items.append(f"向量数据库: {e}")
-
-        # 删除图片
-        if "images" in parts:
-            images_dir = PDF_IMAGE_DIR / doc_name_base
-            if images_dir.exists():
-                try:
-                    size = get_dir_size(images_dir)
-                    shutil.rmtree(images_dir)
-                    deleted_items.append(f"图片 ({size:.2f} MB)")
-                    freed_space_mb += size
-                except Exception as e:
-                    failed_items.append(f"图片: {e}")
-
-        # 删除摘要文件
-        if "summary" in parts:
-            # 覆盖历史命名的全部摘要产物（见 constants.get_summary_paths）
-            for summary_file in get_summary_paths(doc_name_base):
-                if summary_file.exists():
-                    try:
-                        size = get_dir_size(summary_file)
-                        summary_file.unlink()
-                        deleted_items.append(f"摘要 ({summary_file.suffix}) ({size:.2f} MB)")
-                        freed_space_mb += size
-                    except Exception as e:
-                        failed_items.append(f"摘要 ({summary_file.suffix}): {e}")
-
-        # 删除本地源 PDF 文件（需显式指定 "pdf"，"all" 不包含它）
-        if "pdf" in parts:
-            source_pdf = get_source_pdf_path(doc_name_base, doc_info)
-            if source_pdf is not None:
-                try:
-                    size = get_dir_size(source_pdf)
-                    source_pdf.unlink()
-                    deleted_items.append(f"源 PDF 文件 ({size:.2f} MB)")
-                    freed_space_mb += size
-                    print(f"✓ 已删除源 PDF 文件: {source_pdf}")
-                except Exception as e:
-                    failed_items.append(f"源 PDF 文件: {e}")
-            else:
-                print(f"ℹ️  未找到 {doc_name_base} 的源 PDF 文件，跳过")
-
-        # 如果删除了所有部分，则从注册表和元数据向量数据库中删除
-        if "registry" in parts or set(parts) >= {"json", "vector_db", "images", "summary"}:
-            # 只有当Registry中有记录时才尝试删除Registry和MetadataDB
-            if doc_info:
-                doc_id = doc_info["doc_id"]
-
-                # 1. 先从 MetadataVectorDB 中删除元数据（在 Registry 删除之前）
-                # 这样 MetadataDB.delete_document() 可以从 Registry 中获取 doc_name 用于日志
-                # 仅在元数据索引文件存在时尝试加载和删除
-                try:
-                    metadata_index_file = get_metadata_db_path() / "index.faiss"
-
-                    if metadata_index_file.exists():
-                        from src.core.vector_db.metadata_db import MetadataVectorDB
-                        metadata_db = MetadataVectorDB()
-                        if metadata_db.delete_document(doc_id):
-                            deleted_items.append("元数据向量数据库记录")
-                            print(f"✓ 已从 MetadataVectorDB 中删除元数据: {doc_name}")
-                        else:
-                            failed_items.append("元数据向量数据库: 删除未完全成功")
-                    else:
-                        print(f"ℹ️  元数据向量数据库未初始化，跳过删除")
-                except Exception as meta_e:
-                    failed_items.append(f"元数据向量数据库: {meta_e}")
-                    print(f"⚠️ 从 MetadataVectorDB 删除失败: {meta_e}")
-
-                # 2. 再从 DocumentRegistry 中删除
-                try:
-                    registry.delete(doc_id)
-                    deleted_items.append("注册表记录")
-                except Exception as e:
-                    failed_items.append(f"注册表记录: {e}")
-            else:
-                # Registry中没有记录，记录一个警告但不算失败
-                print(f"⚠️  文档 {doc_name} 在Registry中不存在，跳过Registry删除")
+        if "source_pdf" in result.deleted_parts:
+            print(f"✓ 已删除源 PDF 文件: {[i.path for i in result.deleted if i.part == 'source_pdf']}")
 
         # 如果什么都没删除（文件不存在且Registry也没记录），返回404
-        if len(deleted_items) == 0 and not doc_info:
+        if len(deleted_items) == 0 and not result.doc_info:
             raise HTTPException(status_code=404, detail=f"文档不存在: {doc_name}")
 
         return {

@@ -3,18 +3,19 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, BackgroundTasks
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
-import shutil
 from pathlib import Path
 
-from ...config import PDF_DIR, JSON_DATA_DIR, PDF_IMAGE_DIR, DATA_DIR
+from ...config import PDF_DIR
 
-from src.config.constants import (
-    get_metadata_db_path,
-    get_summary_paths,
-    get_vector_db_path,
-)
 from src.config.settings import resolve_provider
 from src.core.document_management import DocumentRegistry
+# 删除的唯一权威实现（REFACTOR_REPORT P2-1）：本模块不再自己 rmtree / 注销注册表，
+# 只负责把 core 的结构化结果翻译成 HTTP 状态码与响应体。
+from src.core.document_management.delete_service import (
+    PART_METADATA_DB,
+    DeleteItem,
+    delete_document_service,
+)
 from src.utils.path_guard import safe_path
 
 router = APIRouter()
@@ -251,10 +252,37 @@ async def _index_document_task(doc_name: str, provider: str, pdf_preset: str):
         traceback.print_exc()
 
 
+#: core 部件名 → 本端点响应体的历史文案（前端 manage.js 不看这个字段，
+#: 但字段名与取值口径保持不变，避免无谓的行为漂移）
+_DELETED_ITEM_LABELS = {
+    "json_data": "JSON数据",
+    "vector_db": "向量数据库",
+    "images": "PDF图像",
+    "summary": "输出文件({detail})",
+    "brief": "输出文件({detail})",
+    "generated": "登记产物({name})",
+    "source_pdf": "源PDF文件",
+    PART_METADATA_DB: "元数据记录",
+}
+
+
+def _deleted_item_label(item: DeleteItem) -> str:
+    """把 core 的删除记录翻译成本端点历史响应体里的中文条目。"""
+    template = _DELETED_ITEM_LABELS.get(item.part, item.part)
+    name = Path(item.path).name if item.path else ""
+    return template.format(detail=item.detail or "", name=name)
+
+
 @router.delete("/{doc_name}")
 async def delete_document(doc_name: str) -> Dict[str, Any]:
     """
     删除文档及其所有相关数据
+
+    清理逻辑不在本模块：一律委托 core 层唯一实现
+    :func:`src.core.document_management.delete_service.delete_document_service`
+    （registry 注销、索引目录删除、brief 文件清理的唯一权威出处，路径统一过
+    ``safe_path``，删完向量库还会作废读侧索引缓存）。本端点只做三件事：
+    parts 映射（本入口是全删）、非法名 → 400、响应体文案。
 
     Args:
         doc_name: 文档名称
@@ -263,80 +291,33 @@ async def delete_document(doc_name: str) -> Dict[str, Any]:
         删除结果
     """
     try:
-        registry = DocumentRegistry()
-
-        # 目录穿越防护：doc_name 派生出各数据目录路径，校验其不越过 DATA_DIR
+        # parts=None → 全删（与既有语义一致：不含 data/pdf 下的源文件）；
+        # core 内部对 doc_name 过 safe_path，越界抛 ValueError → 400
         try:
-            safe_path(DATA_DIR, doc_name)
+            result = delete_document_service(doc_name)
         except ValueError as guard_e:
             raise HTTPException(status_code=400, detail=f"非法文档名: {guard_e}")
 
-        # Strip .pdf extension for correct path lookups
-        doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
+        deleted_items = [_deleted_item_label(item) for item in result.deleted]
+        if result.registry_removed:
+            deleted_items.append("注册表记录")
+        freed_space_mb = result.freed_space_mb
 
-        deleted_items = []
-        freed_space_mb = 0.0
-
-        # 删除 JSON 数据
-        json_dir = JSON_DATA_DIR / doc_name_base
-        if json_dir.exists():
-            size = sum(f.stat().st_size for f in json_dir.rglob('*') if f.is_file()) / (1024 * 1024)
-            shutil.rmtree(json_dir)
-            deleted_items.append("JSON数据")
-            freed_space_mb += size
-
-        # 删除向量数据库（目录名由 constants helper 统一生成，手抄漏后缀就会
-        # 删不到 → FAISS 目录成为孤儿）
-        vector_db_path = get_vector_db_path(doc_name_base)
-        if vector_db_path.exists():
-            size = sum(f.stat().st_size for f in vector_db_path.rglob('*') if f.is_file()) / (1024 * 1024)
-            shutil.rmtree(vector_db_path)
-            deleted_items.append("向量数据库")
-            freed_space_mb += size
-
-        # 删除 PDF 图像
-        pdf_image_dir = PDF_IMAGE_DIR / doc_name_base
-        if pdf_image_dir.exists():
-            size = sum(f.stat().st_size for f in pdf_image_dir.rglob('*') if f.is_file()) / (1024 * 1024)
-            shutil.rmtree(pdf_image_dir)
-            deleted_items.append("PDF图像")
-            freed_space_mb += size
-
-        # 删除输出文件（摘要）：与数据管理页 delete_document_parts 同一套命名，
-        # 覆盖 {doc}_brief_summary / {doc}_summary / {doc} × .md/.pdf
-        for output_file in get_summary_paths(doc_name_base):
-            if output_file.exists():
-                size = output_file.stat().st_size / (1024 * 1024)
-                output_file.unlink()
-                deleted_items.append(f"输出文件({output_file.suffix})")
-                freed_space_mb += size
-
-        # 从 DocumentRegistry 中删除
-        doc_info = registry.get_by_name(doc_name_base)
-        if doc_info:
-            doc_id = doc_info.get("doc_id")
-            if doc_id:
-                # 删除元数据向量数据库记录（仅在索引文件存在时尝试）
-                try:
-                    metadata_index_file = get_metadata_db_path() / "index.faiss"
-
-                    if metadata_index_file.exists():
-                        from src.core.vector_db.metadata_db import MetadataVectorDB
-                        metadata_db = MetadataVectorDB()
-                        if metadata_db.delete_document(doc_id):
-                            deleted_items.append("元数据记录")
-                            print(f"✅ 已从元数据向量数据库删除: {doc_name}")
-                    else:
-                        print(f"ℹ️  元数据向量数据库未初始化，跳过删除")
-                except Exception as meta_e:
-                    print(f"⚠️ 删除元数据失败: {meta_e}")
-
-                # 删除注册表记录
-                registry.delete(doc_id)
-                deleted_items.append("注册表记录")
+        # 与旧实现一致：产物删除 / 注册表注销失败 → 500；
+        # 元数据向量库清理失败只告警（旧实现就是 print 后继续）
+        hard_failures = [item for item in result.failed if item.part != PART_METADATA_DB]
+        if hard_failures:
+            detail = "; ".join(
+                f"{_deleted_item_label(item)}: {item.error}" for item in hard_failures
+            )
+            print(f"❌ 删除文档失败: {detail}")
+            raise HTTPException(status_code=500, detail=detail)
 
         if not deleted_items:
             raise HTTPException(status_code=404, detail=f"文档不存在: {doc_name}")
+
+        for item in result.failed:
+            print(f"⚠️ {_deleted_item_label(item)} 清理失败: {item.error}")
 
         print(f"✅ 文档已删除: {doc_name}, 释放空间: {freed_space_mb:.2f}MB")
 
