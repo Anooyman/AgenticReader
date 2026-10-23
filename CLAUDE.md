@@ -111,11 +111,14 @@ src/
 │   │   ├── config.py         # CORS_ORIGINS env、默认只放行 localhost 来源
 │   │   ├── api/pages.py      # 7 个页面路由；api/websocket.py /ws/chat
 │   │   ├── api/v1/           # documents chat pdf structure config
-│   │   │                     #   sessions data briefs jobs memory speech llmmemory
+│   │   │                     #   sessions data+data_storage+data_ops+data_common
+│   │   │                     #   briefs jobs memory speech llmmemory
 │   │   └── services/         # session_manager chat_service chat_ingest job_runner
 │   │                         #   memory_browse task_service briefs_data
 │   ├── templates/            # base dashboard chat config manage structure_editor briefs memory
-│   └── static/               # css/ + js/（api/chat-enhancer/chat/manage/config/structure_editor/briefs）
+│   └── static/               # css/（api/chat/chat-enhanced/config/dashboard/manage/
+│                             #   briefs/memory 等）+ js/（api/chat-enhancer/chat/manage/
+│                             #   config/structure_editor/briefs/dashboard/memory）
 └── utils/                    # path_guard(safe_path 防目录穿越)、helpers、validators、
                               #   async_utils、json_io(write_json_atomic 唯一实现)
 ```
