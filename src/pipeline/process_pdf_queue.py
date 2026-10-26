@@ -10,6 +10,10 @@ AnswerAgent（跨仓库 venv 隔离），合并进 AgenticReader 后两者在同
 单条目失败不阻塞整批：每个 item 独立 try/except + continue，超过
 MAX_ATTEMPTS 次转 failed_permanent。每步处理后立即 checkpoint 落盘 queue。
 
+队列状态机推进的壳（claim/finish/fail 那圈 try/except、汇总与日志前缀）与
+process_web_queue 共用，抽在 src/pipeline/common.py；本文件只留 pdf 领域的
+下载 / 索引 / 六维度问答 / 摘要落盘 / memory ingest。
+
 用法：
     python3 -m src.pipeline.process_pdf_queue [--limit N] [--provider openai]
 """
@@ -20,14 +24,18 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.agents.answer import AnswerAgent
 from src.agents.indexing import IndexingAgent
 from src.config.settings import DATA_ROOT
 from src.memory.config import NAMESPACE_AI_RESEARCH
-from src.memory.ingest import ingest_source
+from src.pipeline.common import (
+    answer_qa_loop,
+    ingest_summary_to_memory,
+    log_item,
+    log_item_done,
+    process_queue_batch,
+)
 from src.pipeline.generate_qa_brief import generate_brief_for_summary
 from src.pipeline.paths import SUMMARIES_DIR, write_json_atomic
-from src.pipeline.queue_store import claim_item, fail_item, finish_item, select_processable
 
 PDF_DIR = Path(DATA_ROOT) / "pdf"
 
@@ -82,17 +90,9 @@ async def index_document(doc_name: str, pdf_path: Path, provider: str):
 
 
 async def run_qa(doc_name: str, provider: str) -> dict:
-    qa = {}
-    for key, question in QUESTIONS_PDF:
-        agent = AnswerAgent(doc_name=doc_name, provider=provider)
-        result = await agent.query(
-            user_query=question,
-            enabled_tools=["retrieve_documents"],
-            selected_docs=[doc_name],
-        )
-        qa[key] = result.get("final_answer", "")
-        agent.reset_history()
-    return qa
+    """六维度问答。循环骨架与 web 的五维度共用（见 common.answer_qa_loop），
+    题目清单 QUESTIONS_PDF 是本文件的产品口径，留在这里。"""
+    return await answer_qa_loop(doc_name, QUESTIONS_PDF, lambda: provider)
 
 
 async def process_item(item: dict, provider: str, registry: dict) -> None:
@@ -103,22 +103,22 @@ async def process_item(item: dict, provider: str, registry: dict) -> None:
     already_indexed = existing is not None and existing.get("status") == "completed"
 
     if already_indexed:
-        print(f"  [{doc_name}] 已在 AgenticReader doc_registry 中完成索引，跳过下载/索引")
+        log_item(doc_name, "已在 AgenticReader doc_registry 中完成索引，跳过下载/索引")
         item["artifacts"]["agenticreader_doc_id"] = existing.get("doc_id")
         item["pipeline_stage"] = "indexed"
     else:
         if item.get("pipeline_stage") is None:
-            print(f"  [{doc_name}] 下载 PDF: {item['pdf_url']}")
+            log_item(doc_name, f"下载 PDF: {item['pdf_url']}")
             download_pdf(item["pdf_url"], pdf_path)
             item["pipeline_stage"] = "downloaded"
 
-        print(f"  [{doc_name}] 调用 IndexingAgent 索引...")
+        log_item(doc_name, "调用 IndexingAgent 索引...")
         result = await index_document(doc_name, pdf_path, provider)
         item["artifacts"]["agenticreader_doc_id"] = result.get("doc_id")
         item["artifacts"]["index_path"] = result.get("index_path")
         item["pipeline_stage"] = "indexed"
 
-    print(f"  [{doc_name}] 跑六维度详细问答...")
+    log_item(doc_name, "跑六维度详细问答...")
     qa = await run_qa(doc_name, provider)
     item["pipeline_stage"] = "qa_done"
 
@@ -136,59 +136,33 @@ async def process_item(item: dict, provider: str, registry: dict) -> None:
         "generated_at": datetime.now(timezone.utc).astimezone().isoformat(),
     }
 
-    print(f"  [{doc_name}] 生成简明摘要...")
+    log_item(doc_name, "生成简明摘要...")
     summary["qa_brief"] = await generate_brief_for_summary(summary, provider)
 
     summary_path = SUMMARIES_DIR / "pdf" / f"{doc_name}.json"
     write_json_atomic(summary_path, summary)
     item["artifacts"]["summary_path"] = str(summary_path)
 
-    print(f"  [{doc_name}] 写入 memory...")
-    try:
-        memory_report = await ingest_source(
-            str(summary_path), source_type="ai_research",
-            namespace=NAMESPACE_AI_RESEARCH, provider=provider, source_id=doc_name,
-        )
-        item["artifacts"]["memory_ingested"] = True
-        item["artifacts"]["memory_chunks_added"] = memory_report.get("chunks_added", 0)
-    except Exception as e:
-        # memory 写入失败不阻断整条流程——摘要已经落盘，简报页照常显示"已完成"，
-        # 只是暂时搜不到。留空 memory_ingested，下次跑批处理时会被
-        # sync_memory_ingest 的补灌逻辑捡起来重试。
-        print(f"  [{doc_name}] ⚠️  memory 写入失败（不影响本条完成）: {e}")
-        item["artifacts"]["memory_ingested"] = False
+    await ingest_summary_to_memory(
+        item, summary_path,
+        provider=provider, source_id=doc_name,
+        source_type="ai_research", namespace=NAMESPACE_AI_RESEARCH,
+    )
 
     item["pipeline_status"] = "done"
-    print(f"  [{doc_name}] ✅ 完成，摘要已落盘: {summary_path}")
+    log_item_done(doc_name, summary_path)
 
 
 async def main_async(limit: int, provider: str, item_id: str = None):
     registry = load_doc_registry()
 
-    # failed_retryable 也纳入选取——mark_failed 会在 attempts 达到
-    # MAX_ATTEMPTS 时转 failed_permanent，所以这里天然有重试上限。
-    item_ids = select_processable("pdf_arxiv", limit=limit, item_id=item_id)
-    print(f"待处理 pdf_arxiv 条目数: {len(item_ids)}")
+    # 认领 / 处理 / 回写三段分开的骨架在 common.process_queue_batch 里（与
+    # process_web_queue 共用）；选取范围含 failed_retryable，重试上限由
+    # queue_store 的 MAX_ATTEMPTS 收口。
+    async def handler(item: dict) -> None:
+        await process_item(item, provider, registry)
 
-    done_count, failed_count = 0, 0
-    for iid in item_ids:
-        # 认领 / 处理 / 回写三段分开：中间那段动辄几十分钟，期间不持有
-        # queue，也就不会用旧快照覆盖别人的改动。
-        item = claim_item(iid)
-        if item is None:
-            print(f"\n=== 跳过 {iid}：条目已不存在 ===")
-            continue
-        print(f"\n=== 处理 {iid}: {item.get('title', '')} ===")
-        try:
-            await process_item(item, provider, registry)
-            finish_item(iid, item)
-            done_count += 1
-        except Exception as e:
-            print(f"  [{iid}] ❌ 失败: {e}")
-            fail_item(iid, e)
-            failed_count += 1
-
-    print(f"\n汇总: 成功 {done_count} / 失败 {failed_count} / 共处理 {len(item_ids)} 条")
+    await process_queue_batch("pdf_arxiv", handler, "title", limit=limit, item_id=item_id)
 
 
 def main():
