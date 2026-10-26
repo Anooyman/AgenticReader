@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgenticReader 代码架构深度分析报告</title>
+<style>
+:root {
+  --bg: #f7f8fa; --panel: #ffffff; --ink: #1f2937; --muted: #6b7280;
+  --accent: #2563eb; --line: #e5e7eb;
+  --crit: #b91c1c; --high: #c2410c; --med: #a16207;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 16px/1.75 "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+        -apple-system, "Segoe UI", sans-serif;
+}
+main {
+  max-width: 980px; margin: 0 auto; padding: 40px 28px 80px;
+  background: var(--panel); box-shadow: 0 0 0 1px var(--line);
+}
+h1 {
+  font-size: 27px; margin: 0 0 14px; color: #0f172a;
+  padding: 0 0 16px; border-bottom: 3px solid var(--accent);
+}
+h2 {
+  font-size: 20px; margin-top: 44px; padding: 8px 12px;
+  border-left: 5px solid var(--accent); background: #eff6ff;
+  border-radius: 0 6px 6px 0;
+}
+h3 { font-size: 17px; margin-top: 30px; color: #111827; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+p, li { text-align: justify; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code {
+  background: #eef2f7; border: 1px solid var(--line); border-radius: 4px;
+  padding: 1px 5px; font: 13px/1.6 "SF Mono", Menlo, Consolas, monospace;
+  color: #0f3e7e; word-break: break-all;
+}
+table {
+  border-collapse: collapse; width: 100%; margin: 14px 0;
+  font-size: 13.5px; line-height: 1.6;
+}
+th { background: #1e3a8a; color: #fff; text-align: left; padding: 8px 10px; font-weight: 600; }
+td { border: 1px solid var(--line); padding: 8px 10px; vertical-align: top; }
+tbody tr:nth-child(even) { background: #f9fafb; }
+tbody tr:hover { background: #eff6ff; }
+blockquote {
+  margin: 18px 0; padding: 10px 18px; color: #374151;
+  border-left: 4px solid var(--accent); background: #f0f7ff; border-radius: 0 6px 6px 0;
+}
+blockquote p { margin: 4px 0; }
+hr { border: none; border-top: 1px solid var(--line); margin: 36px 0; }
+.v-ok, .v-part {
+  display: inline-block; padding: 0 8px; border-radius: 999px; font-size: 12px;
+  font-weight: 600; white-space: nowrap;
+}
+.v-ok { background: #dcfce7; color: #166534; }
+.v-part { background: #fef3c7; color: #854d0e; }
+.sev {
+  display: inline-block; padding: 0 10px; border-radius: 6px;
+  font-weight: 700; font-size: 12.5px; color: #fff; white-space: nowrap;
+}
+.sev-critical { background: var(--crit); }
+h3:has(code), h2:has(code) { font-family: inherit; }
+header.hero .meta { color: #dbeafe; font-size: 14px; margin-top: 6px; }
+.toc {
+  background: #f8fafc; border: 1px solid var(--line); border-radius: 10px;
+  padding: 14px 20px; margin: 26px 0; font-size: 14.5px;
+}
+.toc ul { margin: 4px 0; padding-left: 20px; }
+header.hero p { color: #dbeafe; margin: 6px 0 10px; }
+header.hero blockquote { background: rgba(255,255,255,.10); border-left-color: #bfdbfe; color: #eff6ff; }
+header.hero blockquote p { color: #eff6ff; }
+a.headerlink { color: #9ca3af; margin-left: 6px; font-size: .8em; opacity: 0; }
+h2:hover a.headerlink, h3:hover a.headerlink { opacity: 1; }
+footer { text-align: center; color: var(--muted); font-size: 13px; margin-top: 50px; }
+@media (max-width: 760px) {
+  table { display: block; overflow-x: auto; white-space: nowrap; }
+  td { white-space: normal; min-width: 120px; }
+  main { padding: 26px 14px 60px; }
+}
+@media print {
+  body { background: #fff; }
+  main { box-shadow: none; max-width: none; }
+  h2 { break-after: avoid; }
+  table { break-inside: avoid; }
+  a.headerlink { display: none; }
+}
+</style>
+</head>
+<body>
+<h1 id="agenticreader">AgenticReader 代码架构深度分析报告<a class="headerlink" href="#agenticreader" title="Permanent link">¶</a></h1>
+<blockquote>
+<p>生成日期：2026-10-21 · 分析方法：Agent Teams（5 个维度分析 agent + 5 个对抗复核 agent，共 10 个 subagent 并行工作，另加主线程抽查验证）
+规模：src/ 约 34,200 行 Python（113 个文件）+ 前端 JS/HTML；覆盖 agents / core / config / memory / pipeline / services(scraper+mcp) / ui / utils 八个模块</p>
+</blockquote>
+<hr />
+<h2 id="1">1. 总览评分<a class="headerlink" href="#1" title="Permanent link">¶</a></h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>评分</th>
+<th>一句话结论</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>总体架构与依赖</td>
+<td><strong>5 / 10</strong></td>
+<td>分层外观存在，但 core↔agents、config↔agents 双向依赖，全局状态与重复实现较多；CLAUDE.md 严重失真</td>
+</tr>
+<tr>
+<td>多智能体系统</td>
+<td><strong>6 / 10</strong></td>
+<td>五个 agent 结构规范、自包含做得好；但 indexing 失败无路由、Answer 的 ReAct 循环实际单轮、跨 agent 协作绕过封装</td>
+</tr>
+<tr>
+<td>核心基础设施</td>
+<td><strong>6 / 10</strong></td>
+<td>LLM/向量/记忆抽象设计意图扎实；但存在跨章节历史污染、检索去重永不重置、过滤失败静默降级等<strong>正确性级</strong>缺陷</td>
+</tr>
+<tr>
+<td>UI / API 层</td>
+<td><strong>4 / 10</strong></td>
+<td>结构与任务车道设计不错，但<strong>零鉴权 + CORS 通配 + 目录穿越</strong>构成严重安全问题，是全局最优先项</td>
+</tr>
+<tr>
+<td>工程质量</td>
+<td><strong>5 / 10</strong></td>
+<td>无 CI / 无 pytest / 无 lint / 无锁文件，测试与代码漂移，约 1200 行死代码，异常体系未落地</td>
+</tr>
+<tr>
+<td><strong>综合</strong></td>
+<td><strong>≈ 5.2 / 10</strong></td>
+<td>架构骨架有想法，正确性缺陷与安全防护是两个最大的短板</td>
+</tr>
+</tbody>
+</table>
+<p><strong>可信度说明</strong>：所有发现均经对抗复核 agent 到代码里核实，下表中标注 <span class="v-ok" title="复核确认">✅ 确认</span>=复核确认、<span class="v-part" title="部分成立，已按复核修正">⚠️ 修正</span>=部分成立（复核 agent 修正了描述或严重度，原结论方向成立）。两条未经复核的 agent 层结论（indexing 失败仍注册 completed、answer 单轮 ReAct）已由主线程直接抽查代码确认属实。</p>
+<hr />
+<h2 id="2-critical-high">2. 高优先级问题汇总（Critical / High）<a class="headerlink" href="#2-critical-high" title="Permanent link">¶</a></h2>
+<h3 id="critical">🔴 Critical（立即处理）<a class="headerlink" href="#critical" title="Permanent link">¶</a></h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>问题</th>
+<th>证据</th>
+<th>复核</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>C1</td>
+<td><strong>全部 API 与 WebSocket 零鉴权</strong>，破坏性端点匿名可达：<code>/data/reset</code> 仅需字面量 <code>confirm=="CONFIRM_RESET"</code>、可清空任意 memory namespace、可改写全局 LLM provider、可匿名读取所有会话；服务默认绑 <code>0.0.0.0</code></td>
+<td><code>src/ui/backend/app.py:85-99</code>、<code>api/v1/data.py:1148-1163</code>、<code>api/v1/memory.py:33-48</code>、<code>api/v1/config.py:76-121</code>、<code>src/ui/run_server.py:78-85</code></td>
+<td><span class="v-ok" title="复核确认">✅ 确认</span></td>
+</tr>
+<tr>
+<td>C2</td>
+<td><strong>删除接口族目录穿越</strong>：<code>delete_document_parts</code>/batch delete 把未校验的 <code>doc_name</code> 直接拼进路径后 <code>shutil.rmtree</code>，请求体传 <code>../../&lt;target&gt;</code> 可删除数据目录之外的任意目录；同文件 :515-528 已有一份正确校验却没复用</td>
+<td><code>src/ui/backend/api/v1/data.py:705-750、861-889</code>、<code>api/v1/documents.py:199-218</code></td>
+<td><span class="v-ok" title="复核确认">✅ 确认</span>（复核实测：单段 <code>..</code> 即可命中并把 <code>data/</code> 整体删掉）</td>
+</tr>
+</tbody>
+</table>
+<h3 id="high">🟠 High（本周期内处理）<a class="headerlink" href="#high" title="Permanent link">¶</a></h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>问题</th>
+<th>维度</th>
+<th>证据</th>
+<th>复核</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>H1</td>
+<td><strong>ChatService 进程级单例承载会话状态</strong>：多标签页/并发连接下 <code>current_session</code>、<code>progress_callback</code>、<code>enabled_tools</code> 被后到者覆写，A 的对话会写进 B 的会话文件</td>
+<td>架构+UI</td>
+<td><code>src/ui/backend/services/chat_service.py:21-26、52、58/86/88、305</code></td>
+<td><span class="v-ok" title="复核确认">✅ 确认</span></td>
+</tr>
+<tr>
+<td>H2</td>
+<td><strong>PDF 上传文件名未消毒</strong>：<code>PDF_DIR / file.filename</code> 未取 basename，传入绝对路径 <code>/tmp/evil.pdf</code> 时 pathlib 直接丢弃基目录 → 任意路径写入 <code>.pdf</code>；且无体积/文件头校验</td>
+<td>UI</td>
+<td><code>src/ui/backend/api/v1/documents.py:93</code></td>
+<td><span class="v-ok" title="复核确认">✅ 确认</span>（复核本机 python3 实测复现逃逸）</td>
+</tr>
+<tr>
+<td>H3</td>
+<td><strong>CORS 通配 + credentials + 全方法/头放行</strong>，配合零鉴权使恶意网页可对本地 8000 端口做跨源删改</td>
+<td>UI</td>
+<td><code>src/ui/backend/app.py:64-70</code>、<code>config.py:27</code></td>
+<td><span class="v-ok" title="复核确认">✅ 确认</span></td>
+</tr>
+<tr>
+<td>H4</td>
+<td><strong>并行章节处理共用固定 session_id</strong>：<code>"summary"</code>/<code>"refactor"</code> 两个字面量，20 路并发挤在两个 session 上跨章节累积聊天历史 → 章节摘要互相串味、token 膨胀后静默截断</td>
+<td>核心</td>
+<td><code>src/core/parallel/indexing.py:74-77</code>、<code>src/agents/indexing/nodes.py:693-697</code></td>
+<td><span class="v-ok" title="复核确认">✅ 确认</span></td>
+</tr>
+<tr>
+<td>H5</td>
+<td><strong>检索去重集合 <code>_retrieved_doc_hashes</code> 永不重置</strong>，<code>reset_retrieval_history()</code> 全仓无调用方 → 多轮对话同一文档可检索空间单调收窄，表现为「越问越找不到」的静默劣化</td>
+<td>核心</td>
+<td><code>src/core/vector_db/vector_db_client.py:43、181-211、320-326、478-487</code></td>
+<td><span class="v-ok" title="复核确认">✅ 确认</span></td>
+</tr>
+<tr>
+<td>H6</td>
+<td><strong>过滤检索失败后静默降级为无过滤检索</strong>，直接 <code>similarity_search_with_score(query,k)</code> 丢弃文档过滤 → 把别的文档内容当本文档依据，属静默数据污染</td>
+<td>核心</td>
+<td><code>src/core/vector_db/vector_db_client.py:350-358</code></td>
+<td><span class="v-ok" title="复核确认">✅ 确认</span></td>
+</tr>
+<tr>
+<td>H7</td>
+<td><strong>Embedding 配置键两套并存</strong>：两处代码读 <code>"openai_model"</code>（settings 里不存在），memory 侧读正确的 <code>"openai_embedding_model"</code> → 用户设置的 embedding 模型被静默忽略；若改用 3072 维模型会建表/写入维度错配</td>
+<td>核心</td>
+<td><code>src/core/llm/client.py:796-801</code>、<code>providers.py:116-120</code>、<code>settings.py:93-95</code>、<code>memory/config.py:42-49</code></td>
+<td><span class="v-ok" title="复核确认">✅ 确认</span></td>
+</tr>
+<tr>
+<td>H8</td>
+<td><strong>Indexing 图对失败无路由</strong>：线性图无 error 分支，节点异常只置 <code>status="error"</code> 不中断，最后 <code>register_document</code> 仍无条件写 <code>completed</code> → 失败文档以成功姿态进入检索链路</td>
+<td>Agents</td>
+<td><code>src/agents/indexing/agent.py:131-139</code>、<code>nodes.py:372-373、1059-1061</code></td>
+<td><span class="v-ok" title="复核确认">✅ 确认</span>（主线程抽查 <code>nodes.py:1057-1059</code> 确认无条件 completed）</td>
+</tr>
+<tr>
+<td>H9</td>
+<td><strong>AnswerAgent 的 ReAct 实为单轮</strong>：evaluate 判「内容不足→回 plan 继续迭代」，但 plan 的情况2 见到任何 tool_results 就 <code>is_complete=True</code> → 循环边与 <code>max_iterations=3</code> 形同虚设，检索失败不会改写查询重试</td>
+<td>Agents</td>
+<td><code>src/agents/answer/nodes.py:336-342、557-560</code>、<code>agent.py:116-123</code></td>
+<td><span class="v-ok" title="复核确认">✅ 确认</span>（主线程抽查 <code>nodes.py:336-338</code> 确认短路）</td>
+</tr>
+<tr>
+<td>H10</td>
+<td><strong>跨 agent 协作绕过封装</strong>：8+ 处直接 <code>graph.ainvoke({手拼 state dict})</code>（UI 层、pipeline、core 各一处），<code>RetrievalState</code>/<code>IndexingState</code> 字段契约摊到三类调用方，字段漂移无类型防护</td>
+<td>架构+Agents</td>
+<td><code>api/v1/documents.py:161</code>、<code>api/v1/data.py:592</code>、<code>pipeline/process_pdf_queue.py:74</code>、<code>core/document_management/indexer.py:161</code>、<code>core/parallel/retrieval.py:232</code> 等</td>
+<td><span class="v-ok" title="复核确认">✅ 确认</span></td>
+</tr>
+<tr>
+<td>H11</td>
+<td><strong>CLAUDE.md 与代码严重脱节</strong>：文档声称的 <code>doc_registry.py</code>、<code>agent_prompts.py</code>（PlanAgent/ExecutorAgent/MemoryAgent）、<code>config/tools/</code>、<code>session_service.py</code>、<code>PDFReader/WebReader</code> 均不存在；对 memory 子系统「尚未接入」的描述与现状相反；orchestrator/search/pipeline/scraper 五个新模块只字未提</td>
+<td>架构</td>
+<td>逐条对照核实（详见维度 1 复核记录）</td>
+<td><span class="v-ok" title="复核确认">✅ 确认</span></td>
+</tr>
+<tr>
+<td>H12</td>
+<td><strong>DocumentRegistry 并发写不安全</strong>：无进程内共享实例、无文件锁、整库覆盖式 <code>_save()</code>，29+ 处独立实例化；UI 请求与后台索引任务并发时可丢更新</td>
+<td>架构</td>
+<td><code>src/core/document_management/registry.py:64-65、87-88</code> 及全仓实例化点</td>
+<td><span class="v-part" title="部分成立，已按复核修正">⚠️ 修正</span>（复核：4/5 写路径已有读-改-写，风险偏 medium-high；同仓 <code>pipeline/queue_store.py</code> 已有 fcntl+原子写的正确范式可直接复用）</td>
+</tr>
+<tr>
+<td>H13</td>
+<td><strong>core 层反向依赖 agents</strong>：<code>document_management/indexer.py:19</code> 模块级 import IndexingAgent（import 该模块会拉起全部 agent+LangGraph）；config/prompts 运行时聚合整个 agents 包</td>
+<td>架构</td>
+<td><code>indexer.py:19</code>、<code>config/prompts/__init__.py:22-25</code>、<code>core/llm/client.py:30</code></td>
+<td><span class="v-part" title="部分成立，已按复核修正">⚠️ 修正</span>（复核降为 medium-high：实测三种 import 顺序均成功，未触发故障，属可维护性地雷而非现行 bug）</td>
+</tr>
+<tr>
+<td>H14</td>
+<td><strong>测试无法自动化运行且已漂移</strong>：无 pytest/CI/conftest，13 个测试全是需真实 API key 的脚本式 <code>main()</code>；<code>test_indexing_agent.py:21</code> 从重构前的旧位置 import DocumentRegistry，导入即 ImportError</td>
+<td>工程</td>
+<td><code>tests/test_indexing_agent.py:21</code>、<code>src/agents/indexing/__init__.py</code> 的 <code>__all__</code></td>
+<td><span class="v-ok" title="复核确认">✅ 确认</span>（复核修正：只有该一处 import 失效，正确修法是改测试 import 路径，不是往 <code>__init__.py</code> 补导出）</td>
+</tr>
+<tr>
+<td>H15</td>
+<td><strong>LLM provider 热切换必然报错</strong>：<code>update_provider_config()</code> 对只读 property <code>chat_model/embedding_model</code> 赋值 → AttributeError；且测试用内层 try/except 吞掉失败照常「测试2通过」</td>
+<td>核心</td>
+<td><code>src/core/llm/client.py:258-261</code>、<code>tests/test_llm_providers.py:99-110</code></td>
+<td><span class="v-part" title="部分成立，已按复核修正">⚠️ 修正</span>（复核：该方法除测试外无生产调用点，属潜伏缺陷+假绿测试，降为 medium）</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="3">3. 各维度详细分析<a class="headerlink" href="#3" title="Permanent link">¶</a></h2>
+<h3 id="31-510">3.1 总体架构与依赖 — 5/10<a class="headerlink" href="#31-510" title="Permanent link">¶</a></h3>
+<p><strong>做对了什么</strong></p>
+<ul>
+<li><code>src/memory/</code> 是全仓分层最干净的模块：12 文件 1443 行，只依赖 config/settings 与 core/llm，不反向碰 agents/ui。</li>
+<li><code>src/pipeline/</code> + <code>job_runner.py</code> 有明确的并发纪律（串行车道注释、<code>queue_transaction</code> 锁、<code>write_json_atomic</code> 原子写），lifespan 的后台协程收尾（create_task + cancel + gather）写法正确。</li>
+<li><code>services/scraper/</code> 是独立可替换子系统，通过 MCP stdio 与主进程解耦。</li>
+<li>agents 包结构高度一致，内部循环引用普遍用 <code>if TYPE_CHECKING:</code> 限制在类型层。</li>
+<li>跨层取数普遍是<strong>有意识的</strong>函数级延迟 import，不是乱引。</li>
+</ul>
+<p><strong>问题</strong>（除上表 H10-H13 外）</p>
+<ul>
+<li><strong>CLI 与 UI 编排入口不同源</strong> <span class="v-part" title="部分成立，已按复核修正">⚠️ 修正</span>：main.py 走 AnswerAgent+SearchAgent 直连路径，orchestrator 只被 UI 使用 → 同一问题 CLI 无长期记忆检索、行为不等价；且 job_runner/process_web_queue/memory_search 等后台车道把 <code>provider="openai"</code> 写死 6+ 处，用户在 UI 选 azure/ollama 不生效（复核确认 <code>app_settings.py</code> 已有 <code>default_provider</code> 配置源，只是没注入到批处理车道；根因是 load_config() JSON 与 .env 两套配置源并存）。</li>
+<li><strong>删除逻辑两套实现</strong> <span class="v-ok" title="复核确认">✅ 确认</span>：core/manager.py 的 <code>delete_document_files</code> 与 data.py HTTP 端点各写一份同类清理，UI 版还多出 parts 粒度选择，互相漂移风险高。</li>
+<li><strong>三套任务状态机并存</strong> <span class="v-part" title="部分成立，已按复核修正">⚠️ 修正</span>：TaskManager（文件式）、job_runner（webapp_jobs.json）、pipeline_queue（queue_store）三套状态字面量与落盘格式，无转换关系；重启恢复只覆盖 job_runner。复核修正：真正双写同一动作的是 job_runner+pipeline_queue（不是 TaskManager+pipeline_queue），且 queue_store 是三套里唯一做了 fcntl+原子写的。</li>
+<li><strong>scraper 依赖静态不可见</strong> <span class="v-part" title="部分成立，已按复核修正">⚠️ 修正</span>：唯一接线是 settings.py 里的字符串 <code>args: ["-m", "scraper.mcp_server.server"]</code> + 相对 PYTHONPATH，靠 cwd 维系；复核修正「完全不可见」为「配置键引用可发现，包内实现不可见」，规模实为 16 文件 2637 行。</li>
+</ul>
+<h3 id="32-610">3.2 多智能体系统 — 6/10<a class="headerlink" href="#32-610" title="Permanent link">¶</a></h3>
+<p><strong>做对了什么</strong></p>
+<ul>
+<li>五个 agent 统一 <code>state/nodes/tools/utils/prompts</code> 自包含结构 + 依赖注入；orchestrator 通过 SubAgent 抽象 + function-calling schema 编排，接口干净。</li>
+<li>循环控制普遍有显式处理：递归上限跨 agent 边界显式传递、<code>should_continue</code> 硬约束、search 节点异常强制 <code>is_complete=True</code> 防挂死。</li>
+<li>retrieval 的 tools_config 与实现严格对应，动态绑定带缺失告警和回退。</li>
+<li>role 型提示词体系无悬空引用，全部经 config.prompts 聚合统一解析。</li>
+</ul>
+<p><strong>问题</strong></p>
+<ul>
+<li>H8 indexing 失败无路由 → 失败文档注册为 completed（<strong>这是多 agent 编排最实质的缺陷</strong>：用户对一个"成功"文档提问得到空答案且无从定位）。</li>
+<li>H9 Answer 的「多轮推理」是死代码路径：evaluate→plan 循环可达，但回 plan 后立即被情况2 短路，永远产生不了第二轮工具调用。要么按 evaluate 意图让 plan 生成新 tool_calls，要么删掉循环边与 <code>max_iterations</code> 字段，别留「假 ReAct」误导维护者。</li>
+<li>H10 的延伸：<code>_retrieve_single</code> 在 <code>answer/tools.py:274-313</code> 和 <code>core/parallel/retrieval.py:209-245</code> 几乎逐字重复两份，后者还直接增删 AnswerAgent 内部属性——RetrievalAgent 应提供 <code>query()</code> 公共方法收敛这条路径。</li>
+<li><strong>Orchestrator 容错空洞</strong> <span class="v-part" title="部分成立，已按复核修正">⚠️ 修正</span>：900s 总预算只在每轮迭代开头检查，一次长时间的 deep_dive 工具调用可以无视预算；主循环 <code>model.ainvoke</code> 无 try/except，一次网络异常会炸穿整轮、绕过 EMPTY_ANSWER_FALLBACK。</li>
+<li><strong>死提示词</strong> <span class="v-part" title="部分成立，已按复核修正">⚠️ 修正</span>：plan 改为确定性逻辑后，TOOL_PLANNER 大段提示词 + INTENT_ANALYZER/QUERY_REWRITER 两个废弃 role + WEB_CONTENT_FETCH 共 150+ 行仍在字典里，全仓无调用点；tools_config 文件头「LLM 动态决定调用」的描述已与实现不符。</li>
+<li>低：SearchAgent 用 <code>__del__</code> 清 MCP 客户端（GC 时机不可控，应换显式 <code>aclose()</code>）。</li>
+</ul>
+<h3 id="33-610">3.3 核心基础设施 — 6/10<a class="headerlink" href="#33-610" title="Permanent link">¶</a></h3>
+<p><strong>做对了什么</strong></p>
+<ul>
+<li>LLM provider 抽象：ABC + 懒加载 + 各 provider 模型参数名差异的显式映射表；history 双层策略（LLM 总结失败自动回退截断）。</li>
+<li>向量层加载时自检 embedding 维度；并行检索 Semaphore + 单文档超时 + <code>return_exceptions=True</code> 隔离失败。</li>
+<li>memory ingest 幂等设计扎实（内容 hash 去重、adapter 覆写清理被取代的尾块）；memory_browse 对 LanceDB 同步 IO 全部 <code>asyncio.to_thread</code> 包裹——这个正确范式可惜没有贯彻到 memory/search。</li>
+</ul>
+<p><strong>正确性缺陷（重点）</strong></p>
+<ul>
+<li>H4 章节并行历史污染 <span class="v-ok" title="复核确认">✅ 确认</span>：session_id 是 <code>"summary"</code>/<code>"refactor"</code> 两个字面量，且 summary/refactor 落在 DEFAULT 截断配置（30 条）里，并发越高分支越乱。修法：session_id 按章节隔离 + 用完 pop；更彻底是这条无状态路径直接绕开 <code>RunnableWithMessageHistory</code>。</li>
+<li>H5 去重集合永不重置 <span class="v-ok" title="复核确认">✅ 确认</span> → 「静默变差型」故障，排查成本极高。</li>
+<li>H6 过滤失败降级丢过滤 <span class="v-ok" title="复核确认">✅ 确认</span> → 兜底只应放宽单个维度（如仅去掉 dedup），且要给结果打 <code>degraded: True</code> 标记。</li>
+<li>H7 embedding 键名两套 <span class="v-ok" title="复核确认">✅ 确认</span> → 统一到一个读取函数，建表前实测维度而非静态猜表。</li>
+</ul>
+<p><strong>其余问题</strong></p>
+<ul>
+<li><strong>LLM 失败被吞成空串</strong> <span class="v-ok" title="复核确认">✅ 确认</span>：<code>call_llm_chain</code> 外层 except 一律 <code>return ""</code>，十余处调用点无法区分「调通但空」与「失败」；重试全靠 SDK 内置 <code>max_retries=5</code>，Ollama 连重试超时都没配；仓库自带 <code>retry_on_error</code> 装饰器却只装在 IO 路径、一次没盖到 LLM 调用。</li>
+<li><strong>阻塞调用侵入事件循环</strong> <span class="v-ok" title="复核确认">✅ 确认</span>：memory ingest 在 await 协程里用 <code>fcntl.flock</code> 排他锁且锁包住了全部 LLM await（争锁时卡整个 server，且 Windows 不可用）；<code>memory/search.py</code> 的 <code>dispatch_tool_call</code> 是同步函数内做 lancedb/embed 阻塞 IO——与 memory_browse 的正确做法自相矛盾；<code>async_utils.run_async</code> 的 nest_asyncio 重入是地雷（好在 <code>run_parallel_*</code> 无调用方）。</li>
+<li><strong>记忆层 provider 硬编码</strong> <span class="v-ok" title="复核确认">✅ 确认</span>：默认 <code>"openai"</code> 一路传字面量，Azure/Ollama 部署下表现为 memory 静默写不进/检索无结果；且两套记忆后端（同进程 LanceDB + 外部 LLM-Memory HTTP 桥，namespace 硬编码 <code>"AATF"</code>）各写各库、无统一检索入口。</li>
+<li><strong>scraper 两处</strong> <span class="v-ok" title="复核确认">✅ 确认</span>（主线程核实）：<code>downloader.py:187</code> 把用户传入的 <code>selector</code> 直接插进 <code>page.evaluate</code> 的 JS 字符串（单引号包裹，可注入页面脚本）；<code>retry.py</code>/<code>fallback.py</code> 定义了 <code>RetryStrategy</code>/<code>FallbackHandler</code> 但只在 <code>core/__init__.py</code> 导入，浏览器下载路径根本没用——「降级/重试写了没接线」。</li>
+<li>MCP 子进程配置依赖进程 CWD（settings.py 的相对 PYTHONPATH 与脚本路径）。</li>
+</ul>
+<h3 id="34-ui-api-410">3.4 UI / API 层 — 4/10<a class="headerlink" href="#34-ui-api-410" title="Permanent link">¶</a></h3>
+<p><strong>做对了什么</strong></p>
+<ul>
+<li>13 个 v1 资源路由器 + pages + websocket 组装规范，OpenAPI 开箱可用；<code>delete_pdf_source_files</code> 的 resolve+parents 边界校验是范本级的（可惜只有这一处）。</li>
+<li>job_runner 的车道拆分、超时、requeue 语义有清晰注释论证；memory 浏览层明确声明只读。</li>
+<li>前端 api.js 集中封装所有 fetch 端点，可一次性审计。</li>
+</ul>
+<p><strong>问题</strong></p>
+<ul>
+<li>C1 零鉴权 <span class="v-ok" title="复核确认">✅ 确认</span>：无 Depends/Security/鉴权中间件，WebSocket 不校验 Origin（Starlette 的 CORS 中间件管不到 WS）；<code>/health</code> 回显版本号、<code>/docs</code> 常开。</li>
+<li>C2 目录穿越 <span class="v-ok" title="复核确认">✅ 确认</span> + 下面三条读/服务接口同类问题 <span class="v-part" title="部分成立，已按复核修正">⚠️ 修正</span>：pdf.py/structure.py/chapters.py 的 <code>BASE / 用户输入</code> 均无 <code>is_relative_to</code> 断言，与删除接口同根因——复核确认单段 <code>..</code> 的实际可达面限于目录上移一层内的探测/覆盖写（如 <code>get_pdf_images(doc_name="..")</code> 会列出 data/ 下的 png 列表），比「任意文件读取」轻，但根因相同应一并收敛。</li>
+<li>H2 上传逃逸 <span class="v-ok" title="复核确认">✅ 确认</span>、H3 CORS <span class="v-ok" title="复核确认">✅ 确认</span>、H1 ChatService 串扰 <span class="v-ok" title="复核确认">✅ 确认</span>。</li>
+<li><strong>调试信息暴露</strong> <span class="v-part" title="部分成立，已按复核修正">⚠️ 修正</span>：config.py <code>DEBUG=True</code> 硬编码（未捕获异常会带堆栈返回 HTML）、REST 普遍 <code>detail=str(e)</code>、run_server <code>reload=True</code> 常驻。复核修正：WebSocket 的 traceback 输出其实有 <code>DEBUG_MODE</code> env 门控，默认不泄堆栈、但仍泄 <code>str(e)</code>——该项降级但仍成立。</li>
+<li><strong>状态可靠性</strong> <span class="v-ok" title="复核确认">✅ 确认</span>：task_manager/session_manager 用相对 CWD 的默认路径（与 config.py 的 PROJECT_ROOT 绝对路径并存 → 换目录启动会「写在一处、统计在另一处」），会话保存是非原子的 <code>open('w')+json.dump</code>，崩溃即截断 JSON 丢全部会话。</li>
+<li><strong>可观测性与前端健壮性</strong> <span class="v-ok" title="复核确认">✅ 确认</span>：两条 run_forever 车道无 done-callback/失败重启，<code>/health</code> 无法区分空闲与已死；WS 硬编码 <code>ws://</code> 前缀（https 部署会坏）、无重连无心跳、<code>JSON.parse</code> 无保护；README/CLAUDE.md 声称的 localStorage 双存储实际只存了主题。</li>
+</ul>
+<h3 id="35-510">3.5 工程质量 — 5/10<a class="headerlink" href="#35-510" title="Permanent link">¶</a></h3>
+<p><strong>做对了什么</strong></p>
+<ul>
+<li><code>data/</code>、<code>scraped_data/</code> 已被 .gitignore 正确排除，git 跟踪计数 0。</li>
+<li>模块级 logger 规范，async/await 模型统一，TypedDict 状态定义一致。</li>
+</ul>
+<p><strong>问题</strong></p>
+<ul>
+<li>H14 测试体系 <span class="v-ok" title="复核确认">✅ 确认</span>：无 pytest/CI，全部脚本式手工测试；漂移集中在 <code>test_indexing_agent.py</code> 一处 import 路径。</li>
+<li><strong>异常体系形同虚设</strong> <span class="v-part" title="部分成立，已按复核修正">⚠️ 修正</span>：<code>exceptions.py</code> 的 11 个异常类只被 utils 内部消费，业务层 <code>except Exception</code> 291 处/65 文件 + 裸 except 9 处；复核做了精细统计——87% 的宽泛捕获后面仍有日志或 raise，真正的静默点集中在 websocket.py 和 indexing/tools.py 的少数几处，所以这是<strong>一致性/架构落地问题</strong>而非普遍故障，建议定 medium 而非 high。</li>
+<li><strong>约 1200 行死代码</strong> <span class="v-ok" title="复核确认">✅ 确认</span>：<code>config_validator.py</code>(437) + <code>test_framework.py</code>(368) + <code>performance_monitor.py</code>(399) 全仓零调用者，且互相形成孤岛依赖，制造「有校验/监控机制」的错觉。</li>
+<li><strong>配置四地分散</strong> <span class="v-part" title="部分成立，已按复核修正">⚠️ 修正</span>：settings（getenv 字典）/app_settings（pydantic，事实上无人消费≈第四块死代码）/constants/model_overrides 并存；关键 key 用无默认值的 <code>os.getenv</code> 但无启动期校验，缺配置时到 LLM 调用才空指针。</li>
+<li><strong>零工具链</strong> <span class="v-ok" title="复核确认">✅ 确认</span>：无 .github、无 pyproject/ruff/mypy/pre-commit、无 lockfile、requirements 里 streamlit 完全未用 + 78 条手动精确 pin 的传递依赖与 langchain/lancedb 范围约束混用。</li>
+<li>main.py 927 行 CLI 单体 <span class="v-part" title="部分成立，已按复核修正">⚠️ 修正</span>（复核：README 篇幅「接近代码规模」的论据不成立——实际只占代码量约 5%）。</li>
+</ul>
+<hr />
+<h2 id="4">4. 建议的修复路线图<a class="headerlink" href="#4" title="Permanent link">¶</a></h2>
+<h3 id="p01-2">P0（1-2 天，安全止血）<a class="headerlink" href="#p01-2" title="Permanent link">¶</a></h3>
+<ol>
+<li>抽出 <code>resolve_in_dir(base, name)</code> 工具函数（resolve + <code>is_relative_to</code> + 字符集白名单），替换 data.py / documents.py / pdf.py / structure.py / chapters.py / 上传拼接的所有路径操作。</li>
+<li>文件上传统一 <code>Path(filename).name</code> + 拒绝以 <code>.</code> 开头 + 大小上限 + <code>%PDF-</code> 头校验。</li>
+<li>CORS 改显式列表并禁止 <code>*</code>+credentials 组合；run_server 默认 <code>127.0.0.1</code>，对外暴露需显式开关；DEBUG/docs 开关进 env。</li>
+<li>至少给破坏性端点（reset/删除/memory namespace 删除/provider 改写）加一层鉴权或本地配对令牌。</li>
+<li>scraper 的 selector 传参改为经 JS 侧 <code>querySelectorAll(selector)</code> 的<strong>参数化</strong>调用（<code>page.evaluate(fn, selector)</code>），不拼字符串。</li>
+</ol>
+<h3 id="p11">P1（1 周，正确性缺陷）<a class="headerlink" href="#p11" title="Permanent link">¶</a></h3>
+<ol>
+<li>indexing 图加 error 条件边 / register 前检查 <code>state["error"]</code>，失败文档不得标 completed。</li>
+<li>章节并行 session_id 按章节隔离并用完回收；过滤检索降级保留文档级过滤并打 <code>degraded</code> 标记。</li>
+<li>检索去重集合改为单次查询作用域局部变量（顺带解决 reset 无调用问题）；统一 embedding 键名并在建表前实测维度。</li>
+<li><code>update_provider_config</code> 改写内部字段并清缓存；<code>test_llm_providers.py</code> 去掉吞异常断言。</li>
+<li>ChatService 会话状态剥离到 per-connection 上下文（websocket 消息带 session_id + 归属校验）。</li>
+</ol>
+<h3 id="p22-4">P2（2-4 周，架构与可维护性）<a class="headerlink" href="#p22-4" title="Permanent link">¶</a></h3>
+<ol>
+<li>建 <code>indexing_service</code> / <code>retrieval</code> facade 收编 8+ 处内联 <code>graph.ainvoke</code>，状态字典构造收敛到一处。</li>
+<li>打断 core→agents 的 import 边（编排上移到 services/pipeline 层），用 import-linter 锁契约；SYSTEM_PROMPT_CONFIG 迁出 config/prompts。</li>
+<li>DocumentRegistry 进程级单例 + 事务写（直接复用 queue_store 的 fcntl+原子写范式）。</li>
+<li>任务状态三合一：job_runner 为唯一作业状态权威，pipeline_queue 定位为持久化队列；状态写入统一原子替换。</li>
+<li>provider 单一配置源（合并 load_config JSON 与 AppSettings），批处理车道停止硬编码。</li>
+<li>测试接入 pytest + CI（哪怕只跑 import/collect + 单测）；上 ruff + lockfile；删除或激活三块死代码框架；把 CLAUDE.md 重写成与代码对齐的版本，并考虑用结构测试防再次漂移。</li>
+<li>Answer 的 ReAct 二选一：补齐 plan 的二次规划逻辑，或删除死循环与废弃提示词。</li>
+</ol>
+<hr />
+<h2 id="5-agent-teams">5. 附录：分析方法（Agent Teams 逻辑）<a class="headerlink" href="#5-agent-teams" title="Permanent link">¶</a></h2>
+<ul>
+<li><strong>编排方式</strong>：一个 workflow 脚本把分析拆为 5 个维度，每个维度先由 1 个「分析 agent」独立读代码产出结构化发现（含 file:line 证据、severity、修复建议），随后同一 agent 链上的「对抗复核 agent」逐条到代码里核实证据真伪与严重度是否恰当——即 <code>analyze → verify</code> 的流水线，item 间互不阻塞。</li>
+<li><strong>规模</strong>：两轮共 14 个 subagent（5 分析 + 5 复核 + 2 分析 + 2 复核），另有主线程对两条未经复核的关键结论（indexing 失败注册、answer 单轮 ReAct）与 scraper 的两条结论做了直接代码抽查，共核实约 50 条主要论断。</li>
+<li><strong>偏差控制</strong>：复核将 11 条发现从原 severity 修正（如热切换 provider 从 high→medium 因无生产调用点、异常静默从 high→medium 因 87% 捕获仍有日志），并纠正了若干计数类错误（scraper 文件数、测试文件数、README 占比）。个别 agent 层结论标注「unverified」是因为其复核输出未回填，其中两条最重要的已由主线程人工核实。</li>
+</ul>
+<script>
+// build a table of contents right after the intro blockquote
+const toc = document.createElement('nav');
+toc.className = 'toc';
+let html = '<strong>目录</strong><ul>';
+document.querySelectorAll('h2[id]').forEach(h => {
+  html += `<li><a href="#${h.id}">${h.textContent.replace(/¶$/, '')}</a></li>`;
+});
+html += '</ul>';
+toc.innerHTML = html;
+const intro = document.querySelector('h1').closest('main, body').querySelector('blockquote');
+intro ? intro.after(toc) : document.querySelector('h1').after(toc);
+</script>
+</body>
+</html>
