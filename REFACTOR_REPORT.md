@@ -354,7 +354,7 @@ utils   → config 3
 
 ### P3 — 按需（不阻塞）——未动
 
-- 抓取栈二选一（保留 `scraper/`，把 `search` 内部的 `SimpleMCPClient` 归并过去）——未动。
+- 抓取栈二选一（保留 `scraper/`，把 `search` 内部的 `SimpleMCPClient` 归并过去）——**已定夺不做**（2026-10-23 用户确认：SimpleMCPClient 是 SearchAgent 唯一在用的 stdio 客户端，归并要动搜索热点路径，收益低）。
 - ✅（波次8-A）`process_pdf_queue` / `process_web_queue` 已抽 `pipeline/common.py`
   （状态机骨架/ingest 记账/逐题 QA 循环/日志口径四段归并；argparse、main_async 签名、
   pipeline_stage 断点语义、摘要 schema 四处"形似而语义异"刻意未合并）。
