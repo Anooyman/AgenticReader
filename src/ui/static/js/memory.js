@@ -1,4 +1,5 @@
-const API = "/api/v1/llmmemory";
+// 本页所有请求都走 api.js 的 API.llmmemory.* / API.documents.* / API.jobs.* 封装
+// （路径集中在 api.js，那里是全站唯一的 fetch 出口）。
 const state = { dates: [], selected: new Set(), chatHistory: [],
                 conversationId: 0, datesInitialized: false,
                 // jobs: 当前日期相关的加载任务快照，日期行徽章靠它
@@ -28,7 +29,7 @@ function detail(x) {
 
 async function fetchDates() {
     try {
-        const r = await fetch(`${API}/dates`);
+        const r = await API.llmmemory.dates();
         const d = await r.json();
         if (!r.ok) throw new Error(detail(d));
         state.dates = d.dates || [];
@@ -116,9 +117,7 @@ function renderDates() {
 // 一天一个任务串行执行，进度/取消/重试都从同一份 job 账本里看。
 
 async function enqueueLoad(dates) {
-    const r = await fetch(`${API}/load-jobs`, { method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ dates }) });
+    const r = await API.llmmemory.enqueueLoadJobs(dates);
     const d = await r.json();
     if (!r.ok) throw new Error(detail(d));
     return d;
@@ -178,7 +177,7 @@ let loadNote = "";
 let prevActiveDates = new Set();
 
 async function fetchLoadJobs() {
-    const r = await fetch(`${API}/load-jobs`);
+    const r = await API.llmmemory.loadJobs();
     const data = await r.json();
     if (!r.ok) throw new Error(detail(data));
     return data.jobs || [];
@@ -302,7 +301,7 @@ function renderQueueDetail(jobs) {
 async function runJobAction(jobId, act, btn) {
     if (btn) btn.disabled = true;
     try {
-        const r = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}/${act}`, { method: "POST" });
+        const r = await API.jobs.action(jobId, act, { raw: true });
         const d = await r.json();
         if (!r.ok) throw new Error(detail(d));
         // 外部服务没有 brief load 的停止端点，所以取消只是不再盯它——那一轮
@@ -328,19 +327,19 @@ function docNameFromPaperUrl(url) {
 }
 
 async function indexedDocNames() {
-    const r = await fetch("/api/v1/documents/list");
+    const r = await API.documents.list({ raw: true });
     const d = await r.json();
     if (!r.ok) throw new Error(detail(d));
     return new Set((d || []).map(x => x.doc_name));
 }
 async function unindexedPdfNames() {
-    const r = await fetch("/api/v1/documents/available-pdfs");
+    const r = await API.documents.availablePdfs();
     const d = await r.json();
     if (!r.ok) throw new Error(detail(d));
     return new Set((d || []).map(f => String(f).replace(/\.pdf$/i, "")));
 }
 async function pdfNameExists(docName) {
-    const r = await fetch("/api/v1/documents/available-pdfs");
+    const r = await API.documents.availablePdfs();
     const d = await r.json();
     if (!r.ok) throw new Error(detail(d));
     const expected = String(docName).replace(/\.pdf$/i, "");
@@ -426,10 +425,8 @@ function setInlineNote(actions, text) {
 }
 
 async function startInlinePaperIndex(docName, actions, button) {
-    const response = await fetch("/api/v1/documents/index", {
-        method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ doc_name: /\.pdf$/i.test(docName) ? docName : `${docName}.pdf` })
-    });
+    const response = await API.documents.index(
+        /\.pdf$/i.test(docName) ? docName : `${docName}.pdf`);
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(detail(result));
 
@@ -479,10 +476,7 @@ async function downloadInlinePaper(button) {
         setInlineNote(actions, "下载 PDF 中…");
         let before = null;
         try { before = await unindexedPdfNames(); } catch (error) { /* use URL-derived name */ }
-        const response = await fetch(`${API}/download`, {
-            method: "POST", headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({ url: target })
-        });
+        const response = await API.llmmemory.download(target);
         const result = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(detail(result));
 
@@ -595,9 +589,7 @@ async function sendChat() {
     document.getElementById("sendBtn").disabled = true;
     document.getElementById("chatStatus").textContent = "agentic 检索 + 生成回复中，可能需要 30-60 秒";
     try {
-        const r = await fetch(`${API}/chat`, { method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({ message: text, history: state.chatHistory }) });
+        const r = await API.llmmemory.chat(text, state.chatHistory);
         const d = await r.json();
         if (!r.ok) throw new Error(detail(d));
         pollChat(d.job_id, think, conversationId);
@@ -612,7 +604,7 @@ function pollChat(jobId, bubble, conversationId) {
     const t = setInterval(async () => {
         let job;
         try {
-            const r = await fetch(`${API}/chat/progress/${jobId}`);
+            const r = await API.llmmemory.chatProgress(jobId);
             job = await r.json();
             if (!r.ok) throw new Error(detail(job));
         } catch (e) { clearInterval(t); bubble.textContent = "进度查询失败：" + e.message;

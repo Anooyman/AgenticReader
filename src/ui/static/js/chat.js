@@ -676,7 +676,7 @@ class ChatApp {
     async loadPdf(docName) {
         UIComponents.showLoading('加载PDF...');
         try {
-            const pdfUrl = '/api/v1/pdf/view/' + docName;
+            const pdfUrl = API.pdf.viewUrl(docName);
             const loadingTask = pdfjsLib.getDocument(pdfUrl);
             this.pdfDoc = await loadingTask.promise;
             this.totalPages = this.pdfDoc.numPages;
@@ -735,39 +735,29 @@ class ChatApp {
 
     async createPagePlaceholders(container) {
         // 获取第一页来计算尺寸
-        const firstPage = await this.pdfDoc.getPage(1);
-        const baseViewport = firstPage.getViewport({ scale: this.scale });
-        const width = Math.floor(baseViewport.width);
-        const height = Math.floor(baseViewport.height);
+        const size = await PdfViewer.measurePageSize(this.pdfDoc, this.scale);
 
         // 使用DocumentFragment优化DOM操作
         const fragment = document.createDocumentFragment();
 
         // 为所有页面创建占位符
         for (let pageNum = 1; pageNum <= this.totalPages; pageNum++) {
-            const pageDiv = document.createElement('div');
-            pageDiv.className = 'pdf-page';
-            pageDiv.id = 'pdf-page-' + pageNum;
-            pageDiv.style.marginBottom = '20px';
-            pageDiv.style.minHeight = height + 'px';
-            pageDiv.setAttribute('data-page', pageNum);
-            pageDiv.setAttribute('data-rendered', 'false');
-
-            // 添加加载占位符
-            const placeholder = document.createElement('div');
-            placeholder.className = 'pdf-placeholder';
-            placeholder.style.width = width + 'px';
-            placeholder.style.height = height + 'px';
-            placeholder.style.backgroundColor = '#f0f0f0';
-            placeholder.style.display = 'flex';
-            placeholder.style.alignItems = 'center';
-            placeholder.style.justifyContent = 'center';
-            placeholder.style.color = '#999';
-            placeholder.style.fontSize = '14px';
-            placeholder.style.boxShadow = '0 0 10px rgba(0,0,0,0.1)';
-            placeholder.textContent = `第 ${pageNum} 页（滚动时加载）`;
-
-            pageDiv.appendChild(placeholder);
+            const pageDiv = PdfViewer.createPageElement(pageNum, size, {
+                placeholderText: (n) => `第 ${n} 页（滚动时加载）`,
+                decoratePage: (pageEl) => {
+                    pageEl.style.marginBottom = '20px';
+                    pageEl.style.minHeight = size.height + 'px';
+                },
+                decoratePlaceholder: (placeholder) => {
+                    placeholder.style.backgroundColor = '#f0f0f0';
+                    placeholder.style.display = 'flex';
+                    placeholder.style.alignItems = 'center';
+                    placeholder.style.justifyContent = 'center';
+                    placeholder.style.color = '#999';
+                    placeholder.style.fontSize = '14px';
+                    placeholder.style.boxShadow = '0 0 10px rgba(0,0,0,0.1)';
+                }
+            });
             fragment.appendChild(pageDiv);
         }
 
@@ -776,77 +766,32 @@ class ChatApp {
     }
 
     async renderPage(pageNum) {
-        // 检查是否已渲染
-        if (this.renderedPages.has(pageNum)) return;
-        if (!this.pdfDoc) return;
-
-        try {
-            const pageDiv = document.getElementById('pdf-page-' + pageNum);
-            if (!pageDiv) return;
-
-            // 标记为已渲染（防止重复渲染）
-            this.renderedPages.add(pageNum);
-            pageDiv.setAttribute('data-rendered', 'true');
-
-            const page = await this.pdfDoc.getPage(pageNum);
-            
-            // 计算渲染质量因子
-            const qualityScale = this.devicePixelRatio * 1.5;
-            const baseViewport = page.getViewport({ scale: this.scale });
-            const renderViewport = page.getViewport({ scale: this.scale * qualityScale });
-
-            // 创建canvas
-            const canvas = document.createElement('canvas');
-            canvas.width = renderViewport.width;
-            canvas.height = renderViewport.height;
-            canvas.style.width = Math.floor(baseViewport.width) + 'px';
-            canvas.style.height = Math.floor(baseViewport.height) + 'px';
-            canvas.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
-            canvas.style.display = 'block';
-
-            // 渲染到canvas
-            const context = canvas.getContext('2d');
-            context.imageSmoothingEnabled = true;
-            context.imageSmoothingQuality = 'high';
-            
-            await page.render({ 
-                canvasContext: context, 
-                viewport: renderViewport,
-                intent: 'display'
-            }).promise;
-
-            // 替换占位符
-            pageDiv.innerHTML = '';
-            pageDiv.appendChild(canvas);
-
-        } catch (error) {
-            console.error(`渲染第 ${pageNum} 页失败:`, error);
-            this.renderedPages.delete(pageNum);  // 失败时移除标记，允许重试
-        }
+        // 渲染细节（已渲染标记、画质因子、canvas 替换占位符、失败回滚）在
+        // pdf-viewer.js 的 PdfViewer.renderPage 里，与结构编辑器共用一份。
+        await PdfViewer.renderPage({
+            pdfDoc: this.pdfDoc,
+            pageNum,
+            pageDiv: document.getElementById('pdf-page-' + pageNum),
+            scale: this.scale,
+            devicePixelRatio: this.devicePixelRatio,
+            renderedPages: this.renderedPages,
+            decorateCanvas: (canvas) => {
+                canvas.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
+                canvas.style.display = 'block';
+            }
+        });
     }
 
     getVisiblePages() {
         const viewer = document.getElementById('pdf-viewer');
         if (!viewer) return [];
 
-        const viewerRect = viewer.getBoundingClientRect();
-        const pages = viewer.querySelectorAll('.pdf-page');
-        const visiblePages = [];
-
-        pages.forEach(page => {
-            const rect = page.getBoundingClientRect();
-            const pageNum = parseInt(page.getAttribute('data-page'));
-            
-            // 检查页面是否在可见区域内（包含缓冲区）
-            const isVisible = rect.bottom >= viewerRect.top - 1000 && 
-                            rect.top <= viewerRect.bottom + 1000;
-            
-            if (isVisible) {
-                visiblePages.push(pageNum);
-            }
-        });
-
-        return visiblePages;
+        // 检查页面是否在可见区域内（包含缓冲区）
+        return PdfViewer.collectVisiblePageNumbers(
+            viewer,
+            Array.from(viewer.querySelectorAll('.pdf-page')),
+            1000
+        );
     }
 
     async renderVisiblePages() {
@@ -904,10 +849,7 @@ class ChatApp {
     }
 
     scrollToPage(pageNum) {
-        const pageElement = document.getElementById('pdf-page-' + pageNum);
-        if (pageElement) {
-            pageElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
+        PdfViewer.scrollToPage(pageNum);
     }
 
     changePage(delta) {
@@ -1681,18 +1623,9 @@ class ChatApp {
     async clearChat() {
         try {
             // 直接带 session_id 请求：清空的是当前会话的历史，而不是服务端
-            // "最近活跃会话"（api.js 的 API.chat.clear() 不带会话ID，此处保留
-            // 兼容但仍显式指定会话，避免多会话时清空错文件）。
-            const res = await fetch('/api/v1/chat/clear', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ session_id: this.sessionId || null })
-            });
-            if (!res.ok) {
-                const error = await res.json().catch(() => ({}));
-                throw new Error(error.detail || '清空失败');
-            }
-            await res.json();
+            // "最近活跃会话"（API.chat.clear() 不传会话 ID 时按最近活跃会话清，
+            // 此处显式指定当前会话，避免多会话时清空错文件）。
+            await API.chat.clear(this.sessionId || null);
 
             document.getElementById('messages').innerHTML = '<div class="welcome"><div style="font-size: 4rem; margin-bottom: 1rem;">✨</div><h3>对话已清空</h3><p>可以开始新的对话了</p></div>';
             // 重置分页状态
@@ -1760,16 +1693,8 @@ class ChatApp {
 
             // 调用API加载更多消息（显式带 session_id，避免服务端回退到
             // "最近活跃会话"时取错会话的历史）
-            const response = await fetch(
-                `/api/v1/chat/load-more-messages?offset=${this.loadedMessageCount}&limit=20` +
-                (this.sessionId ? `&session_id=${encodeURIComponent(this.sessionId)}` : '')
-            );
-
-            if (!response.ok) {
-                throw new Error('加载失败');
-            }
-
-            const result = await response.json();
+            const result = await API.chat.loadMoreMessages(
+                this.loadedMessageCount, 20, this.sessionId || null);
 
             if (result.status === 'success' && result.messages.length > 0) {
                 // 保存当前滚动位置

@@ -107,8 +107,7 @@
   }
 
   async function loadDates() {
-    const res = await fetch('/api/v1/briefs/dates');
-    const data = await res.json();
+    const data = await API.briefs.dates({ checkOk: false });
     dateSelect.innerHTML = data.dates.map((d) => `<option value="${d}">${d}</option>`).join('');
     if (data.dates.length) currentDate = data.dates[0];
   }
@@ -116,8 +115,7 @@
   async function loadCards() {
     currentDate = dateSelect.value;
     if (!currentDate) return;
-    const res = await fetch(`/api/v1/briefs/cards?coverage_date=${encodeURIComponent(currentDate)}`);
-    const data = await res.json();
+    const data = await API.briefs.cards(currentDate, { checkOk: false });
 
     pdfCount.textContent = data.pdf.length;
     webCount.textContent = data.web.length;
@@ -161,8 +159,7 @@
   webToggleAllBtn.addEventListener('click', () => toggleAllInSection(webList, webToggleAllBtn));
 
   async function loadJobs() {
-    const res = await fetch('/api/v1/jobs');
-    const data = await res.json();
+    const data = await API.jobs.list({ checkOk: false });
     jobsTbody.innerHTML = data.jobs.slice(0, 20).map((j) => {
       // 排队中/运行中都能取消；"cancelling"是已发起取消、等待收尾的
       // 中间态，不能再点一次（避免重复调用 cancel）。
@@ -186,11 +183,7 @@
         btn.disabled = true;
         btn.textContent = '取消中…';
         try {
-          const res = await fetch(`/api/v1/jobs/${encodeURIComponent(btn.dataset.jobId)}/cancel`, { method: 'POST' });
-          if (!res.ok) {
-            const body = await res.json().catch(() => ({}));
-            throw new Error(body.detail || `HTTP ${res.status}`);
-          }
+          await API.jobs.cancel(btn.dataset.jobId);
         } catch (err) {
           alert(`取消失败：${err.message}`);
         }
@@ -215,19 +208,14 @@
       alert('请先勾选要加载的条目');
       return;
     }
-    const res = await fetch('/api/v1/briefs/load', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ coverage_date: coverageDate, item_ids: itemIds }),
-    });
-    const data = await res.json();
+    const data = await API.briefs.load(coverageDate, itemIds, { checkOk: false });
     alert(`已排队 ${data.queued}/${data.requested} 个任务`);
     await loadCards();
     loadJobs();
   });
 
   document.getElementById('sync-memory-btn').addEventListener('click', async () => {
-    await fetch('/api/v1/briefs/sync-memory', { method: 'POST' });
+    await API.briefs.syncMemory({ checkOk: false });
     alert('补灌任务已排队');
     loadJobs();
   });

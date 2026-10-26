@@ -178,9 +178,7 @@ class DataManager {
 
     async loadMemoryOverview() {
         try {
-            const res = await fetch('/api/v1/memory/overview');
-            if (!res.ok) throw new Error('Failed to fetch memory overview');
-            this.memoryOverview = await res.json();
+            this.memoryOverview = await API.memory.overview();
             this.renderMemoryOverview();
         } catch (error) {
             console.error('Error loading memory overview:', error);
@@ -219,8 +217,7 @@ class DataManager {
         document.querySelectorAll('#memory-namespace-tabs button').forEach((btn) => {
             btn.classList.toggle('active', btn.dataset.ns === ns);
         });
-        const res = await fetch(`/api/v1/memory/namespace/${encodeURIComponent(ns)}`);
-        const data = await res.json();
+        const data = await API.memory.namespace(ns, { checkOk: false });
         const groupsEl = document.getElementById('memory-groups');
         groupsEl.innerHTML = data.groups.length
             ? data.groups.map((g) => this.renderMemoryGroup(g)).join('')
@@ -255,14 +252,14 @@ class DataManager {
 
     async deleteMemoryItem(memoryId) {
         if (!confirm('删除这一条记忆？')) return;
-        await fetch(`/api/v1/memory/item/${encodeURIComponent(memoryId)}`, { method: 'DELETE' });
+        await API.memory.deleteItem(memoryId, { checkOk: false, parse: 'none' });
         if (this.currentMemoryNamespace) this.selectMemoryNamespace(this.currentMemoryNamespace);
         this.loadMemoryOverview();
     }
 
     async deleteMemorySource(namespace, sourceId) {
         if (!confirm(`删除来源 "${sourceId}" 的全部记忆？此操作不可撤销。`)) return;
-        await fetch(`/api/v1/memory/namespace/${encodeURIComponent(namespace)}/source/${encodeURIComponent(sourceId)}`, { method: 'DELETE' });
+        await API.memory.deleteSource(namespace, sourceId, { checkOk: false, parse: 'none' });
         if (this.currentMemoryNamespace) this.selectMemoryNamespace(this.currentMemoryNamespace);
         this.loadMemoryOverview();
     }
@@ -271,7 +268,7 @@ class DataManager {
         const ns = this.currentMemoryNamespace;
         if (!ns) return;
         if (!confirm(`清空 namespace "${ns}" 下的全部记忆？此操作不可撤销。`)) return;
-        await fetch(`/api/v1/memory/namespace/${encodeURIComponent(ns)}`, { method: 'DELETE' });
+        await API.memory.deleteNamespace(ns, { checkOk: false, parse: 'none' });
         this.selectMemoryNamespace(ns);
         this.loadMemoryOverview();
     }
@@ -283,12 +280,7 @@ class DataManager {
         const resultEl = document.getElementById('memory-search-result');
         resultEl.style.display = 'block';
         resultEl.textContent = '检索中...';
-        const res = await fetch('/api/v1/memory/search', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query, namespace }),
-        });
-        const data = await res.json();
+        const data = await API.memory.search(query, namespace, { checkOk: false });
         resultEl.textContent = data.answer || '(无结果)';
     }
 
@@ -303,10 +295,7 @@ class DataManager {
 
     async loadOverview() {
         try {
-            const response = await fetch('/api/v1/data/overview');
-            if (!response.ok) throw new Error('Failed to fetch overview');
-
-            this.overview = await response.json();
+            this.overview = await API.data.overview();
             this.renderOverview();
         } catch (error) {
             console.error('Error loading overview:', error);
@@ -349,10 +338,7 @@ class DataManager {
         emptyEl.style.display = 'none';
 
         try {
-            const response = await fetch('/api/v1/data/documents');
-            if (!response.ok) throw new Error('Failed to fetch documents');
-
-            this.documents = await response.json();
+            this.documents = await API.data.documents();
 
             loadingEl.style.display = 'none';
 
@@ -536,11 +522,7 @@ class DataManager {
 
         try {
             // Load all sessions from unified API
-            const resp = await fetch('/api/v1/sessions/list');
-            if (!resp.ok) {
-                throw new Error('Failed to fetch sessions');
-            }
-            const result = await resp.json();
+            const result = await API.sessions.list({ errorText: 'Failed to fetch sessions' });
             this.sessions = result.sessions || [];
 
             loadingEl.style.display = 'none';
@@ -560,10 +542,7 @@ class DataManager {
 
     async loadSessionStats() {
         try {
-            const response = await fetch('/api/v1/data/sessions/stats');
-            if (!response.ok) throw new Error('Failed to fetch session stats');
-
-            this.sessionStats = await response.json();
+            this.sessionStats = await API.data.sessionStats();
             this.renderSessionStats();
         } catch (error) {
             console.error('Error loading session stats:', error);
@@ -949,15 +928,7 @@ class DataManager {
 
             if (newTitle && newTitle !== originalTitle) {
                 try {
-                    const response = await fetch(`/api/v1/sessions/${sessionId}/rename`, {
-                        method: 'PATCH',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({new_title: newTitle})
-                    });
-
-                    if (!response.ok) throw new Error('Failed to rename session');
-
-                    const result = await response.json();
+                    await API.sessions.rename(sessionId, newTitle);
 
                     // Update in local data
                     const session = this.sessions.find(s => s.session_id === sessionId);
@@ -1113,18 +1084,7 @@ class DataManager {
 
         // Perform deletion in background
         try {
-            const response = await fetch(`/api/v1/data/documents/${docName}/parts`, {
-                method: 'DELETE',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({parts})
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.detail || 'Failed to delete document');
-            }
-
-            const result = await response.json();
+            const result = await API.data.deleteDocumentParts(docName, parts);
 
             // Show success notification
             this.showSuccess(`删除成功，释放空间 ${result.freed_space_mb.toFixed(2)} MB`);
@@ -1152,13 +1112,7 @@ class DataManager {
         }
 
         try {
-            const response = await fetch(`/api/v1/data/cleanup/smart?days=${daysNum}`, {
-                method: 'POST'
-            });
-
-            if (!response.ok) throw new Error('Failed to cleanup');
-
-            const result = await response.json();
+            const result = await API.data.smartCleanup(daysNum);
 
             this.showSuccess(`清理完成：删除 ${result.count} 个文档，释放 ${result.freed_mb.toFixed(2)} MB 空间`);
 
@@ -1189,13 +1143,7 @@ class DataManager {
     async showDocumentDetail(docName) {
         try {
             // 从DocumentRegistry获取brief_summary
-            const response = await fetch(`/api/v1/data/documents/${encodeURIComponent(docName)}/summary`);
-
-            if (!response.ok) {
-                throw new Error('Failed to fetch document summary');
-            }
-
-            const data = await response.json();
+            const data = await API.data.documentSummary(docName);
             const summary = data.brief_summary || '暂无摘要信息';
 
             // 显示modal
@@ -1247,13 +1195,7 @@ class DataManager {
     async showSessionDetail(sessionId) {
         try {
             // 从session API获取会话历史
-            const response = await fetch(`/api/v1/sessions/${sessionId}`);
-
-            if (!response.ok) {
-                throw new Error('Failed to fetch session detail');
-            }
-
-            const session = await response.json();
+            const session = await API.sessions.get(sessionId);
             const messages = session.messages || [];
 
             // 显示modal
@@ -1391,50 +1333,13 @@ class DataManager {
     }
 
     showSuccess(message, duration = 3000) {
-        // Simple notification (you can enhance this)
-        const notification = document.createElement('div');
-        notification.style.cssText = `
-            position: fixed;
-            top: 2rem;
-            right: 2rem;
-            background: #28a745;
-            color: white;
-            padding: 1rem 1.5rem;
-            border-radius: 0.5rem;
-            box-shadow: var(--shadow-lg);
-            z-index: 2000;
-            animation: slideInRight 0.3s ease-out;
-        `;
-        notification.textContent = message.startsWith('✅') ? message : '✅ ' + message;
-        document.body.appendChild(notification);
-
-        setTimeout(() => {
-            notification.style.animation = 'slideOutRight 0.3s ease-out';
-            setTimeout(() => notification.remove(), 300);
-        }, duration);
+        // 浮层的 DOM/动画已收敛到 ui-feedback.js（波次9）：preset 'manage' 就是
+        // 这里原来那份内联样式（含 ✅/❌ 前缀补齐规则），视觉上保持原样。
+        UIFeedback.toast(message, { type: 'success', duration, preset: 'manage', mark: true });
     }
 
     showError(message, duration = 5000) {
-        const notification = document.createElement('div');
-        notification.style.cssText = `
-            position: fixed;
-            top: 2rem;
-            right: 2rem;
-            background: #dc3545;
-            color: white;
-            padding: 1rem 1.5rem;
-            border-radius: 0.5rem;
-            box-shadow: var(--shadow-lg);
-            z-index: 2000;
-            animation: slideInRight 0.3s ease-out;
-        `;
-        notification.textContent = message.startsWith('❌') ? message : '❌ ' + message;
-        document.body.appendChild(notification);
-
-        setTimeout(() => {
-            notification.style.animation = 'slideOutRight 0.3s ease-out';
-            setTimeout(() => notification.remove(), 300);
-        }, duration);
+        UIFeedback.toast(message, { type: 'error', duration, preset: 'manage', mark: true });
     }
 
     updateSelectionUI() {
@@ -1495,9 +1400,7 @@ class DataManager {
 
         for (const sessionId of sessionIds) {
             try {
-                const response = await fetch(`/api/v1/sessions/${sessionId}`, {
-                    method: 'DELETE'
-                });
+                const response = await API.sessions.remove(sessionId, { raw: true });
 
                 if (response.ok) {
                     successCount++;
@@ -1616,15 +1519,7 @@ class DataManager {
 
     async performBatchDelete(docNames, deleteSource = false) {
         try {
-            const response = await fetch('/api/v1/data/documents', {
-                method: 'DELETE',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({doc_names: docNames, delete_source: deleteSource})
-            });
-
-            if (!response.ok) throw new Error('Failed to batch delete documents');
-
-            const result = await response.json();
+            const result = await API.data.deleteDocuments(docNames, deleteSource);
 
             if (result.success > 0) {
                 this.showSuccess(
@@ -1652,10 +1547,7 @@ class DataManager {
 
     async loadPendingPdfs() {
         try {
-            const response = await fetch('/api/v1/data/documents/pending');
-            if (!response.ok) throw new Error('Failed to fetch pending PDFs');
-
-            this.pendingPdfs = await response.json();
+            this.pendingPdfs = await API.data.pendingPdfs();
             this.renderPendingPdfs();
             this.renderOverview(); // Update counts
         } catch (error) {
@@ -1728,16 +1620,7 @@ class DataManager {
         }
 
         try {
-            const response = await fetch(`/api/v1/data/documents/${encodeURIComponent(filename)}/index`, {
-                method: 'POST'
-            });
-
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || 'Index failed');
-            }
-
-            const result = await response.json();
+            const result = await API.data.indexDocument(filename, 'Index failed');
 
             if (result.status === 'started') {
                 // 添加到活跃任务
@@ -1782,7 +1665,7 @@ class DataManager {
 
         for (const [taskId, taskInfo] of this.activeTasks) {
             try {
-                const response = await fetch(`/api/v1/data/tasks/${taskId}`);
+                const response = await API.data.task(taskId, { raw: true });
                 if (!response.ok) continue;
 
                 const task = await response.json();
@@ -1897,16 +1780,7 @@ class DataManager {
 
         for (const filename of filenames) {
             try {
-                const response = await fetch(`/api/v1/data/documents/${encodeURIComponent(filename)}/index`, {
-                    method: 'POST'
-                });
-
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'Start failed');
-                }
-
-                const result = await response.json();
+                const result = await API.data.indexDocument(filename, 'Start failed');
 
                 if (result.status === 'started') {
                     // 添加到活跃任务
@@ -2004,11 +1878,7 @@ class DataManager {
 
     async deletePdfSourceFiles(filenames) {
         try {
-            const response = await fetch('/api/v1/data/pdfs', {
-                method: 'DELETE',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({filenames})
-            });
+            const response = await API.data.deletePdfSources(filenames);
 
             const result = await response.json().catch(() => ({}));
             if (!response.ok) {

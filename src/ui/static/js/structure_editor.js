@@ -120,13 +120,9 @@ class StructureEditor {
         try {
             this.showLoading('加载文档列表...');
 
-            const response = await fetch('/api/v1/data/documents');
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            const documents = await response.json();
+            const documents = await API.data.documents({
+                errorText: (res) => `HTTP ${res.status}: ${res.statusText}`
+            });
 
             // API 直接返回文档数组
             const select = document.getElementById('doc-select');
@@ -173,8 +169,7 @@ class StructureEditor {
             this.currentDoc = docName;
 
             // 加载结构
-            const response = await fetch(`/api/v1/structure/${docName}`);
-            const data = await response.json();
+            const data = await API.structure.get(docName);
 
             if (!data.success) {
                 throw new Error(data.message || '加载文档结构失败');
@@ -217,7 +212,7 @@ class StructureEditor {
 
     async loadPdf() {
         try {
-            const pdfUrl = `/api/v1/pdf/view/${this.currentDoc}`;
+            const pdfUrl = API.pdf.viewUrl(this.currentDoc);
             const loadingTask = pdfjsLib.getDocument(pdfUrl);
             this.pdfDoc = await loadingTask.promise;
             this.totalPages = this.pdfDoc.numPages;
@@ -267,69 +262,25 @@ class StructureEditor {
     }
 
     async createPagePlaceholders(container) {
-        const firstPage = await this.pdfDoc.getPage(1);
-        const baseViewport = firstPage.getViewport({ scale: this.scale });
-        const width = Math.floor(baseViewport.width);
-        const height = Math.floor(baseViewport.height);
+        // 占位块的 DOM 结构与 chat 页 PDF 预览共用 pdf-viewer.js 一份实现
+        const size = await PdfViewer.measurePageSize(this.pdfDoc, this.scale);
 
         for (let pageNum = 1; pageNum <= this.totalPages; pageNum++) {
-            const pageDiv = document.createElement('div');
-            pageDiv.className = 'pdf-page';
-            pageDiv.id = 'pdf-page-' + pageNum;
-            pageDiv.setAttribute('data-page', pageNum);
-            pageDiv.setAttribute('data-rendered', 'false');
-
-            const placeholder = document.createElement('div');
-            placeholder.className = 'pdf-placeholder';
-            placeholder.style.width = width + 'px';
-            placeholder.style.height = height + 'px';
-            placeholder.textContent = `第 ${pageNum} 页`;
-
-            pageDiv.appendChild(placeholder);
-            container.appendChild(pageDiv);
+            container.appendChild(PdfViewer.createPageElement(pageNum, size));
         }
     }
 
     async renderPage(pageNum) {
-        if (this.renderedPages.has(pageNum)) return;
-        if (!this.pdfDoc) return;
-
-        try {
-            const pageDiv = document.getElementById('pdf-page-' + pageNum);
-            if (!pageDiv) return;
-
-            this.renderedPages.add(pageNum);
-            pageDiv.setAttribute('data-rendered', 'true');
-
-            const page = await this.pdfDoc.getPage(pageNum);
-
-            const qualityScale = this.devicePixelRatio * 1.5;
-            const baseViewport = page.getViewport({ scale: this.scale });
-            const renderViewport = page.getViewport({ scale: this.scale * qualityScale });
-
-            const canvas = document.createElement('canvas');
-            canvas.width = renderViewport.width;
-            canvas.height = renderViewport.height;
-            canvas.style.width = Math.floor(baseViewport.width) + 'px';
-            canvas.style.height = Math.floor(baseViewport.height) + 'px';
-
-            const context = canvas.getContext('2d');
-            context.imageSmoothingEnabled = true;
-            context.imageSmoothingQuality = 'high';
-
-            await page.render({
-                canvasContext: context,
-                viewport: renderViewport,
-                intent: 'display'
-            }).promise;
-
-            pageDiv.innerHTML = '';
-            pageDiv.appendChild(canvas);
-
-        } catch (error) {
-            console.error(`渲染第 ${pageNum} 页失败:`, error);
-            this.renderedPages.delete(pageNum);
-        }
+        // 渲染细节（已渲染标记、画质因子、canvas 替换占位符、失败回滚）在
+        // pdf-viewer.js 的 PdfViewer.renderPage 里，与 chat 页 PDF 预览共用一份。
+        await PdfViewer.renderPage({
+            pdfDoc: this.pdfDoc,
+            pageNum,
+            pageDiv: document.getElementById('pdf-page-' + pageNum),
+            scale: this.scale,
+            devicePixelRatio: this.devicePixelRatio,
+            renderedPages: this.renderedPages
+        });
     }
 
     setupPdfScrollListener() {
@@ -387,21 +338,16 @@ class StructureEditor {
         const viewer = document.querySelector('.pdf-preview-container');
         if (!viewer) return;
 
-        const viewerRect = viewer.getBoundingClientRect();
         const buffer = 500; // 缓冲距离（像素）
+        const visiblePages = PdfViewer.collectVisiblePageNumbers(
+            viewer,
+            PdfViewer.collectPageElements(this.totalPages),
+            buffer
+        );
 
-        for (let pageNum = 1; pageNum <= this.totalPages; pageNum++) {
-            const pageDiv = document.getElementById('pdf-page-' + pageNum);
-            if (!pageDiv) continue;
-
-            const pageRect = pageDiv.getBoundingClientRect();
-
-            // 检查页面是否在可视区域内或缓冲区内
-            if (pageRect.bottom >= (viewerRect.top - buffer) &&
-                pageRect.top <= (viewerRect.bottom + buffer)) {
-                if (!this.renderedPages.has(pageNum)) {
-                    await this.renderPage(pageNum);
-                }
+        for (const pageNum of visiblePages) {
+            if (!this.renderedPages.has(pageNum)) {
+                await this.renderPage(pageNum);
             }
         }
     }
@@ -605,7 +551,7 @@ class StructureEditor {
     scrollToPage(pageNum) {
         const pageDiv = document.getElementById('pdf-page-' + pageNum);
         if (pageDiv) {
-            pageDiv.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            PdfViewer.scrollToPage(pageNum);
             this.currentPage = pageNum;
             document.getElementById('page-info').textContent = `页码: ${pageNum} / ${this.totalPages}`;
         }
@@ -788,18 +734,7 @@ class StructureEditor {
                 agendaDict[chapter.chapter_title] = chapter.pages;
             });
 
-            const saveResponse = await fetch(`/api/v1/structure/${this.currentDoc}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    agenda_dict: agendaDict,
-                    has_toc: false
-                })
-            });
-
-            const saveData = await saveResponse.json();
+            const saveData = await API.structure.save(this.currentDoc, agendaDict, false);
             if (!saveData.success) {
                 throw new Error('保存结构失败: ' + (saveData.message || '未知错误'));
             }
@@ -807,11 +742,7 @@ class StructureEditor {
             console.log('✅ 结构已保存，开始重建...');
 
             // 2. 启动重建任务
-            const response = await fetch(`/api/v1/structure/${this.currentDoc}/rebuild`, {
-                method: 'POST'
-            });
-
-            const data = await response.json();
+            const data = await API.structure.rebuild(this.currentDoc);
             this.hideLoading();
 
             if (!data.success) {
@@ -863,7 +794,7 @@ class StructureEditor {
 
         for (const [taskId, taskInfo] of this.activeTasks) {
             try {
-                const response = await fetch(`/api/v1/data/tasks/${taskId}`);
+                const response = await API.data.task(taskId, { raw: true });
                 if (!response.ok) continue;
 
                 const task = await response.json();
@@ -893,73 +824,9 @@ class StructureEditor {
     }
 
     showNotification(message, type = 'info', duration = 3000) {
-        // 创建通知元素
-        const notification = document.createElement('div');
-        notification.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            padding: 15px 20px;
-            border-radius: 8px;
-            color: white;
-            font-size: 14px;
-            font-weight: 500;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            z-index: 10001;
-            max-width: 400px;
-            animation: slideIn 0.3s ease-out;
-        `;
-
-        // 根据类型设置颜色
-        const colors = {
-            success: '#28a745',
-            error: '#dc3545',
-            info: '#2563eb',
-            warning: '#ffc107'
-        };
-        notification.style.background = colors[type] || colors.info;
-
-        notification.textContent = message;
-        document.body.appendChild(notification);
-
-        // 添加动画样式
-        if (!document.getElementById('notification-styles')) {
-            const style = document.createElement('style');
-            style.id = 'notification-styles';
-            style.textContent = `
-                @keyframes slideIn {
-                    from {
-                        transform: translateX(400px);
-                        opacity: 0;
-                    }
-                    to {
-                        transform: translateX(0);
-                        opacity: 1;
-                    }
-                }
-                @keyframes slideOut {
-                    from {
-                        transform: translateX(0);
-                        opacity: 1;
-                    }
-                    to {
-                        transform: translateX(400px);
-                        opacity: 0;
-                    }
-                }
-            `;
-            document.head.appendChild(style);
-        }
-
-        // 自动移除
-        setTimeout(() => {
-            notification.style.animation = 'slideOut 0.3s ease-out';
-            setTimeout(() => {
-                if (notification.parentNode) {
-                    notification.parentNode.removeChild(notification);
-                }
-            }, 300);
-        }, duration);
+        // 浮层的 DOM/动画已收敛到 ui-feedback.js（波次9），preset 'editor'
+        // 就是这里原来那份内联样式，视觉上保持原样。
+        UIFeedback.toast(message, { type, duration, preset: 'editor' });
     }
 }
 

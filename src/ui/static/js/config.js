@@ -71,9 +71,7 @@ class ConfigManager {
         try {
             UIComponents.showLoading('加载配置...');
 
-            const response = await fetch('/api/v1/config');
-            console.log('[Config] 配置响应状态:', response.status);
-            const data = await response.json();
+            const data = await API.config.get();
             console.log('[Config] 加载的配置数据:', data);
 
             this.config = data;
@@ -157,22 +155,7 @@ class ConfigManager {
             };
             console.log('[Config] 提供商配置:', providerConfig);
 
-            const providerResponse = await fetch('/api/v1/config/provider', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(providerConfig)
-            });
-
-            console.log('[Config] 提供商响应状态:', providerResponse.status);
-            if (!providerResponse.ok) {
-                const errorText = await providerResponse.text();
-                console.error('[Config] 提供商保存失败:', errorText);
-                throw new Error('保存提供商配置失败');
-            }
-
-            const providerData = await providerResponse.json();
+            const providerData = await API.config.saveProvider(providerConfig);
             console.log('[Config] 提供商保存成功:', providerData);
 
             // 保存系统配置
@@ -183,22 +166,7 @@ class ConfigManager {
             };
             console.log('[Config] 系统配置:', systemConfig);
 
-            const systemResponse = await fetch('/api/v1/config/system', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(systemConfig)
-            });
-
-            console.log('[Config] 系统响应状态:', systemResponse.status);
-            if (!systemResponse.ok) {
-                const errorText = await systemResponse.text();
-                console.error('[Config] 系统保存失败:', errorText);
-                throw new Error('保存系统配置失败');
-            }
-
-            const systemData = await systemResponse.json();
+            const systemData = await API.config.saveSystem(systemConfig);
             console.log('[Config] 系统保存成功:', systemData);
 
             UIComponents.hideLoading();
@@ -225,15 +193,7 @@ class ConfigManager {
         try {
             UIComponents.showLoading('重置配置...');
 
-            const response = await fetch('/api/v1/config/reset', {
-                method: 'POST'
-            });
-
-            if (!response.ok) {
-                throw new Error('重置配置失败');
-            }
-
-            const data = await response.json();
+            await API.config.reset();
 
             UIComponents.hideLoading();
             this.showStatus('✅ 配置已重置为默认值', 'success');

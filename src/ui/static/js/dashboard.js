@@ -1,8 +1,6 @@
 (async function loadSessionCount() {
     try {
-        const response = await fetch('/api/v1/sessions/list');
-        if (!response.ok) throw new Error('加载会话失败');
-        const data = await response.json();
+        const data = await API.sessions.list({ errorText: '加载会话失败' });
         const count = (data.sessions || []).length;
         const countElement = document.getElementById('session-count');
         if (countElement) {
@@ -61,9 +59,7 @@ function escapeHtmlDashboard(str) {
     cardEl.addEventListener('click', () => { window.location.href = '/briefs'; });
 
     try {
-        const datesRes = await fetch('/api/v1/briefs/dates');
-        if (!datesRes.ok) throw new Error('加载简报日期失败');
-        const { dates } = await datesRes.json();
+        const { dates } = await API.briefs.dates({ errorText: '加载简报日期失败' });
 
         if (!dates || !dates.length) {
             summaryEl.textContent = '暂无简报数据';
@@ -74,9 +70,7 @@ function escapeHtmlDashboard(str) {
         const latestDate = dates[0];
         headingEl.textContent = `📰 今日简报（${latestDate}）`;
 
-        const cardsRes = await fetch(`/api/v1/briefs/cards?coverage_date=${encodeURIComponent(latestDate)}`);
-        if (!cardsRes.ok) throw new Error('加载简报内容失败');
-        const data = await cardsRes.json();
+        const data = await API.briefs.cards(latestDate, { errorText: '加载简报内容失败' });
 
         const notLoaded = (data.counts && data.counts.not_loaded) || 0;
         summaryEl.textContent = `${data.pdf.length} 篇论文 · ${data.web.length} 篇文章` +
@@ -115,9 +109,7 @@ function escapeHtmlDashboard(str) {
 
     async function loadJobsSummary() {
         try {
-            const res = await fetch('/api/v1/jobs');
-            if (!res.ok) throw new Error('加载任务失败');
-            const data = await res.json();
+            const data = await API.jobs.list({ errorText: '加载任务失败' });
             jobs = (data.jobs || []).filter((j) => j.status === 'queued' || j.status === 'running');
             countEl.textContent = jobs.length ? `⏳ ${jobs.length} 个进行中` : '✅ 空闲';
             if (expanded) renderList();
