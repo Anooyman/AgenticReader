@@ -127,9 +127,9 @@
 
 {% block extra_js %}
 <!-- 使用 unpkg 作为备选CDN，更稳定 -->
-<script src="https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 </script>
 <script src="https://unpkg.com/marked@11.1.1/marked.min.js"></script>
 <link rel="stylesheet" href="https://unpkg.com/katex@0.16.9/dist/katex.min.css">
@@ -137,7 +137,6 @@
 <script src="https://unpkg.com/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
 <script src="/static/js/ui-feedback.js"></script>
 <script src="/static/js/utils.js"></script>
-<script src="/static/js/api.js"></script>
 <script src="/static/js/ui-components.js"></script>
 <script src="/static/js/pdf-viewer.js"></script>
 <script src="/static/js/chat.js"></script>

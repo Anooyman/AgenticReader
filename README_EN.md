@@ -291,7 +291,7 @@ All prefixed with `/api/v1`:
 ```
 documents  GET  /list /available-pdfs      POST /upload /index       DELETE /{doc_name}
 chat       POST /initialize /clear         GET  /load-more-messages
-sessions   GET  /list /current/info /{id}  DELETE /{id}  PATCH /{id}/rename
+sessions   GET  /list /{id}  DELETE /{id}  PATCH /{id}/rename
 pdf        GET  /view/{doc_name}           # PDF page images
 structure  GET|PUT /{doc_name}             POST /{doc_name}/rebuild
 config     GET  ""                         POST /provider /system /reset
@@ -307,7 +307,7 @@ speech     POST /transcribe /synthesize
 llmmemory  # transparent proxy to an external LLM-Memory webui (for the /memory page)
 ```
 
-Note: the sessions API has exactly five endpoints — list / current-info / get / delete / rename — there are **no** import/export endpoints; `/api/v1/memory` has no single-item GET endpoint.
+Note: the sessions API has exactly four endpoints — list / get / delete / rename — there are **no** import/export endpoints (the former current/info was removed as unused); `/api/v1/memory` has no single-item GET endpoint.
 
 ## Security Notes
 

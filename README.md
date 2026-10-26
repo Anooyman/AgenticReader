@@ -290,7 +290,7 @@ data/
 ```
 documents  GET  /list /available-pdfs      POST /upload /index       DELETE /{doc_name}
 chat       POST /initialize /clear         GET  /load-more-messages
-sessions   GET  /list /current/info /{id}  DELETE /{id}  PATCH /{id}/rename
+sessions   GET  /list /{id}  DELETE /{id}  PATCH /{id}/rename
 pdf        GET  /view/{doc_name}           # PDF 页面图
 structure  GET|PUT /{doc_name}             POST /{doc_name}/rebuild
 config     GET  ""                         POST /provider /system /reset
@@ -306,7 +306,7 @@ speech     POST /transcribe /synthesize
 llmmemory  # 外部 LLM-Memory webui 的透传代理（/memory 页）
 ```
 
-注意：会话端点只有 list / current-info / get / delete / rename 五个，**没有** import/export；`/api/v1/memory` 没有单条 item 的 GET 读取端点。
+注意：会话端点只有 list / get / delete / rename 四个，**没有** import/export（曾有 current/info，因无消费者已删）；`/api/v1/memory` 没有单条 item 的 GET 读取端点。
 
 ## 安全说明
 

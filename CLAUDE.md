@@ -121,7 +121,7 @@ src/
 │                             #   （api=fetch 唯一出口 / ui-feedback=共享 toast /
 │                             #   pdf-viewer=pdf.js 原语 / utils / ui-components /
 │                             #   chat-enhancer/chat/manage/config/structure_editor/
-│                             #   briefs/dashboard/memory）
+│                             #   briefs/dashboard/memory/base-badge）
 └── utils/                    # path_guard(safe_path 防目录穿越)、helpers、validators、
                               #   async_utils、json_io(write_json_atomic 唯一实现)
 ```
@@ -286,7 +286,7 @@ Health:  GET /health                  # app.py 内联定义
 
 documents: GET /list /available-pdfs | POST /upload /index | DELETE /{doc_name}
 chat:      POST /initialize /clear    | GET  /load-more-messages
-sessions:  GET /list /current/info /{id} | DELETE /{id} | PATCH /{id}/rename
+sessions:  GET /list /{id} | DELETE /{id} | PATCH /{id}/rename
 pdf:       GET /view/{doc_name}                   # 页面图（专用 images/image 路由已删，走 view 降级）
 structure: GET|PUT /{doc_name} | POST /{doc_name}/rebuild
 config:    GET "" | POST /provider /system /reset       # 落 data/config/app_config.json
@@ -306,7 +306,7 @@ llmmemory: GET /dates /papers ... 等                    # 外部 webui 透传�
 
 - FastAPI + Jinja2 + 原生 ES6 JS，无框架；WebSocket `/ws/chat` 实时对话，REST 做初始化/历史分页。
 - **UI 聊天走 Orchestrator 而非 AnswerAgent**：`enabled_tools`/`selected_docs` 只是透传给会话上下文的元数据，真正的工具决策在 Orchestrator 的 ReAct 循环里；`agents_used` 由子 agent name 映射成展示标签（MemorySearch/DeepDive）。
-- 会话存储：`data/sessions/{session_id}.json` 平铺（SessionManager 自动迁移旧 mode 子目录）；会话 API 为 list/current-info/get/delete/rename——**没有** import/export 端点。
+- 会话存储：`data/sessions/{session_id}.json` 平铺（SessionManager 自动迁移旧 mode 子目录）；会话 API 为 list/get/delete/rename——**没有** import/export，原 current/info 端点因无消费者已删。
 - 数据管理页 `/data`：总览、按文档列 JSON/向量库/图片/摘要四类产物、部分/批量删除（`/api/v1/data/documents/{name}/parts`）、smart cleanup、sessions stats，以及 Memory tab（缓存查看/清理、backup、危险的全量 reset 端点已删）。
 - PDF 查看：`/api/v1/pdf/view/{doc_name}`（页面图，图片降级内建于 view）。
 - 结构编辑器 `/structure`：编辑 structure.json 后走 rebuild 图重生成摘要/索引。

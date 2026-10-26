@@ -27,18 +27,6 @@ async def list_sessions(limit: Optional[int] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/current/info")
-async def get_current_session():
-    """获取当前会话信息"""
-    try:
-        current_session = chat_service.get_current_session()
-        if not current_session:
-            return None
-        return current_session
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @router.get("/{session_id}")
 async def get_session(session_id: str):
     """

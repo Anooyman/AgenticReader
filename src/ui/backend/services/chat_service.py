@@ -329,10 +329,6 @@ class ChatService:
 
         print(f"✅ 聊天服务已重置（session_id={session_id}）")
 
-    def get_current_session(self) -> Optional[Dict]:
-        """获取当前会话信息"""
-        return self.current_session
-
     def list_sessions(self, limit: Optional[int] = None) -> list:
         """列出会话列表"""
         return self.session_manager.list_sessions(limit)
