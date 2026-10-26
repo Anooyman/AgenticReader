@@ -116,9 +116,12 @@ src/
 │   │   └── services/         # session_manager chat_service chat_ingest job_runner
 │   │                         #   memory_browse task_service briefs_data
 │   ├── templates/            # base dashboard chat config manage structure_editor briefs memory
-│   └── static/               # css/（api/chat/chat-enhanced/config/dashboard/manage/
-│                             #   briefs/memory 等）+ js/（api/chat-enhancer/chat/manage/
-│                             #   config/structure_editor/briefs/dashboard/memory）
+│   └── static/               # css/（base/components/variables/api/chat/chat-enhanced/
+│                             #   config/dashboard/manage/briefs/memory 等）+ js/
+│                             #   （api=fetch 唯一出口 / ui-feedback=共享 toast /
+│                             #   pdf-viewer=pdf.js 原语 / utils / ui-components /
+│                             #   chat-enhancer/chat/manage/config/structure_editor/
+│                             #   briefs/dashboard/memory）
 └── utils/                    # path_guard(safe_path 防目录穿越)、helpers、validators、
                               #   async_utils、json_io(write_json_atomic 唯一实现)
 ```

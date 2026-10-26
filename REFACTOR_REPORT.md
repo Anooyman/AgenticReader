@@ -344,10 +344,11 @@ utils   → config 3
 3. ✅（波次6-A，6c502fb + 19e067c）evaluate 纯标记节点删除（核实无 LLM 调用、写的
    is_complete 无人消费）、`_build_initial_state()` 统一且全仓测试收口、deep_dive
    按 (doc_name, provider) LRU-32 复用（error/全失败即剔除）。
-4. ◐ 后端半已完（波次7-A，f69546d）：`data.py` 按 documents/storage/ops 拆为
-   data/data_storage/data_ops/data_common 四模块，路由表 HEAD↔WT 全等（70==70）
-   独立对账，前端零改动；前端半（`api.js` 唯一出口 + `ui-feedback.js` +
-   `pdf-viewer.js`）待动。
+4. ✅ 后端半（波次7-A，f69546d）：`data.py` 拆 documents/storage/ops 四模块，
+   路由表 HEAD↔WT 全等（70==70）。前端半（波次9）：裸 fetch 54→0（api.js 唯一出口，
+   REST 路径全部集中），4 份 toast 收敛为 ui-feedback.js 三 preset（60 个调用点零改动），
+   chat/structure_editor 两份 pdf.js 复制归并为 pdf-viewer.js 六原语。
+   **P2 至此全部完成**（仅 registry.delete_all_files 孤儿亦已删，4aa200f）。
 5. ✅（波次7-B，85c84ca）6 模板 8 个内联块 3,051 行外链为 7 CSS + 2 JS；强不变式
    「每个 static 文件是 HEAD 内联块逐字节子串」由主线独立验证。全部 Jinja 标记
    核实不在块内，零注入需求；<30 行小块（FOUC 防闪、workerSrc、全局开关）刻意留内联。
