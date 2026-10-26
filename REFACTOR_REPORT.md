@@ -354,9 +354,11 @@ utils   → config 3
 
 ### P3 — 按需（不阻塞）——未动
 
-- 抓取栈二选一（保留 `scraper/`，把 `search` 内部的 `SimpleMCPClient` 归并过去）。
-- `process_pdf_queue` / `process_web_queue` 抽 `pipeline/common.py`。
-- README（1,045 行）与 `README_EN`（800 行）重写或标注 deprecated：两份都 0 次提及 memory/pipeline/scraper，且列出 7 个已删模块。**交叉验证轮给出的 8 处实锤失实清单**（以 CLAUDE.md 为底稿逐项修）：① AnswerAgent 写成 ReAct 循环 ×6 处（实为确定性 plan 单轮）② 会话 import/export 端点 ×4 处宣称（sessions.py 实际只有 list/current-info/get/delete/rename）③ localStorage 双存储（全仓仅主题键一处）④ LOGGING_LEVEL ×4 处推荐（代码 0 读取，级别写死在 client.py basicConfig）⑤ 目录树幽灵文件 `config/prompts/agent_prompts.py`、`core/parallel/processor.py` ⑥ 会话按 `{mode}/` 子目录存储的旧说法 + mkdir 指引带 backups/exports ⑦ 代码读取的 31 个 env 有 12 个完全未记载（HOST/CORS_ORIGINS/RETRIEVAL_DEDUP_WINDOW/BRIEFS_DIR/LLM_MEMORY_URL/EMBEDDING_PROVIDER 等），而 `EMBEDDING_DEPLOYMENT` vs `EMBEDDING_DEPLOYMENT_NAME` 两种拼法并存 ⑧ uvicorn 示例 `--host 0.0.0.0` 与仅回环设计相悖。
+- 抓取栈二选一（保留 `scraper/`，把 `search` 内部的 `SimpleMCPClient` 归并过去）——未动。
+- ✅（波次8-A）`process_pdf_queue` / `process_web_queue` 已抽 `pipeline/common.py`
+  （状态机骨架/ingest 记账/逐题 QA 循环/日志口径四段归并；argparse、main_async 签名、
+  pipeline_stage 断点语义、摘要 schema 四处"形似而语义异"刻意未合并）。
+- ✅（波次8-B，0348ecf）README（1,045 行）与 `README_EN`（800 行）已重写为 333/334 行对等版：两份都 0 次提及 memory/pipeline/scraper，且列出 7 个已删模块。**交叉验证轮给出的 8 处实锤失实清单**（以 CLAUDE.md 为底稿逐项修）：① AnswerAgent 写成 ReAct 循环 ×6 处（实为确定性 plan 单轮）② 会话 import/export 端点 ×4 处宣称（sessions.py 实际只有 list/current-info/get/delete/rename）③ localStorage 双存储（全仓仅主题键一处）④ LOGGING_LEVEL ×4 处推荐（代码 0 读取，级别写死在 client.py basicConfig）⑤ 目录树幽灵文件 `config/prompts/agent_prompts.py`、`core/parallel/processor.py` ⑥ 会话按 `{mode}/` 子目录存储的旧说法 + mkdir 指引带 backups/exports ⑦ 代码读取的 31 个 env 有 12 个完全未记载（HOST/CORS_ORIGINS/RETRIEVAL_DEDUP_WINDOW/BRIEFS_DIR/LLM_MEMORY_URL/EMBEDDING_PROVIDER 等），而 `EMBEDDING_DEPLOYMENT` vs `EMBEDDING_DEPLOYMENT_NAME` 两种拼法并存 ⑧ uvicorn 示例 `--host 0.0.0.0` 与仅回环设计相悖。
 
 ---
 

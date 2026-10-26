@@ -99,7 +99,7 @@ src/
 │   └── vector_db/            # vector_db_client.py(FAISS+轮次去重) / metadata_db.py
 ├── memory/                   # LanceDB 长期记忆（见 "Memory System"）
 │   └── adapters/             # ai_research / webapp_chat / chunking / base
-├── pipeline/                 # 每日简报批处理（briefs_parser / queue_store / process_pdf_queue /
+├── pipeline/                 # 每日简报批处理（briefs_parser / queue_store / common(队列处理骨架) / process_pdf_queue /
 │                             #   process_web_queue / sync_* / generate_qa_brief / render_report / paths）
 ├── services/
 │   └── scraper/              # Playwright 网页抓取器包：core(browser/downloader/extractor/
