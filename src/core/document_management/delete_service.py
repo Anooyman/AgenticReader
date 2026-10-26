@@ -490,7 +490,8 @@ def _remove(
 def _delete_generated_files(result: DeleteDocumentResult, doc_info: Optional[Dict[str, Any]]) -> None:
     """删除注册表 generated_files 里登记的产物（images / json_data / vector_db / summaries）。
 
-    这三份老实现都没做这一步（registry.delete_all_files() 里有等价逻辑但零调用者），
+    这三份老实现都没做这一步（registry 里曾有等价实现 delete_all_files()，零调用者
+    且路径不走 safe_path，已随波次8 清理删除），
     属于漏删：一旦索引流程写出的产物命名与 constants helper 的约定漂移，
     按约定拼出来的路径就删不到，留下孤儿文件。这里按注册表记录补删一次。
     登记路径来自注册表而非请求，仍一律断言落在数据目录内才动手。
