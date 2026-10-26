@@ -2,799 +2,333 @@
 
 [中文](README.md) | English
 
-AgenticReader is an advanced document analysis and intelligent Q&A tool powered by large language models (LLM) and Multi-Agent architecture. Built on Agent orchestration patterns, focused on **deep PDF document parsing**, integrates multiple LLM providers (Azure OpenAI, OpenAI, Ollama, Gemini), and automatically extracts content, generates summaries, builds vector databases, and supports multi-turn intelligent conversations. Offers both **CLI command-line** and **Web interface** modes.
+AgenticReader is an LLM-powered document analysis and Q&A tool: it parses PDFs, builds FAISS vector indexes, and drives multi-turn intelligent conversations through five LangGraph agents. Beyond document Q&A it ships three real subsystems:
+
+- **Long-term memory** (`src/memory/`): LanceDB-backed cross-session memory (`data/memory_db/`) — conversations are ingested automatically and retrieved by agents during Q&A;
+- **Daily brief pipeline** (`src/pipeline/`): brief HTML files are queued in batch → downloaded/scraped → multi-dimensional QA summaries → automatically written into long-term memory;
+- **Web scraping service** (`src/services/scraper/`): a Playwright-based anti-detection scraper that also runs as a stdio MCP server.
+
+Supports Azure OpenAI, OpenAI, Ollama and Gemini providers; usable via **CLI** and **Web UI**.
+
+> Developer-oriented architecture details (module hierarchy, dev patterns, testing notes) live in [CLAUDE.md](CLAUDE.md) at the repo root.
 
 ---
 
-## Key Features | Core Capabilities
+## Key Features
 
-### 🤖 Multi-Agent Architecture | Multi-Agent System
-- **IndexingAgent**: Document indexing agent for PDF parsing, structure extraction, chunking, vectorization
-- **AnswerAgent**: Q&A agent for intent analysis, answer generation, dialogue management, tool invocation
-- **RetrievalAgent**: Retrieval agent for semantic search and context assembly
-- **SearchAgent**: Web search agent for search engine retrieval and URL content analysis
-- **LangGraph Orchestration**: State machine workflow based on LangGraph, supports complex task orchestration
+### 🤖 Five LangGraph Agents
+- **IndexingAgent**: PDF parse → structure extraction → chunking → parallel chapter processing → vectorization → registration (any node error short-circuits straight to register; failed documents never appear in the searchable list)
+- **AnswerAgent**: deterministic single-turn graph — `rewrite_query → plan → (execute → generate | generate) → END`; `plan` builds tool calls in plain code from the user-selected tools (no LLM decision, no loop)
+- **RetrievalAgent**: ReAct retrieval loop over single/multiple documents (semantic search + observation + summary)
+- **SearchAgent**: web search & URL analysis (DuckDuckGo MCP search + web_scraper MCP crawling; large content is auto-indexed then answered)
+- **Orchestrator**: the real entry point of the web chat — a ReAct loop that autonomously calls `search_memory` (queries long-term memory) and/or `deep_dive_document` (deep-dive into one document); multiple tool calls run in parallel
 
-### 📄 Document Processing | Document Processing
-- **Smart Indexing**: PDF to image + OCR content extraction
-- **Structure Analysis**: Auto-detect document structure and chapter organization
-- **Chunking**: Intelligent text splitting with chapter-level organization
-- **Vector Database**: Efficient semantic search based on FAISS
-- **Parallel Processing**: Async parallel chapter processing, significantly improved speed
-- **Incremental Caching**: Stage-wise caching to avoid reprocessing
+### 📄 Document Processing
+- Page-by-page PDF-to-image parsing, automatic TOC/chapter structure detection, chapter-level chunking
+- FAISS semantic search (index and embeddings clients both have process-level LRU caches)
+- Parallel chapter summaries/refactoring (`ChapterProcessor`), parallel multi-document retrieval (`ParallelRetrievalCoordinator`)
+- Stage-wise caching: re-indexing skips completed stages automatically
+- Concurrency-safe document registry `data/doc_registry.json` (flock + atomic writes), tracking processing state
 
-### 💬 Intelligent Q&A | Intelligent Q&A
-- **Four Dialogue Modes**:
-  - Single Document Mode - Deep Q&A for specific documents
-  - Cross-Document Intelligent Mode - Auto-select relevant documents for retrieval
-  - Cross-Document Manual Mode - Manually specify multiple documents as background knowledge
-  - General Mode - Free conversation without binding to specific documents
-- **Smart Tool System**:
-  - 📎 Document Retrieval Tool (retrieve_documents) - Retrieve relevant content from indexed documents
-  - 🌐 Web Search Tool (search_web) - Search the internet for latest information or analyze specified URLs
-  - Users can enable/disable tools via UI buttons
-  - Support tool combination (document retrieval + web search simultaneously)
-- **Intent Recognition**: Auto-determine if document retrieval is needed
-- **Context Management**: Smart caching of retrieval results for multi-turn dialogue
-- **History Compression**: LLM auto-summarizes conversation history, saves context space (90%+ compression rate)
-- **Document Summary**: Auto-generate brief summaries (brief_summary.md)
+### 💬 Intelligent Q&A
+- **Five CLI entry modes**: single document / cross-document auto-selection / cross-document manual multi-select / web search & URL analysis / general chat
+- **Tool system**: `retrieve_documents` and `search_web`, togglable in the chat UI
+- **Memory-augmented**: conversations are persisted to LanceDB (`webapp-chat` namespace) and the Orchestrator can retrieve past memory during answers
+- LLM-based conversation-history compression; retrieval results deduplicated per conversation round window (`RETRIEVAL_DEDUP_WINDOW`, default 5)
+- Sessions are stored server-side as flat `data/sessions/{session_id}.json` files; the browser uses localStorage only for the theme preference (the `AgenticReader_theme` key)
 
-### 🌐 Dual Operation Modes | Dual Operation Modes
-- **CLI Command-line Mode**:
-  - Interactive menu system supporting document indexing, management, and dialogue
-  - Free switching between four dialogue modes
-  - Real-time view of document selection and retrieval process
-  - Suitable for technical users and automation scenarios
-- **Web Interface Mode**:
-  - **Dashboard**: Document overview, quick indexing, mode selection
-  - **Smart Chat**: WebSocket real-time communication, supports Markdown/LaTeX rendering
-  - **Real-time Progress Visualization**:
-    - 📊 **Node Flow Diagram**: Visual representation of Agent execution flow (Rewrite→Think→Act→Evaluate→Format)
-    - 🔄 **Iteration Progress**: Real-time display of retrieval iteration count and percentage
-    - 🛠️ **Tool Invocation**: Show current retrieval tools and detailed information
-    - 🎨 **Modern Design**: Gradient backgrounds, smooth animations, micro-interactions
-  - **Parallel Retrieval Visualization**:
-    - 📚 **Multi-document Concurrency**: Display all document retrieval progress simultaneously in cross-doc mode
-    - 🔽 **Collapse/Expand**: Independent progress cards for each document, collapsible for detailed flow
-    - ⚡ **Incremental Updates**: Flicker-free real-time updates without interrupting user viewing
-    - 🎯 **Independent Flow**: Each PDF has its own node flow visualization
-  - **Session Management**: Three modes with independent session storage, support import/export
-  - **Data Management**: Granular data control with partial deletion, batch operations, smart cleanup
-  - **Configuration Center**: LLM provider switching, parameter adjustment
-  - **Responsive Design**: Mobile-friendly adaptive interface
+### 🧠 Long-Term Memory (src/memory/)
+- A single LanceDB table `memories`, isolated by namespace: `ai-research` (brief/article summaries) and `webapp-chat` (conversation history)
+- **chat_ingest background lane**: periodically scans the sessions directory and ingests sessions that are "updated + idle + containing a complete Q&A round" (content-hash idempotent dedup; watermark in `data/pipeline/chat_ingest_state.json`)
+- **agentic_search**: a ReAct loop over four tools (semantic / keyword / keywords-pool / list-by-source), capped at 4 iterations, used by the Orchestrator
+- The Memory tab on `/data` offers overview, search and deletion (single item / by source / whole namespace)
+
+### 📰 Daily Brief Pipeline (src/pipeline/)
+- Brief HTML files under `BRIEFS_DIR` are parsed into a queue (`data/pipeline/pipeline_queue.json`)
+- The job_runner background lane processes the queue serially: download/scrape → IndexingAgent + AnswerAgent (+ SearchAgent) multi-dimensional QA → `generate_qa_brief` condenses a summary
+- Summaries land in `data/pipeline/summaries/{pdf,web}/` and are written into the `ai-research` memory namespace; a failing item retries until `MAX_ATTEMPTS = 3`, then turns permanently failed
+- Optional standalone CLIs: `python -m src.pipeline.sync_pipeline_queue` / `render_report` / `sync_memory_ingest` / `generate_qa_brief`
+
+### 🕷️ Web Scraping (src/services/scraper/)
+- Playwright (Chromium) scraping: browser management, download, content extraction and anti-detection modules
+- Runnable as a stdio MCP server: `python -m scraper.mcp_server.server` (`PYTHONPATH=src/services`, already wired into the `web_scraper` entry of `MCP_CONFIG` for SearchAgent)
 
 ---
 
-## Quick Start | Quick Start
+## Quick Start
 
-### Requirements | Requirements
-- Python 3.12+
-- Virtual environment (recommended)
+### Requirements
+- Python 3.12+ (virtual environment recommended)
+- API credentials for at least one LLM provider (Azure OpenAI / OpenAI / Ollama / Gemini)
 
-<details>
-<summary><b>📦 Installation & Configuration (Click to expand)</b></summary>
-
-### Installation Steps
+### Installation
 
 ```bash
-# 1. Clone repository
+# 1. Clone the repository
 git clone <repository-url>
 cd AgenticReader
 
-# 2. Install Python dependencies
+# 2. Install dependencies
 pip install -r requirements.txt
+pip install -r requirements-dev.txt   # only needed for tests (pytest / pytest-asyncio)
 
-# 3. Create data directories
-mkdir -p data/pdf data/pdf_image data/json_data data/vector_db data/output data/sessions data/sessions/backups data/sessions/exports
+# 3. Create data directories (most components auto-create them, but create upfront is recommended)
+mkdir -p data/pdf data/pdf_image data/json_data data/vector_db data/output \
+         data/config data/sessions data/memory_db data/pipeline
 
-# 4. Configure environment variables (create .env file)
-# See "Configuration" section below
+# 4. Install the Playwright browser (required by the web_scraper MCP)
+playwright install chromium
+
+# 5. Web search relies on DuckDuckGo MCP launched via uvx (install `uv`)
+#    as long as `uvx duckduckgo-mcp-server` can start, no further setup is needed
 ```
 
-### Configuration
+### Environment Variables
 
-Create a `.env` file in the project root:
+Create a `.env` file in the project root (loaded via python-dotenv; plain shell env vars also work):
 
 ```bash
-# === LLM Service Configuration ===
-# Azure OpenAI
+# === Azure OpenAI ===
 CHAT_API_KEY=your_azure_api_key
 CHAT_AZURE_ENDPOINT=https://your-endpoint.openai.azure.com/
 CHAT_DEPLOYMENT_NAME=your_deployment_name
 CHAT_API_VERSION=2024-02-15-preview
 CHAT_MODEL_NAME=gpt-4
-
-# Embedding Configuration
 EMBEDDING_API_KEY=your_embedding_api_key
-EMBEDDING_MODEL=text-embedding-ada-002
+EMBEDDING_API_VERSION=2024-02-15-preview
+EMBEDDING_AZURE_ENDPOINT=https://your-endpoint.openai.azure.com/
+EMBEDDING_DEPLOYMENT=your_embedding_deployment
 
-# === Or use OpenAI ===
-# CHAT_API_KEY=your_openai_api_key
-# CHAT_MODEL_NAME=gpt-4
+# === Or OpenAI ===
+# OPENAI_API_KEY=***            # defaults: gpt-3.5-turbo / text-embedding-ada-002
+# OPENAI_MODEL_NAME=gpt-4o
 # OPENAI_BASE_URL=https://api.openai.com/v1/
 
-# === Or use Ollama (Local) ===
+# === Or Ollama (local) ===
 # OLLAMA_BASE_URL=http://localhost:11434
-# CHAT_MODEL_NAME=llama3
+# OLLAMA_MODEL_NAME=llama3
+# OLLAMA_EMBEDDING_MODEL=nomic-embed-text
 
-# === Or use Gemini (Google) ===
-# GEMINI_API_KEY=your_gemini_api_key
+# === Or Gemini ===
+# GEMINI_API_KEY=***
 # GEMINI_MODEL_NAME=gemini-1.5-pro
 # GEMINI_EMBEDDING_MODEL=text-embedding-004
-# GEMINI_BASE_URL=your_gemini_api_endpoint
 
-# === Optional Configuration ===
-LOGGING_LEVEL=INFO
+# === Provider selection (fallback when no UI config exists) ===
+# PROVIDER=openai          # azure | openai | ollama | gemini
+# EMBEDDING_PROVIDER=openai
 ```
 
-</details>
-
-### Running the Application | Running the Application
-
-#### Method 1: Web Interface (Recommended)
+### Start the Web UI
 
 ```bash
-# Start FastAPI server
 python src/ui/run_server.py
-
-# Or use uvicorn (supports auto-reload)
-uvicorn src.ui.backend.app:app --reload --host 0.0.0.0 --port 8000
-
-# Access: http://localhost:8000
+# → http://127.0.0.1:8000
 ```
 
-**📊 Dashboard (/) - Main Menu**
-- Document list and overview
-- Quick indexing (batch/single)
-- Mode selection (Single/Cross/Manual)
-- Quick access to chat page
-
-**💬 Chat Page (/chat) - Intelligent Dialogue**
-
-Three chat modes:
-- **Single Mode**: Select specific document for deep Q&A
-- **Cross Mode**: Auto-select relevant documents (intelligent decision)
-- **Manual Mode**: Manually specify multiple documents as background
-
-Features:
-- WebSocket real-time communication
-- Markdown and LaTeX formula rendering
-- Timestamp display (year/month/day hour:minute:second)
-- **Smart Scrolling & Navigation**:
-  - 🎯 Smart Scroll: Auto-scroll only when user is at bottom, never interrupts history browsing
-  - ⬆⬇ Quick Navigation Buttons: Jump to earliest message or latest reply
-  - 💡 New Content Notification: Animated alerts with unread badge when viewing history
-  - 📍 Precise Positioning: "View Latest" jumps to top of latest assistant reply (not bottom)
-- Session persistence (three modes independently managed)
-- Clear history (clears both file and memory)
-- Display selected documents and similarity scores
-
-**📁 Data Management (/data) - Documents & Sessions**
-
-Document Management:
-- View all indexed documents and storage usage
-- **Granular partial deletion**: Delete specific data types for individual documents
-  - JSON data, Vector DB, Images, Summary
-- Batch operations: Select multiple documents for deletion
-- Smart cleanup: Auto-clean data older than N days (default 30)
-
-Session Management:
-- View all mode sessions (Single/Cross/Manual)
-- Session detail view (Markdown/LaTeX rendering support)
-- Delete specific sessions
-- Import/export session data
-
-**⚙️ Configuration Center (/config) - LLM Settings**
-- Switch LLM providers (Azure OpenAI, OpenAI, Ollama, Gemini)
-- Adjust model parameters
-- API Key management
-
-**🔧 Structure Editor (/structure) - Document Structure**
-- View and edit document chapter structure
-- PDF online preview
-- Rebuild vector database
-
----
-
-#### Method 2: CLI Command-line Mode
+`run_server.py` is the recommended entry point (cross-platform, Windows console handling, auto-reload). By default it **binds only to the 127.0.0.1 loopback address** — the app is designed for local, unauthenticated use. Override with env vars: `HOST=0.0.0.0` (starting with a non-loopback HOST prints a WARNING; assess the risk yourself), `PORT=8080`. Equivalent manual start (uvicorn's default host is also 127.0.0.1):
 
 ```bash
-# Start interactive CLI
+uvicorn src.ui.backend.app:app --reload --port 8000
+```
+
+### Start the CLI
+
+```bash
 python main.py
 ```
 
-**Four Dialogue Modes:**
+Main menu: enter a document number for single-document chat; `c` for cross-document auto-selected chat (picks documents by their brief summaries); `s` for cross-document manual multi-select; `w` for web search & URL analysis (SearchAgent); `0` for general chat; `i` to index a new PDF from `data/pdf/`; `m` to view/delete documents. Inside a conversation: `clear` history, `switch` mode, `main` back to menu, `quit` to exit.
 
-1. **Single Mode** - Select specific document
-   ```
-   [Single (doc.pdf)] 👤 Query: What is this document about?
-   🤖 Assistant: This document discusses...
-   ```
+### Run Tests
 
-2. **Cross Mode** - Auto-select relevant documents
-   ```
-   [Cross Mode] 👤 Query: Compare the viewpoints
-   📚 Selected Documents (2):
-      - doc1.pdf (similarity: 0.856)
-      - doc2.pdf (similarity: 0.742)
-   🤖 Assistant: Based on retrieval...
-   ```
-
-3. **Manual Mode** - Manually select multiple documents
-   ```
-   Select documents: 1,2 (or 'all')
-   [Manual (2 docs)] 👤 Query: Summarize both
-   🤖 Assistant: Comprehensive summary...
-   ```
-
-4. **General Mode** - Free conversation
-   ```
-   [General Mode] 👤 Query: What is machine learning?
-   🤖 Assistant: Machine learning is...
-   ```
-
-**Commands:**
-- `i` - Index new document
-- `m` - Manage documents (view/delete)
-- `clear` - Clear conversation history
-- `switch` - Switch mode
-- `main` - Return to main menu
-- `quit`/`exit` - Exit program
+```bash
+pytest                         # full run: script-style tests needing real LLM calls are auto-skipped
+                               # when credentials are missing — runs fine credential-free
+python tests/test_imports.py   # zero-dependency import smoke test, no network, no LLM calls
+```
 
 ---
 
-<details>
-<summary><b>📁 Project Structure (Click to expand)</b></summary>
+## Page Tour
+
+| Page | Path | Purpose |
+|---|---|---|
+| Dashboard | `/` | Indexed-document overview, quick indexing, jump to chat |
+| Chat | `/chat` | Real-time WebSocket conversation (served by the Orchestrator), Markdown/LaTeX rendering, tool & document toggles, MemorySearch/DeepDive tags on messages |
+| Data Management | `/data` | Storage overview, per-document deletion of the four artifact types (JSON / vector DB / images / summaries), batch delete, smart cleanup, session stats, Memory tab |
+| Configuration | `/config` | Provider switching, system settings (persisted to `data/config/app_config.json`) |
+| Structure Editor | `/structure` | Edit a document's structure.json and rebuild summaries/index; online PDF preview |
+| Daily Briefs | `/briefs` | Browse `BRIEFS_DIR` brief entries, check-and-load into the pipeline queue, watch background jobs |
+| Brief–Memory Bridge | `/memory` | Bridges an **external** LLM-Memory webui (`LLM_MEMORY_URL`, default `http://127.0.0.1:8765`) — a different system from the built-in `src/memory/` |
+| API docs | `/docs` `/redoc` | Generated by FastAPI |
+| Health check | `/health` | status / timestamp / version |
+
+## Common Tasks
+
+**Index your first PDF**: drop it into `data/pdf/`, click index on `/` (or pick `i` in the CLI). Node-by-node progress logs: parse → structure → chunk → chapters → index → summary → register.
+
+**Use long-term memory in chat**: just chat — after replies, the chat_ingest lane ingests idle complete sessions automatically; later questions may have the Orchestrator autonomously call `search_memory` over your history.
+
+**Combine document retrieval and web search in one answer**: tick the 📎 document-retrieval and 🌐 web-search tools in `/chat`; in the CLI use mode `w` for pure web search.
+
+**Switch LLM provider**: in the web UI pick it on `/config` (written to `data/config/app_config.json`; one question uses the same provider across the whole chain); in the CLI fall back to env `PROVIDER`. Priority: explicit argument > `app_config.json` > env `PROVIDER` > `openai`.
+
+**Delete / clean data**: `/data` supports deleting only a document's images or vector DB (freeing space while keeping parsed results so re-indexing skips re-parsing), batch delete, and `cleanup/smart` by age; all deletions funnel through the single implementation `src/core/document_management/delete_service.py`.
+
+**Run the daily brief pipeline**: put brief HTMLs under `BRIEFS_DIR` (env-overridable; default `~/Desktop/AATF-Intelligence-Briefs`) → check "load" on `/briefs` → job_runner processes them in the background; summaries land in `data/pipeline/summaries/` and enter memory.
+
+**Use a different model per agent**: edit `AGENT_MODEL_OVERRIDES` in `src/config/model_overrides.py` (looked up by agent name).
+
+**Use speech**: `/api/v1/speech/transcribe|synthesize` (requires `OPENAI_API_KEY`).
+
+---
+
+## Configuration Reference (full env var list)
+
+**Chat model credentials (`src/config/settings.py`)**
+
+| Variable | Notes |
+|---|---|
+| `CHAT_API_KEY` `CHAT_API_VERSION` `CHAT_AZURE_ENDPOINT` `CHAT_DEPLOYMENT_NAME` `CHAT_MODEL_NAME` | Azure OpenAI |
+| `OPENAI_API_KEY` `OPENAI_MODEL_NAME` (default gpt-3.5-turbo) `OPENAI_BASE_URL` | OpenAI |
+| `OLLAMA_BASE_URL` (default `http://localhost:11434`) `OLLAMA_MODEL_NAME` (default llama3) | Ollama |
+| `GEMINI_API_KEY` `GEMINI_MODEL_NAME` (default gemini-1.5-pro) `GEMINI_BASE_URL` | Gemini |
+
+**Embedding (the single read entry point for provider/model name is `settings.get_embedding_provider()` / `get_embedding_model_name()`)**
+
+| Variable | Notes |
+|---|---|
+| `EMBEDDING_PROVIDER` | embedding provider selection (default openai) |
+| `EMBEDDING_API_KEY` `EMBEDDING_API_VERSION` `EMBEDDING_AZURE_ENDPOINT` `EMBEDDING_DEPLOYMENT` `EMBEDDING_MODEL` | Azure embedding |
+| `OPENAI_EMBEDDING_MODEL` (default text-embedding-ada-002) | OpenAI embedding |
+| `OLLAMA_EMBEDDING_MODEL` (default llama3) | Ollama embedding |
+| `GEMINI_EMBEDDING_MODEL` (default text-embedding-004) | Gemini embedding |
+
+**Runtime behavior**
+
+| Variable | Notes |
+|---|---|
+| `HOST` / `PORT` | `run_server.py` bind address/port, default `127.0.0.1` / `8000`; non-loopback HOST prints a WARNING |
+| `CORS_ORIGINS` | comma-separated origins; defaults allow only localhost/127.0.0.1:8000; `*` disables credentials automatically |
+| `PROVIDER` | provider fallback for the CLI and other paths without UI config |
+| `RETRIEVAL_DEDUP_WINDOW` | retrieval dedup round window, default 5 |
+| `BRIEFS_DIR` | brief HTML directory, default `~/Desktop/AATF-Intelligence-Briefs` |
+| `LLM_MEMORY_URL` | external LLM-Memory webui address (bridged by the `/memory` page), default `http://127.0.0.1:8765` |
+| `DEBUG` | WebSocket debug-output switch (`true` to enable), off by default |
+
+**Two common misconceptions**
+- **There is no `LOGGING_LEVEL` env var**: no code reads it; the log level is hardcoded in `logging.basicConfig(level=logging.INFO)` in `src/core/llm/client.py` — change that line for DEBUG.
+- **There is no client-side session storage**: sessions live server-side only; localStorage stores just the theme preference (the `AgenticReader_theme` key in `base.html`).
+
+---
+
+## Architecture at a Glance
 
 ```
 AgenticReader/
-├── main.py                        # CLI entry (uses AnswerAgent)
-├── src/
-│   ├── agents/                    # 🤖 Multi-Agent System
-│   │   ├── indexing/              # IndexingAgent - Document indexing
-│   │   │   ├── agent.py           # Indexing agent implementation
-│   │   │   ├── state.py           # Indexing state definition
-│   │   │   └── doc_registry.py    # Document registry
-│   │   ├── answer/                # AnswerAgent - Intelligent Q&A
-│   │   │   ├── agent.py           # Answer agent implementation
-│   │   │   ├── tools.py           # Answer tools
-│   │   │   ├── tools_config.py    # Tool configuration
-│   │   │   └── state.py           # Answer state definition
-│   │   ├── retrieval/             # RetrievalAgent - Document retrieval
-│   │   │   ├── agent.py           # Retrieval agent implementation
-│   │   │   └── state.py           # Retrieval state definition
-│   │   └── search/                # SearchAgent - Web search agent
-│   │       ├── agent.py           # Search agent implementation
-│   │       ├── tools.py           # Search and scraping tools
-│   │       ├── utils.py           # MCP client and utilities
-│   │       ├── README.md          # SearchAgent documentation
-│   │       └── state.py           # Search state definition
-│   ├── core/                      # Core functionality
-│   │   ├── llm/                   # LLM abstraction layer
-│   │   │   ├── client.py          # Unified LLM client
-│   │   │   ├── providers.py       # Multi-provider support
-│   │   │   └── history.py         # Conversation history management
-│   │   ├── vector_db/             # Vector database
-│   │   │   └── vector_db_client.py
-│   │   └── processing/            # Document processing tools
-│   │       ├── index_document.py  # Document indexing entry
-│   │       ├── manage_documents.py # Document management tools
-│   │       ├── parallel_processor.py # Parallel processor
-│   │       └── text_splitter.py   # Text splitter
-│   ├── config/                    # Configuration management
-│   │   ├── settings.py            # Global configuration
-│   │   ├── prompts/               # Prompt templates
-│   │   └── tools/                 # Agent tool definitions
-│   ├── services/                  # External services
-│   │   └── mcp_client.py          # MCP client (retained)
-│   ├── ui/                        # Web Interface
-│   │   ├── run_server.py          # FastAPI startup script
-│   │   ├── backend/               # Backend API
-│   │   │   ├── app.py             # FastAPI application
-│   │   │   ├── api/v1/            # API endpoints
-│   │   │   │   ├── pdf.py         # PDF processing (uses IndexingAgent)
-│   │   │   │   ├── chapters.py    # Chapter viewing
-│   │   │   │   ├── chat.py        # WebSocket chat
-│   │   │   │   └── data.py        # Data management
-│   │   │   └── services/          # Service layer
-│   │   │       ├── chat_service.py # Chat service (uses AnswerAgent)
-│   │   │       ├── session_service.py # Session management
-│   │   │       └── data_service.py    # Data management
-│   │   ├── templates/             # Jinja2 templates
-│   │   └── static/                # Static resources
-│   └── utils/                     # Utility functions
-├── data/                          # Data directory
-│   ├── pdf/                       # PDF source files
-│   ├── pdf_image/                 # PDF to images
-│   ├── json_data/                 # Document data (organized by doc name)
-│   │   └── {doc_name}/            # Document data folder
-│   │       ├── data.json          # Raw extracted data
-│   │       ├── structure.json     # Document structure
-│   │       └── chunks.json        # Chunked data
-│   ├── vector_db/                 # Vector database
-│   ├── output/                    # Generated summary files
-│   ├── sessions/                  # Session data
-│   │   ├── backups/               # Session backups
-│   │   └── exports/               # Session exports
-│   └── doc_registry.json          # Document registry
-└── requirements.txt               # Python dependencies
+├── main.py                     # CLI entry (drives AnswerAgent / SearchAgent)
+├── src/agents/                 # Five agents (each with agent/nodes/tools/state/prompts)
+│   ├── base.py                 #   AgentBase: provider selection, per-name model overrides
+│   ├── indexing/               #   IndexingAgent (incl. components/metadata_extractor.py)
+│   ├── answer/                 #   AnswerAgent (tools_config.py registry; components/ selector·synthesizer·formatter)
+│   ├── retrieval/              #   RetrievalAgent (ReAct retrieval)
+│   ├── search/                 #   SearchAgent (utils.py holds SimpleMCPClient, stdio transport)
+│   └── orchestrator/           #   Orchestrator + sub_agents/ (memory_search, deep_dive)
+├── src/config/                 # settings.py (LLM/Embedding/MCP config), constants.py,
+│   └── prompts/                #   model_overrides.py; prompts only metadata_prompts.py
+├── src/core/
+│   ├── document_management/    # registry / indexer / delete_service (the single delete implementation) / manager
+│   ├── llm/                    # client (LLMBase + logging + embeddings cache) / providers / history
+│   ├── parallel/               # indexing.py (ChapterProcessor) / retrieval.py (ParallelRetrievalCoordinator)
+│   └── vector_db/              # vector_db_client (FAISS + round dedup + index cache) / metadata_db
+├── src/memory/                 # LanceDB long-term memory (config / ingest / search / vector_store / adapters)
+├── src/pipeline/               # brief pipeline (briefs_parser / queue_store / process_pdf_queue /
+│                               #   process_web_queue / generate_qa_brief / render_report / sync_* / paths)
+├── src/services/scraper/       # Playwright scraper package (core/browser·downloader·extractor·anti_detection,
+│                               #   storage, mcp_server/server·tools)
+├── src/ui/
+│   ├── run_server.py           # launch entry (HOST/PORT, loopback-safe default)
+│   ├── backend/                # app.py (lifespan starts the job_runner + chat_ingest lanes), config.py
+│   │   ├── api/                # pages (7 pages), websocket (/ws/chat), v1/ (documents chat pdf
+│   │   │                       #   structure config sessions data·data_storage·data_ops·data_common
+│   │   │                       #   briefs jobs memory speech llmmemory)
+│   │   └── services/           # chat_service (routes to Orchestrator), session_manager, chat_ingest,
+│   │                           #   job_runner, memory_browse, task_service, briefs_data, brief_memory
+│   ├── templates/              # base dashboard chat config manage structure_editor briefs memory
+│   └── static/                 # css/ (chat manage dashboard briefs memory …) js/ (api chat
+│                               #   chat-enhancer manage config dashboard briefs memory …)
+├── src/utils/                  # json_io (the single write_json_atomic implementation), path_guard (safe_path) etc.
+└── data/                       # runtime data (see below)
 ```
 
-</details>
+**Data directories** (all flat under `data/`, 9 in total):
+
+```
+data/
+├── pdf/            # PDF sources to index
+├── pdf_image/      # per-page PDF images (folder per document)
+├── json_data/      # parsed data ({doc}/data.json, structure.json, chunks.json)
+├── vector_db/      # FAISS indexes ({doc}_data_index/)
+├── output/         # brief_summary.md and other summary artifacts
+├── config/         # app_config.json (provider / system settings)
+├── sessions/       # flat {session_id}.json sessions (legacy per-mode subdirs auto-migrated)
+├── memory_db/      # LanceDB long-term memory store
+├── pipeline/       # pipeline_queue.json, webapp_jobs.json, chat_ingest_state.json, summaries/
+└── doc_registry.json  # document registry
+```
+
+**Chat data flow**: `/ws/chat` → `chat_service` → **Orchestrator.ask()** (ReAct: may autonomously call `search_memory` → `agentic_search` in `src/memory/search.py`, and `deep_dive_document` → AnswerAgent deep-dive into one document; guarded by round/context/timeout limits). The CLI drives AnswerAgent / SearchAgent directly from `main.py`.
+
+**Indexing data flow**: upload/select a PDF → the IndexingAgent graph (check_cache → parse → extract_structure → chunk → process_chapters → build_index → generate_brief_summary → register); errors short-circuit straight to register and are never marked completed.
+
+**MCP services** (`MCP_CONFIG` in `settings.py`): `duckduckgo` (`uvx duckduckgo-mcp-server`) and `web_scraper` (this repo's own Playwright scraping MCP). The MCP client is `SimpleMCPClient` in `src/agents/search/utils.py` (stdio).
+
+## REST API Quick Reference
+
+All prefixed with `/api/v1`:
+
+```
+documents  GET  /list /available-pdfs      POST /upload /index       DELETE /{doc_name}
+chat       POST /initialize /clear         GET  /load-more-messages
+sessions   GET  /list /current/info /{id}  DELETE /{id}  PATCH /{id}/rename
+pdf        GET  /view/{doc_name}           # PDF page images
+structure  GET|PUT /{doc_name}             POST /{doc_name}/rebuild
+config     GET  ""                         POST /provider /system /reset
+data       GET  /overview /documents /documents/{name}/summary /documents/pending
+               /sessions/stats /tasks/{task_id}
+           POST /documents/{filename}/index /cleanup/smart
+           DELETE /pdfs /documents/{name}/parts /documents
+briefs     GET  /dates /cards              POST /load /sync-memory
+jobs       GET  ""                         POST /{job_id}/retry /cancel
+memory     GET  /overview /namespace/{ns}  POST /search
+           DELETE /item/{id} /namespace/{ns}/source/{source_id} /namespace/{ns}
+speech     POST /transcribe /synthesize
+llmmemory  # transparent proxy to an external LLM-Memory webui (for the /memory page)
+```
+
+Note: the sessions API has exactly five endpoints — list / current-info / get / delete / rename — there are **no** import/export endpoints; `/api/v1/memory` has no single-item GET endpoint.
+
+## Security Notes
+
+- Binds only to `127.0.0.1` by default and CORS allows only local origins — the app targets local use and has no authentication; add your own protection before exposing it via `HOST`.
+- Every API that builds data paths from a document name passes through `safe_path()` (`src/utils/path_guard.py`) to prevent path traversal.
+- All deletions funnel through the single `delete_service.py` implementation, combined with path validation.
 
 ---
 
-<details>
-<summary><b>🏗️ Technical Architecture (Click to expand)</b></summary>
-
-### Core Components
-
-1. **Multi-Agent System** (src/agents/)
-   - **IndexingAgent**: Document indexing workflow
-     - Parse PDF → Extract structure → Chunk → Parallel process → Vectorize → Register
-   - **AnswerAgent**: Intelligent Q&A workflow (ReAct Architecture)
-     - Tool planning (plan) → Tool execution (execute) → Result evaluation (evaluate) → Answer generation (generate)
-     - Supported tools: Document retrieval (retrieve_documents), Web search (search_web)
-   - **RetrievalAgent**: Document retrieval workflow
-     - Semantic search → Context assembly → Result ranking
-   - **SearchAgent**: Web search workflow
-     - Search engine retrieval (search) → URL selection → Content scraping → Info extraction → Answer generation
-     - URL content analysis (url_analysis) → Content scraping → Size evaluation → Direct chat/Indexing processing
-
-2. **LLM Abstraction** (src/core/llm/)
-   - Unified interface supporting multiple providers (Azure OpenAI, OpenAI, Ollama)
-   - Role-based prompt management
-   - Session context auto-handling
-   - Intelligent conversation history compression
-
-3. **Vector Database** (src/core/vector_db/)
-   - FAISS vector storage
-   - Semantic similarity search
-   - Chapter metadata management
-   - Auto-load existing indexes
-
-4. **Document Registry** (src/agents/indexing/doc_registry.py)
-   - Centralized document metadata management
-   - Track processing stage status
-   - Record generated file paths
-   - Support incremental indexing
-
-5. **Web UI** (src/ui/)
-   - FastAPI + WebSocket real-time communication
-   - AnswerAgent-based chat service
-   - IndexingAgent-based document processing
-   - Data management system (granular control)
-
-### Agent Workflows
-
-#### IndexingAgent Workflow
-```
-PDF File
-  → check_cache (Check stage-wise caching)
-  → parse_document (Parse PDF)
-  → extract_structure (Extract document structure)
-  → chunk_text (Text chunking)
-  → process_chapters (Parallel process chapters)
-  → build_index (Build vector database)
-  → generate_brief_summary (Generate summary)
-  → register_document (Register to DocumentRegistry)
-```
-
-#### AnswerAgent Workflow (ReAct Loop)
-```
-User Query + enabled_tools
-  → plan (Tool planning - Construct calls based on user-enabled tools)
-  → execute_tools (Execute tool calls in parallel)
-      ├─ retrieve_documents (Document retrieval)
-      └─ search_web (Web search)
-  → evaluate (Evaluate if sufficient information)
-  → generate_answer (Generate final answer)
-  → Return to user
-```
-
-#### SearchAgent Workflow
-```
-Search Mode (search):
-  Query → web_search (Search engine) → select_urls (Select relevant URLs)
-      → scrape_content (Scrape content) → extract_info (Extract info)
-      → format_answer (Generate answer)
-
-URL Analysis Mode (url_analysis):
-  URL list → scrape_content (Scrape content) → evaluate_size (Evaluate content size)
-      ├─ Small content → direct_chat (Direct chat)
-      └─ Large content → index_then_chat (Index then chat)
-```
-
-### Data Storage Architecture
-
-**JSON Data** (organized by document):
-```
-data/json_data/{doc_name}/
-├── data.json           # Raw extracted data
-├── structure.json      # Document structure info
-└── chunks.json         # Chunked data
-```
-
-**Advantages**:
-- 📁 All JSON files centralized in document folder
-- 🗑️ Direct folder deletion when removing, no file omissions
-- 🔍 Easy to find and manage specific document data
-
-</details>
-
----
-
-<details>
-<summary><b>🛠️ Development Guide (Click to expand)</b></summary>
-
-### Adding New LLM Providers
-1. Add provider implementation in `src/core/llm/providers.py`
-2. Add configuration in `LLM_CONFIG` in `src/config/settings.py`
-3. Update provider switching logic
-
-### Adding New Agents
-1. Create new agent directory under `src/agents/`
-2. Create `agent.py` (inherit AgentBase) and `state.py` (define TypedDict)
-3. Implement `build_graph()` method to define workflow
-4. Integrate calls in other Agents
-
-### Extending IndexingAgent
-1. Add new processing nodes in `agent.py`
-2. Connect new nodes in `build_graph()`
-3. Update `IndexingState` to add new fields
-4. Implement cache checking logic
-
-### Extending Web API
-1. Create new route file in `src/ui/backend/api/v1/`
-2. Use Agents instead of directly calling processing logic
-3. Register route in `src/ui/backend/app.py`
-4. Follow RESTful conventions and FastAPI best practices
-
-### Extending Data Management Features
-1. Add new data types in `DataService.delete_document_data()`
-2. Update `data_type_paths` dictionary mapping
-3. Add corresponding endpoints in API
-4. Display new types in frontend `renderDataDetail()`
-
-### Debugging Tips
-```bash
-# Enable DEBUG logging
-export LOGGING_LEVEL=DEBUG
-python main.py
-
-# FastAPI development mode (auto-reload)
-uvicorn src.ui.backend.app:app --reload --host 0.0.0.0 --port 8000
-
-# View API documentation
-# http://localhost:8000/docs
-
-# Test Agents
-python -c "from src.agents.indexing import IndexingAgent; print('OK')"
-python -c "from src.agents.answer import AnswerAgent; print('OK')"
-```
-
-</details>
-
----
-
-<details>
-<summary><b>❓ FAQ (Click to expand)</b></summary>
-
-### 1. What file formats are supported?
-- ✅ **PDF files**: Fully supported, auto-extract text, images, structure
-- ❌ **URL/Web pages**: Temporarily not supported (Web Reader feature removed)
-- ❌ **Word/PPT**: Not supported yet (planned)
-
-### 2. What's the difference between the four dialogue modes?
-- **Single (Single Document)**: Deep Q&A for specific document, all retrieval limited to selected document
-- **Cross (Cross-Document Intelligent)**: System auto-selects relevant documents for retrieval and synthesis
-- **Manual (Cross-Document Manual Selection)**: Manually specify multiple documents as background knowledge
-- **General (General Conversation)**: Free conversation without binding to specific documents
-
-**Recommended scenarios:**
-- Learning specific document content → Single mode
-- Exploratory research, uncertain which document to use → Cross mode
-- Clearly need to compare multiple documents → Manual mode
-- General questions, chitchat → General mode
-
-### 3. How to index new documents?
-**CLI Mode:**
-```bash
-python main.py
-# Select 'i' - Index new document
-# Choose file from data/pdf/ directory
-# Wait for indexing (auto parse, chunk, vectorize)
-```
-
-**Web Mode:**
-```
-Visit http://localhost:8000/
-Click "Batch Index" or "Single Index"
-Upload PDF file
-Wait for background processing
-```
-
-### 4. How to view and manage indexed documents?
-**CLI Mode:**
-```bash
-python main.py
-# Select 'm' - Manage documents
-# View document list and storage usage
-# Can delete specific documents
-```
-
-**Web Mode:**
-```
-Visit http://localhost:8000/data
-View all documents and data types
-Use granular deletion (delete only specific data types)
-Or batch delete multiple documents
-```
-
-### 5. What is "granular deletion"?
-**Traditional deletion**: Deletes all related data when deleting document
-
-**Granular deletion**: Selectively delete specific data types, for example:
-- Delete Images only → Free up most space
-- Delete Vector DB only → Use when rebuilding index
-- Delete Summary only → Use when regenerating summary
-- Keep JSON data → Avoid re-parsing PDF
-
-**Usage scenarios:**
-- Insufficient space but want to keep document → Delete Images
-- Index corrupted, need rebuild → Delete Vector DB
-- Optimize index parameters → Delete Vector DB and Chunks, keep JSON
-
-### 6. How to manage conversation history?
-**Automatic management:**
-- LLM auto-summarizes conversation history (90%+ compression)
-- Maintains context coherence while saving tokens
-
-**Manual clearing:**
-- **CLI**: Enter `clear` command
-- **Web**: Click "Clear History" button
-- Clear operation clears both file and memory, and re-instantiates Agent
-
-**Session persistence:**
-- All conversations auto-saved to `data/sessions/{mode}/` directory
-- Three modes stored independently: single, cross, manual
-- Single mode: One session file per document (doc_name.json)
-- Cross/Manual mode: One file per session (session_id.json)
-
-### 7. How to switch LLM providers?
-**Method 1: Modify .env file**
-```bash
-# Azure OpenAI
-CHAT_API_KEY=your_azure_key
-CHAT_AZURE_ENDPOINT=https://your-endpoint.openai.azure.com/
-CHAT_DEPLOYMENT_NAME=gpt-4
-CHAT_API_VERSION=2024-02-15-preview
-
-# OpenAI
-CHAT_API_KEY=your_openai_key
-CHAT_MODEL_NAME=gpt-4
-OPENAI_BASE_URL=https://api.openai.com/v1/
-
-# Ollama (Local)
-OLLAMA_BASE_URL=http://localhost:11434
-CHAT_MODEL_NAME=llama3
-
-# Gemini
-GEMINI_API_KEY=your_gemini_key
-GEMINI_MODEL_NAME=gemini-1.5-pro
-```
-
-**Method 2: Web Configuration Page**
-```
-Visit http://localhost:8000/config
-Select LLM provider
-Fill in API Key and configuration
-Save and restart
-```
-
-### 8. How to clean old data to free space?
-**Smart Cleanup (Recommended):**
-```
-Visit http://localhost:8000/data
-Click "Smart Cleanup"
-Set days (default 30 days)
-System auto-cleans old data
-```
-
-**Manual Cleanup:**
-- Select specific document → Granular deletion (delete only Images/Vector DB)
-- Batch select → Delete multiple documents at once
-- Cache management → Clear PDF image cache, JSON cache
-
-**Most space-consuming data types:**
-1. Images (PDF pictures) - Usually 60-70% of space
-2. Vector DB (Vector index) - Usually 20-30% of space
-3. JSON data - Usually 5-10% of space
-4. Summary - Usually 1-2% of space
-
-### 9. Why was Web Reader feature removed?
-- Focus on deep PDF document parsing and Q&A
-- Web content structure is complex with varying quality
-- Planning to redesign better web content processing in the future
-
-</details>
-
----
-
-<details>
-<summary><b>📝 Changelog (Click to expand)</b></summary>
-
-### 2026-02-24 - Session Management UI Optimization & SearchAgent Fixes
-- 🎨 **Session Management Modal Integration**
-  - ✅ Added session management modal on homepage (no page navigation required)
-  - ✅ Session statistics dashboard (total, single-doc, multi-doc, pure chat)
-  - ✅ Real-time search and filter sessions
-  - ✅ Batch delete functionality (parallel processing)
-  - ✅ Session detail panel (slides in from right, full conversation history)
-  - ✅ URL hash support (`/#sessions` auto-opens modal)
-  - ✅ Keyboard shortcuts (ESC to close, click outside to close)
-- 📊 **Enhanced Session Card Information**
-  - ✅ Display session mode badges (🎯Single/🔀Cross/✋Manual)
-  - ✅ Display enabled tools (📚Document Retrieval/🌐Web Search)
-  - ✅ Display invoked Agents (🔍Retrieval Agent/🌐Search Agent)
-  - ✅ Enhanced time display (show both created and updated timestamps)
-  - ✅ Unified card styles between homepage modal and data management page
-- 🤖 **Agent Invocation Recording System**
-  - ✅ Auto-record Agents used per message (RetrievalAgent, SearchAgent)
-  - ✅ Session-level statistics of all Agents used
-  - ✅ Display Agent usage in cards and detail panels
-  - ✅ Yellow badges to distinguish Agent info (different from tool badges)
-- 🐛 **SearchAgent Content Truncation Fix**
-  - ✅ Fixed 2000-character hard limit issue in `format_answer` method
-  - ✅ Changed to smart dynamic allocation strategy (max 100,000 characters total)
-  - ✅ Single source no longer limited to 2000 characters, dynamically allocated based on total length
-  - ✅ Support long-text URL content full save and analysis (e.g., lengthy news, reports)
-  - ✅ Optimized logging to display merged content length
-
-### 2026-02-14 - SearchAgent Integration into AnswerAgent
-- 🌐 **Web Search Tool Launch**
-  - ✅ Integrated SearchAgent into AnswerAgent's tool system
-  - ✅ Enabled `search_web` tool in `tools_config.py`
-  - ✅ Implemented `AnswerTools.search_web()` method, calling SearchAgent
-  - ✅ Added `search_agent` instance to AnswerAgent (lazy initialization)
-  - ✅ Support two search modes: search engine retrieval and URL content analysis
-- 🔧 **Tool Invocation Architecture**
-  - ✅ AnswerAgent adopts ReAct loop: plan → execute → evaluate → generate
-  - ✅ Users enable/disable web search tool via UI button (🌐)
-  - ✅ Support tool combination: document retrieval + web search simultaneously
-  - ✅ Progress callback integration for real-time UI updates
-
-### 2026-02-04 - Chat Interface UX Optimization
-- 🎨 **Smart Scrolling System**
-  - ✅ Progress updates auto-scroll only when user is at bottom, avoiding interruption of history browsing
-  - ✅ Added `isNearBottom()` logic (100px threshold from bottom)
-  - ✅ All scroll operations changed to smart scroll (`smartScrollToBottom()`)
-- 🧭 **Quick Navigation Buttons**
-  - ✅ Added "⬆ Earliest Message" button: Jump to conversation top
-  - ✅ Added "⬇ View Latest Content" button: Jump to top of latest assistant reply (not bottom)
-  - ✅ Buttons below input box, universal for three chat modes
-  - ✅ Show only when user not at bottom, auto-hide/show
-- 💬 **New Content Notification System**
-  - ✅ Visual alerts when viewing history and new reply arrives
-  - ✅ Dynamic button text: "View Latest Content" → "New Content, Click to View"
-  - ✅ Pulse glow animation + arrow bounce animation + red unread count badge
-  - ✅ Unread count auto-increments, resets when clicking button or scrolling back to bottom
-- 🎭 **Visual & Interaction Optimization**
-  - ✅ Two buttons with different gradient colors (purple vs blue-purple)
-  - ✅ Smooth animation effects (slideDown, pulseButton, pulseBadge, bounceIcon)
-  - ✅ Button hover float effect, click feedback animation
-  - ✅ Removed duplicate scroll button in chat-enhancer.js to avoid conflicts
-
-### 2026-01-29 - Batch Indexing and Session Management Enhancements
-- 🐛 **Batch Indexing Fixes**
-  - ✅ Fixed concurrent write race condition during batch PDF indexing
-  - ✅ Enhanced DocumentRegistry concurrent safety (reload-before-save pattern)
-  - ✅ Ensured all documents register correctly when indexing multiple PDFs simultaneously
-  - ✅ Added `update_metadata()` method for safe metadata updates
-- 💬 **Session Management Optimization**
-  - ✅ Fixed chat history clearing (clears both file and memory)
-  - ✅ Re-instantiate AnswerAgent and RetrievalAgent when clearing history
-  - ✅ Fixed memory-file synchronization (update `current_session` to prevent stale data)
-  - ✅ Fixed single-mode session detail loading (support session_id lookup)
-- 🎨 **UI Enhancements**
-  - ✅ Added timestamp display to all chat modes (format: year/month/day hour:minute:second)
-  - ✅ Session detail modal supports Markdown and LaTeX rendering
-  - ✅ Historical messages display original timestamps (not current time)
-- 🔧 **Code Improvements**
-  - ✅ Unified AnswerAgent initialization parameters (only uses `doc_name`)
-  - ✅ Enhanced data consistency guarantees in concurrent environments
-
-### 2026-01-17 - Major Architecture Refactor: Migration to Multi-Agent System
-- 🏗️ **Architecture Refactor**
-  - ✅ Completely removed old Reader architecture (PDFReader, WebReader, ReaderBase)
-  - ✅ All functionality migrated to Multi-Agent architecture (IndexingAgent, AnswerAgent, RetrievalAgent)
-  - ✅ LangGraph-based state machine workflow orchestration
-  - ✅ UI backend migrated to use Agents (chat_service.py uses AnswerAgent, pdf.py uses IndexingAgent)
-  - ✅ Deleted `src/readers/` directory, parallel_processor moved to `src/core/processing/`
-  - ✅ Simplified chapters.py, temporarily removed chapter editing features
-- 📁 **Data Storage Optimization**
-  - ✅ JSON files organized by document: `data/json_data/{doc_name}/data.json`
-  - ✅ Unified management of all JSON files for documents (data.json, structure.json, chunks.json)
-  - ✅ Direct folder deletion when removing documents, no file omissions
-- 🔄 **State Management Enhancement**
-  - ✅ IndexingState added `is_complete` field to track completion status
-  - ✅ DocumentRegistry auto-creates temporary records to track processing progress
-  - ✅ Stage-wise cache checking to avoid reprocessing
-- 🗑️ **Code Cleanup**
-  - ❌ Deleted Web-related API and backend code (temporarily, to be redesigned)
-  - ❌ Deleted ~1500+ lines of old Reader code
-  - ✅ Retained MCP client (as requested)
-  - ✅ Cleaner codebase, easier to maintain
-
-### 2025-11-26 - Parallel Processing Optimization and Chapter Management UI
-- ⚡ **Parallel Processing Optimization**
-  - Added `src/utils/async_utils.py` - Generic async parallel processing utilities
-  - Added `src/core/processing/parallel_processor.py` - Specialized parallel processor
-  - Chapter summary and content refactoring now execute in parallel, 3-5x speed improvement
-  - Detail summary generation parallelized with semaphore-controlled concurrency
-- 📁 **Independent Chapter Management Interface**
-  - New `/chapters` page - Parallel to config and data management
-  - Integrated PDF preview with left chapter list + right PDF display
-  - Support chapter edit, add, delete operations
-  - Support batch rebuild of vector database and summaries
-  - Processing progress indicators and chapter highlighting
-- 🛠️ **Code Refactoring**
-  - Extracted parallel processing logic into independent modules for better reusability
-
-### 2025-11-19 - Data Management System
-- ✨ **New Data Management Interface**
-  - Real-time storage overview dashboard (document count, storage size, session stats)
-  - Document detail display (JSON, Vector DB, Images, Summary shown independently)
-  - **Granular partial deletion** - Delete specific data types for individual documents
-  - Batch operations support - Select multiple documents for deletion
-  - Cache management - View and clear PDF images, vector DB, JSON cache
-  - Smart cleanup - Auto-delete data older than N days
-  - Data backup functionality - Create session, output, config backups
-  - Session statistics - Total sessions, messages, last activity, backup count
-
-### 2025-10-31 - Session System Enhancement
-- 🔄 **Session Persistence Optimization**
-  - Dual storage architecture: Client localStorage + server file storage
-  - Auto-backup rotation mechanism (keeps latest 10 backups)
-  - Session import/export functionality
-  - Storage location migration: `chat_sessions.json` → `sessions/backups/chat_sessions_current.json`
-- 🛠️ **Backend Optimization**
-  - SessionManager refactor with backup management support
-  - Session format compatibility handling (supports dict and list formats)
-  - Auto-migration of old session files
-
-### 2025-09-15 - FastAPI Web Interface
-- 🌐 **New Web Interface**
-  - FastAPI + WebSocket real-time chat
-  - Jinja2 templates + Vanilla JavaScript
-  - Integrated online PDF preview
-  - Responsive design, mobile-friendly
-
-### 2025-08-20 - History Compression Optimization
-- 🧠 **Intelligent History Management**
-  - LLM auto-summarizes conversation history
-  - 90%+ compression rate, significantly saves tokens
-  - Maintains context coherence
-
-### 2025-07-30 - Web Reader
-- Added Web Reader functionality
-- MCP service integration
-
-</details>
-
----
-
-## License | License
+## License
 
 [MIT License](LICENSE)
 
-## Contributing | Contributing
+## Contributing
 
-Welcome to submit Issues and Pull Requests!
+Issues and pull requests are welcome!
 
-## Acknowledgements | Acknowledgments
+## Acknowledgments
 
-- [LangChain](https://github.com/langchain-ai/langchain) - Powerful LLM application development framework
-- [LangGraph](https://github.com/langchain-ai/langgraph) - Multi-agent orchestration framework
-- [FAISS](https://github.com/facebookresearch/faiss) - Efficient vector retrieval library
-- [FastAPI](https://fastapi.tiangolo.com/) - Modern web framework
+- [LangChain](https://github.com/langchain-ai/langchain) / [LangGraph](https://github.com/langchain-ai/langgraph) - LLM application and multi-agent orchestration frameworks
+- [FAISS](https://github.com/facebookresearch/faiss) - efficient vector search library
+- [FastAPI](https://fastapi.tiangolo.com/) - modern web framework
+- [LanceDB](https://lancedb.com/) - embedded vector database (long-term memory storage)
+- [Playwright](https://playwright.dev/) - browser automation (web scraping)
