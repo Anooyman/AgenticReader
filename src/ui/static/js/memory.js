@@ -1,5 +1,6 @@
 // 本页所有请求都走 api.js 的 API.llmmemory.* / API.documents.* / API.jobs.* 封装
 // （路径集中在 api.js，那里是全站唯一的 fetch 出口）。
+const CHAT_STORAGE_KEY = "AgenticReader_memory_chat_v1";
 const state = { dates: [], selected: new Set(), chatHistory: [],
                 conversationId: 0, datesInitialized: false,
                 // jobs: 当前日期相关的加载任务快照，日期行徽章靠它
@@ -23,6 +24,32 @@ function detail(x) {
     if (d && d.detail) return String(d.detail);
     if (d && typeof d === "object" && d.error) return String(d.error);
     return JSON.stringify(x || "unknown error").slice(0, 300);
+}
+
+function saveChatHistory() {
+    try {
+        sessionStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(state.chatHistory));
+    } catch (error) {
+        // Storage can be unavailable or full; current-page chat still works.
+    }
+}
+
+function restoreChatHistory() {
+    try {
+        const saved = JSON.parse(sessionStorage.getItem(CHAT_STORAGE_KEY) || "[]");
+        if (!Array.isArray(saved)) return;
+        state.chatHistory = saved.filter(item => item &&
+            (item.role === "user" || item.role === "assistant") &&
+            typeof item.content === "string").slice(-20);
+    } catch (error) {
+        state.chatHistory = [];
+    }
+    if (!state.chatHistory.length) return;
+    log().replaceChildren();
+    for (const item of state.chatHistory) {
+        const bubble = addBubble(item.role, item.content);
+        if (item.role === "assistant") decorateAssistantReply(bubble);
+    }
 }
 
 // ---------- dates ----------
@@ -326,6 +353,26 @@ function docNameFromPaperUrl(url) {
     return null;
 }
 
+function docNameFromDownloadResult(result) {
+    // The LLM-Memory download endpoint returns {id, path}; prefer its actual
+    // saved filename over guessing from the source URL (redirects often rename it).
+    for (const [value, mustBePdf] of [[result?.doc_name, false],
+                                      [result?.filename, false],
+                                      [result?.file_name, false],
+                                      [result?.path, true],
+                                      [result?.id, false]]) {
+        if (typeof value !== "string" || !value.trim()) continue;
+        let name = value.trim().split(/[\\/]/).pop();
+        try { name = decodeURIComponent(name); } catch (error) { /* keep original */ }
+        if (mustBePdf && !/\.pdf$/i.test(name)) continue;
+        name = name.replace(/\.pdf$/i, "");
+        if (name && /^[\w.+ -]+$/.test(name) && name !== "." && name !== "..") {
+            return name;
+        }
+    }
+    return null;
+}
+
 async function indexedDocNames() {
     const r = await API.documents.list({ raw: true });
     const d = await r.json();
@@ -391,8 +438,14 @@ function paperPdfTargetFromUrl(url) {
     let parsed;
     try { parsed = new URL(value, window.location.href); } catch (error) { return null; }
     if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
-    if (/\.pdf(?:$|[?#])/i.test(parsed.href)) return parsed.href;
-    if (/arxiv\.org\/abs\//i.test(parsed.href)) return parsed.href.replace(/\/abs\//i, "/pdf/") + ".pdf";
+    if (/\.pdf$/i.test(parsed.pathname)) return parsed.href;
+    if (/arxiv\.org$/i.test(parsed.hostname) && /\/abs\//i.test(parsed.pathname)) {
+        // Change only the pathname. Appending ".pdf" to href incorrectly puts
+        // it after ?query or #fragment, yielding an invalid download URL.
+        parsed.pathname = parsed.pathname.replace(/\/abs\//i, "/pdf/") + ".pdf";
+        parsed.hash = "";
+        return parsed.href;
+    }
     return null;
 }
 
@@ -473,16 +526,41 @@ async function downloadInlinePaper(button) {
             return;
         }
 
+        button.textContent = "下载中…";
         setInlineNote(actions, "下载 PDF 中…");
         let before = null;
         try { before = await unindexedPdfNames(); } catch (error) { /* use URL-derived name */ }
         const response = await API.llmmemory.download(target);
         const result = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(detail(result));
+        // The download endpoint has finished writing the PDF. Show that state
+        // before the slower filename/index checks so the button cannot look stuck
+        // in "downloading" while indexing is being prepared.
+        button.textContent = "✓ 已下载，处理中…";
+        setInlineNote(actions, "PDF 已下载，正在确认文件并启动索引…");
+
+        // Download may follow a redirect or save under a canonical filename that
+        // differs from the URL. The download endpoint returns the saved path/id;
+        // use that as the source of truth before falling back to URL inference.
+        let docName = docNameFromDownloadResult(result) || guess;
+        const indexedAfterDownload = await indexedDocNames().catch(() => new Set());
+        const indexedMatch = docName && [...indexedAfterDownload].find(
+            name => String(name).replace(/\.pdf$/i, "") === docName);
+        if (indexedMatch) {
+            button.classList.add("ok");
+            button.textContent = "✓ 已入库";
+            button.disabled = true;
+            if (!actions.querySelector("a.deep-read-link")) {
+                const link = deepReadLink(String(indexedMatch).replace(/\.pdf$/i, ""));
+                link.className = "deep-read-link";
+                actions.appendChild(link);
+            }
+            setInlineNote(actions, "已索引，可深读");
+            return;
+        }
 
         let after = null;
         try { after = await unindexedPdfNames(); } catch (error) { /* use URL-derived name */ }
-        let docName = guess;
         if (docName && after && !after.has(docName)) {
             const newlyAdded = before && after ? [...after].filter(name => !before.has(name)) : [];
             if (newlyAdded.length === 1) docName = newlyAdded[0];
@@ -583,13 +661,17 @@ async function sendChat() {
     // Date selection belongs exclusively to the brief-loading UI. Keep the
     // original user prompt untouched so retrieval spans all dates in AATF.
     const conversationId = state.conversationId;
+    const history = state.chatHistory.slice();
     addBubble("user", text);
+    state.chatHistory.push({ role: "user", content: text });
+    if (state.chatHistory.length > 20) state.chatHistory.splice(0, state.chatHistory.length - 20);
+    saveChatHistory();
     const think = addBubble("assistant", "检索记忆中…");
     think.dataset.userMessage = text;
     document.getElementById("sendBtn").disabled = true;
     document.getElementById("chatStatus").textContent = "agentic 检索 + 生成回复中，可能需要 30-60 秒";
     try {
-        const r = await API.llmmemory.chat(text, state.chatHistory);
+        const r = await API.llmmemory.chat(text, history);
         const d = await r.json();
         if (!r.ok) throw new Error(detail(d));
         pollChat(d.job_id, think, conversationId);
@@ -626,10 +708,12 @@ function pollChat(jobId, bubble, conversationId) {
         citation.textContent = `引用了 ${n} 条记忆`;
         bubble.appendChild(citation);
         if (conversationId !== state.conversationId) return;
-        state.chatHistory.push({ role: "user", content: bubble.dataset.userMessage || "" });
+        // The user turn was saved when sent (so a navigation during generation
+        // doesn't lose it); append only the completed assistant turn here.
         state.chatHistory.push({ role: "assistant", content: res.reply || "" });
         decorateAssistantReply(bubble);
         if (state.chatHistory.length > 20) state.chatHistory.splice(0, state.chatHistory.length - 20);
+        saveChatHistory();
     }, 1500);
 }
 
@@ -653,6 +737,7 @@ document.getElementById("sendBtn").onclick = sendChat;
 document.getElementById("newConversationBtn").onclick = () => {
     state.conversationId++;
     state.chatHistory = [];
+    try { sessionStorage.removeItem(CHAT_STORAGE_KEY); } catch (error) { /* ignore */ }
     log().innerHTML = '<div class="chat-bubble assistant">新对话已开始。可以继续询问记忆库中的内容。</div>';
     document.getElementById("chatStatus").textContent = "";
 };
@@ -674,6 +759,7 @@ document.getElementById("clearSel").onclick = () => {
     renderDates();
 };
 
+restoreChatHistory();
 fetchDates();
 // 接上刷新前就已经在跑/排队的加载任务：拉一次快照摊到界面上，有活跃任务就
 // 把轮询开起来。没有活跃任务时什么都不用做——日期刚才已经刷过了。
