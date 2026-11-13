@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+from typing import Any, Dict
 from dotenv import load_dotenv
 from .constants import PathConstants, PDFConstants, get_data_root
 
@@ -44,7 +45,7 @@ LLM_CONFIG = {
 
     # OpenAI 配置
     "openai_api_key": os.getenv("OPENAI_API_KEY"),
-    "openai_model_name": os.getenv("OPENAI_MODEL_NAME", "gpt-3.5-turbo"),
+    "openai_model_name": os.getenv("OPENAI_MODEL_NAME", "gpt-6-luna"),
     "openai_base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1/"),
 
     # Ollama 配置
@@ -181,6 +182,94 @@ def resolve_provider(provider=None) -> str:
     if provider and str(provider).strip():
         return str(provider).strip().lower()
     return get_default_provider()
+
+
+# ==================== 模型注册表（UI 可配置的多模型列表） ====================
+# 背景：此前每个 provider 只有一个模型名（env 变量 / 代码默认值），想换模型
+# 只能改 .env 重启。现在支持在 /config 页给每个 provider 登记多个模型
+# （名字 + 模型名 + 可选 base_url / api_key 覆盖），选一个作为该 provider
+# 的"当前模型"，LLM 构造链路（providers.py）从注册表读取覆盖值。
+# 持久化位置与 provider 选择同文件：data/config/app_config.json 的
+# "models" 键（{"<provider>": {"current": "<注册名>", "items": [...]}}），
+# 未配置时完全回退到原有 env/默认值行为——零配置安装不受影响。
+
+_VALID_MODEL_PROVIDERS = ("azure", "openai", "ollama", "gemini")
+
+
+def _read_app_config() -> dict:
+    """读 app_config.json 原始内容；文件缺失/坏损时返回空 dict（静默回退，
+    与 get_default_provider 的容错哲学一致）。"""
+    try:
+        if APP_CONFIG_FILE.exists():
+            import json as _json
+            with open(APP_CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg = _json.load(f)
+                if isinstance(cfg, dict):
+                    return cfg
+    except Exception:
+        logger.debug("app_config.json 读取失败（模型注册表回退到 env/默认）", exc_info=True)
+    return {}
+
+
+def get_model_registry() -> Dict[str, Dict[str, Any]]:
+    """模型注册表：{provider: {"current": 注册名|None, "items": [注册项...]}}。
+
+    只返回四个合法 provider 的条目；结构坏损的条目跳过不抛异常。
+    注册项字段：name（显示名，provider 内唯一）/ model（模型名）/
+    base_url / api_key（均可选，None=沿用 env/默认）。api_key 只落盘不回显，
+    序列化由 UI API 层负责打码。"""
+    cfg = _read_app_config()
+    raw = cfg.get("models")
+    registry: Dict[str, Dict[str, Any]] = {}
+    if isinstance(raw, dict):
+        for provider, entry in raw.items():
+            key = str(provider or "").strip().lower()
+            if key not in _VALID_MODEL_PROVIDERS or not isinstance(entry, dict):
+                continue
+            items = entry.get("items")
+            clean_items = []
+            if isinstance(items, list):
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    name = str(item.get("name") or "").strip()
+                    model = str(item.get("model") or "").strip()
+                    if not name or not model:
+                        continue  # name/model 是必填项，缺一个整条作废
+                    clean_items.append({
+                        "name": name,
+                        "model": model,
+                        "base_url": (str(item.get("base_url")).strip()
+                                     if item.get("base_url") else None),
+                        "api_key": (str(item.get("api_key")).strip()
+                                    if item.get("api_key") else None),
+                    })
+            current = entry.get("current")
+            current = str(current).strip() if isinstance(current, str) else None
+            # current 必须指向现存条目，否则视为未选择（回退 env/默认值）
+            if current and not any(i["name"] == current for i in clean_items):
+                current = None
+            registry[key] = {"current": current, "items": clean_items}
+    return registry
+
+
+def resolve_model_config(provider: str) -> Dict[str, Any]:
+    """某 provider 当前生效的模型配置（LLM 构造链路的唯一读取入口）。
+
+    返回 {"model": 注册的模型名, "base_url": ...|None, "api_key": ...|None}；
+    该 provider 没有注册表条目或没选 current 时返回空 dict——调用方按
+    "键不存在"回退到原有 env/默认值逻辑。"""
+    entry = get_model_registry().get(str(provider or "").strip().lower())
+    if not entry or not entry.get("current"):
+        return {}
+    for item in entry["items"]:
+        if item["name"] == entry["current"]:
+            return {
+                "model": item["model"],
+                "base_url": item.get("base_url"),
+                "api_key": item.get("api_key"),
+            }
+    return {}  # 防御：current 指向的条目已在清洗中被剔除
 
 # PDF转图片质量配置 - 使用常量定义
 PDF_IMAGE_CONFIG = {

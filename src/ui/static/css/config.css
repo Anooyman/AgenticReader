@@ -112,3 +112,195 @@
             flex-direction: column;
         }
     }
+
+    /* ===== 模型注册表（/config 页"模型管理"卡片） ===== */
+
+    /* 全部 provider 概览条 */
+    .model-overview {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.5rem;
+        margin-bottom: 1.25rem;
+    }
+
+    .model-overview-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 0.375rem;
+        padding: 0.5rem 0.75rem;
+        font-size: 0.85rem;
+        cursor: pointer;
+    }
+
+    .model-overview-item:hover {
+        border-color: var(--primary-color);
+    }
+
+    .model-overview-item.active {
+        border-left: 3px solid var(--primary-color);
+        font-weight: 500;
+    }
+
+    .model-overview-name {
+        color: var(--text-primary);
+    }
+
+    .model-overview-item code {
+        background: var(--bg-primary);
+        padding: 0.05rem 0.35rem;
+        border-radius: 0.25rem;
+        font-size: 0.8em;
+    }
+
+    .model-overview-src {
+        color: var(--text-muted);
+        font-size: 0.78rem;
+        margin-left: auto;
+    }
+
+    /* 内置默认条目行 */
+    .model-item-default {
+        background: var(--bg-primary);
+        border-style: dashed;
+    }
+
+    .model-fallback-note {
+        color: var(--text-muted);
+        font-size: 0.8em;
+    }
+
+    .model-registry-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+    }
+
+    .model-registry-empty {
+        background: var(--bg-secondary);
+        border: 1px dashed var(--border-color);
+        border-radius: 0.375rem;
+        padding: 1rem;
+        font-size: 0.9rem;
+        color: var(--text-muted);
+    }
+
+    .model-registry-empty code,
+    .model-effective-note code {
+        background: var(--bg-primary);
+        padding: 0.1rem 0.35rem;
+        border-radius: 0.25rem;
+        font-size: 0.85em;
+    }
+
+    .model-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 0.375rem;
+        padding: 0.75rem 1rem;
+    }
+
+    .model-item-current {
+        border-left: 3px solid var(--primary-color);
+    }
+
+    .model-item-title {
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 0.25rem;
+    }
+
+    .model-badge {
+        display: inline-block;
+        background: var(--primary-color);
+        color: #fff;
+        font-size: 0.7rem;
+        padding: 0.1rem 0.45rem;
+        border-radius: 999px;
+        vertical-align: middle;
+        margin-left: 0.35rem;
+    }
+
+    .model-item-sub {
+        font-size: 0.82rem;
+        color: var(--text-muted);
+        word-break: break-all;
+    }
+
+    .model-item-actions {
+        display: flex;
+        gap: 0.5rem;
+        flex-shrink: 0;
+    }
+
+    .btn-sm {
+        padding: 0.3rem 0.65rem;
+        font-size: 0.82rem;
+    }
+
+    .model-effective-note {
+        font-size: 0.85rem;
+        color: var(--text-muted);
+        margin-top: 0.25rem;
+    }
+
+    .model-entry-form {
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: 0.375rem;
+        padding: 1.25rem;
+        margin-bottom: 1rem;
+    }
+
+    .model-entry-form h4 {
+        margin: 0 0 1rem 0;
+        color: var(--text-primary);
+    }
+
+    .model-form-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0 1.5rem;
+    }
+
+    .model-form-actions {
+        display: flex;
+        gap: 0.75rem;
+        margin-top: 0.5rem;
+    }
+
+    .model-test-result {
+        margin-top: 0.75rem;
+        font-size: 0.88rem;
+        min-height: 1.2em;
+    }
+
+    .model-testing { color: var(--text-muted); }
+    .model-test-ok { color: #155724; }
+    .model-test-fail { color: #721c24; word-break: break-all; }
+
+    .model-registry-actions {
+        display: flex;
+        gap: 0.75rem;
+    }
+
+    @media (max-width: 768px) {
+        .model-form-grid {
+            grid-template-columns: 1fr;
+        }
+        .model-item {
+            flex-direction: column;
+            align-items: stretch;
+        }
+        .model-item-actions {
+            justify-content: flex-end;
+        }
+    }

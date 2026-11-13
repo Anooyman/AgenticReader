@@ -25,6 +25,7 @@ from src.config.settings import (
     LLM_CONFIG,
     LLM_EMBEDDING_CONFIG,
     get_embedding_model_name,
+    resolve_model_config,
 )
 
 
@@ -56,12 +57,17 @@ class AzureLLMProvider(LLMProviderBase):
         Returns:
             AzureChatOpenAI: Azure OpenAI 聊天模型实例
         """
+        # UI 模型注册表（app_config.json 的 models 键）里该 provider 当前
+        # 选中条目的覆盖值；未注册时为空 dict，行为与改造前完全一致。
+        override = resolve_model_config("azure")
         return AzureChatOpenAI(
-            openai_api_key=kwargs.get("openai_api_key", LLM_CONFIG.get("api_key")),
+            openai_api_key=kwargs.get("openai_api_key",
+                                      override.get("api_key") or LLM_CONFIG.get("api_key")),
             openai_api_version=kwargs.get("openai_api_version", LLM_CONFIG.get("api_version")),
             azure_endpoint=kwargs.get("azure_endpoint", LLM_CONFIG.get("azure_endpoint")),
             deployment_name=kwargs.get("deployment_name", LLM_CONFIG.get("deployment_name")),
-            model_name=kwargs.get("model_name", LLM_CONFIG.get("model_name")),
+            model_name=kwargs.get("model_name",
+                                  override.get("model") or LLM_CONFIG.get("model_name")),
             temperature=kwargs.get("temperature", 0.7),
             max_retries=kwargs.get("max_retries", 5)
         )
@@ -99,10 +105,16 @@ class OpenAILLMProvider(LLMProviderBase):
         Returns:
             ChatOpenAI: OpenAI 聊天模型实例
         """
+        # UI 模型注册表覆盖（model / base_url / api_key 三项均可配）；
+        # 未注册时为空 dict，回退 env/默认值，行为与改造前一致。
+        override = resolve_model_config("openai")
         return ChatOpenAI(
-            model=kwargs.get("model_name", LLM_CONFIG.get("openai_model_name")),
-            openai_api_key=kwargs.get("openai_api_key", LLM_CONFIG.get("openai_api_key")),
-            base_url=kwargs.get("openai_base_url", LLM_CONFIG.get("openai_base_url")),
+            model=kwargs.get("model_name",
+                             override.get("model") or LLM_CONFIG.get("openai_model_name")),
+            openai_api_key=kwargs.get("openai_api_key",
+                                      override.get("api_key") or LLM_CONFIG.get("openai_api_key")),
+            base_url=kwargs.get("openai_base_url",
+                                override.get("base_url") or LLM_CONFIG.get("openai_base_url")),
             temperature=kwargs.get("temperature", 0.7),
             max_retries=kwargs.get("max_retries", 5)
         )
@@ -140,9 +152,14 @@ class OllamaLLMProvider(LLMProviderBase):
         Returns:
             ChatOllama: Ollama 聊天模型实例
         """
+        # UI 模型注册表覆盖（Ollama 用 base_url + model）；未注册时回退 env/默认。
+        override = resolve_model_config("ollama")
         return ChatOllama(
-            base_url=kwargs.get("base_url", LLM_CONFIG.get("ollama_base_url", "http://localhost:11434")),
-            model=kwargs.get("model", LLM_CONFIG.get("ollama_model_name", "llama3")),
+            base_url=kwargs.get("base_url",
+                                override.get("base_url")
+                                or LLM_CONFIG.get("ollama_base_url", "http://localhost:11434")),
+            model=kwargs.get("model",
+                             override.get("model") or LLM_CONFIG.get("ollama_model_name", "llama3")),
             temperature=kwargs.get("temperature", 0.7)
         )
 
@@ -175,11 +192,17 @@ class GeminiLLMProvider(LLMProviderBase):
         Returns:
             ChatGoogleGenerativeAI: Gemini 聊天模型实例
         """
-        base_url = kwargs.get("base_url", LLM_CONFIG.get("gemini_base_url"))
-        
+        # UI 模型注册表覆盖（Gemini 用 base_url + api_key + model）；未注册时回退 env/默认。
+        override = resolve_model_config("gemini")
+        base_url = (kwargs.get("base_url") or override.get("base_url")
+                    or LLM_CONFIG.get("gemini_base_url"))
+
         config = {
-            "google_api_key": kwargs.get("google_api_key", LLM_CONFIG.get("gemini_api_key")),
-            "model": kwargs.get("model_name", LLM_CONFIG.get("gemini_model_name", "gemini-1.5-pro")),
+            "google_api_key": kwargs.get("google_api_key",
+                                         override.get("api_key") or LLM_CONFIG.get("gemini_api_key")),
+            "model": kwargs.get("model_name",
+                                override.get("model")
+                                or LLM_CONFIG.get("gemini_model_name", "gemini-1.5-pro")),
             "temperature": kwargs.get("temperature", 0.7),
             "max_retries": kwargs.get("max_retries", 5)
         }

@@ -38,6 +38,67 @@
         </div>
     </section>
 
+    <!-- 模型注册表 -->
+    <section class="config-section">
+        <h3>🧩 模型管理</h3>
+        <p class="config-note" style="margin-bottom: 1rem;">
+            按 Provider 登记多个模型（显示名 + 模型名，可选覆盖 Base URL / API Key），
+            每个 Provider 选一个"当前模型"生效；未配置时沿用环境变量默认值。
+        </p>
+
+        <div class="form-group">
+            <label for="models-provider-select">Provider:</label>
+            <select id="models-provider-select" class="form-select">
+                <option value="openai">OpenAI</option>
+                <option value="azure">Azure OpenAI</option>
+                <option value="ollama">Ollama</option>
+                <option value="gemini">Gemini</option>
+            </select>
+        </div>
+
+        <!-- 全部 provider 现有生效配置概览 -->
+        <div id="model-overview" class="model-overview"></div>
+
+        <div id="model-registry-list" class="model-registry-list">
+            <!-- 模型条目由 config.js 渲染 -->
+        </div>
+
+        <!-- 添加/编辑表单 -->
+        <div id="model-entry-form" class="model-entry-form" style="display: none;">
+            <h4 id="model-form-title">添加模型</h4>
+            <div class="model-form-grid">
+                <div class="form-group">
+                    <label>显示名 *</label>
+                    <input type="text" id="model-form-name" class="form-select" placeholder="如 GPT-6 via Trend">
+                </div>
+                <div class="form-group">
+                    <label>模型名 *</label>
+                    <input type="text" id="model-form-model" class="form-select" placeholder="如 gpt-6-luna">
+                </div>
+                <div class="form-group">
+                    <label>Base URL（可选，覆盖默认）</label>
+                    <input type="text" id="model-form-base-url" class="form-select" placeholder="https://...">
+                </div>
+                <div class="form-group">
+                    <label id="model-form-apikey-label">API Key（可选，覆盖默认）</label>
+                    <input type="password" id="model-form-api-key" class="form-select" placeholder="留空沿用环境变量">
+                </div>
+            </div>
+            <div class="model-form-actions">
+                <button id="model-form-test-btn" class="btn btn-secondary">测试连接</button>
+                <button id="model-form-save-btn" class="btn btn-primary">保存条目</button>
+                <button id="model-form-cancel-btn" class="btn btn-secondary">取消</button>
+            </div>
+            <div id="model-test-result" class="model-test-result"></div>
+        </div>
+
+        <div class="model-registry-actions">
+            <button id="add-model-btn" class="btn btn-primary">＋ 添加模型</button>
+            <button id="save-models-btn" class="btn btn-primary">保存模型配置</button>
+        </div>
+        <div id="models-status" class="status-message" style="display: none;"></div>
+    </section>
+
     <!-- PDF 处理配置 -->
     <section class="config-section">
         <h3>📄 PDF 处理配置</h3>
@@ -113,5 +174,5 @@
 <script src="/static/js/ui-feedback.js?v=3"></script>
 <script src="/static/js/utils.js?v=3"></script>
 <script src="/static/js/ui-components.js?v=3"></script>
-<script src="/static/js/config.js?v=3"></script>
+<script src="/static/js/config.js?v=5"></script>
 {% endblock %}
