@@ -33,6 +33,7 @@
     <div class="mem-panel chat-panel">
         <h3>💬 记忆对话</h3>
         <div class="toolbar-row" style="justify-content:flex-end; margin-bottom:8px">
+            <button class="tool-btn" id="stopChatBtn" title="停止当前对话检索（外部任务在下一次检索检查点自行收尾）">停止</button>
             <button class="tool-btn" id="newConversationBtn" title="清空聊天">新开对话</button>
         </div>
         <div class="hint">多轮 agentic 检索后生成回复（namespace=AATF）。对话始终检索全部日期的记忆；左侧日期选择只控制哪些简报需要加载。</div>
@@ -54,5 +55,5 @@
 <script src="https://unpkg.com/marked@11.1.1/marked.min.js"></script>
 <script src="https://unpkg.com/katex@0.16.9/dist/katex.min.js"></script>
 <script src="https://unpkg.com/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
-<script src="/static/js/memory.js?v=4"></script>
+<script src="/static/js/memory.js?v=5"></script>
 {% endblock %}

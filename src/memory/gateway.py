@@ -221,6 +221,61 @@ async def bridge_request(
     return resp.status_code, body
 
 
+# ---- 桥服务面：外部 webui 各端点的具名一跳 ----
+# 外部路由的 URL 与请求体在这里逐字组装——api 层（llmmemory.py）与
+# service 层（brief_memory.py）都不再自己拼外部路径，只把 (status, body)
+# 映射成自己需要的形状（transport 错误统一 raise BridgeError）。
+# B 侧 SDK 化时，这批方法名就是 SDK 方法面的镜像，改动只落本文件。
+
+async def brief_dates(**kw) -> Tuple[int, Any]:
+    """GET /api/briefs/dates —— 日期列表及其加载状态。"""
+    return await bridge_request("GET", "/api/briefs/dates", **kw)
+
+
+async def brief_papers(dates: str = "", **kw) -> Tuple[int, Any]:
+    """GET /api/briefs/papers?dates=... —— 指定日期的论文清单。"""
+    return await bridge_request(
+        "GET", "/api/briefs/papers", params={"dates": dates}, **kw)
+
+
+async def brief_load(dates: List[str], **kw) -> Tuple[int, Any]:
+    """POST /api/briefs/load {dates:[...]} —— 请求外部服务加载简报。
+    （job_runner 驱动的逐日加载走 brief_memory.load_date，经本函数发这一跳；
+    路由 /load 的多日期一次请求也走这里。）"""
+    return await bridge_request("POST", "/api/briefs/load",
+                                json={"dates": dates}, **kw)
+
+
+async def brief_load_progress(job_id: str, **kw) -> Tuple[int, Any]:
+    """GET /api/briefs/load/progress/{job_id} —— 外部加载 job 的进度。"""
+    return await bridge_request("GET", f"/api/briefs/load/progress/{job_id}", **kw)
+
+
+async def brief_chat(message: str, history: List[dict],
+                     namespace: List[str], **kw) -> Tuple[int, Any]:
+    """POST /api/chat {message, history, namespace} —— 外部对话 job 注册。"""
+    return await bridge_request("POST", "/api/chat", json={
+        "message": message, "history": history, "namespace": namespace,
+    }, **kw)
+
+
+async def brief_chat_progress(job_id: str, **kw) -> Tuple[int, Any]:
+    """GET /api/chat/progress/{job_id} —— 外部对话 job 的进度。"""
+    return await bridge_request("GET", f"/api/chat/progress/{job_id}", **kw)
+
+
+async def brief_chat_stop(job_id: str, **kw) -> Tuple[int, Any]:
+    """POST /api/chat/stop/{job_id} —— flag 式取消：外部 job 在下一次检索
+    检查点自行收尾。A 侧只透传，不发明第二套取消语义。"""
+    return await bridge_request("POST", f"/api/chat/stop/{job_id}", **kw)
+
+
+async def deepread_download(url: str, **kw) -> Tuple[int, Any]:
+    """POST /api/deepread/download {url} —— 外部侧把 PDF 写进 data/pdf/。"""
+    return await bridge_request("POST", "/api/deepread/download",
+                                json={"url": url}, **kw)
+
+
 # ---- DA：brief 加载驱动槽位 ----
 BRIEF_DRIVER_ENV = "MEMORY_BRIEF_DRIVER"  # "bridge"（缺省）| "local"
 
@@ -286,6 +341,31 @@ class MemoryService:
 
     def bridge_request(self, method: str, path: str, **kw) -> Any:
         return bridge_request(method, path, **kw)
+
+    # 桥服务面具名方法：与模块级函数逐一对应，不叠加第二语义。
+    def brief_dates(self, **kw) -> Any:
+        return brief_dates(**kw)
+
+    def brief_papers(self, dates: str = "", **kw) -> Any:
+        return brief_papers(dates, **kw)
+
+    def brief_load(self, dates, **kw) -> Any:
+        return brief_load(dates, **kw)
+
+    def brief_load_progress(self, job_id: str, **kw) -> Any:
+        return brief_load_progress(job_id, **kw)
+
+    def brief_chat(self, message: str, history, namespace, **kw) -> Any:
+        return brief_chat(message, history, namespace, **kw)
+
+    def brief_chat_progress(self, job_id: str, **kw) -> Any:
+        return brief_chat_progress(job_id, **kw)
+
+    def brief_chat_stop(self, job_id: str, **kw) -> Any:
+        return brief_chat_stop(job_id, **kw)
+
+    def deepread_download(self, url: str, **kw) -> Any:
+        return deepread_download(url, **kw)
 
 
 _MEMORY_SERVICE: Optional[MemoryService] = None

@@ -1,17 +1,24 @@
 """外部 LLM-Memory 简报加载的后台驱动——把「加载某个日期」从 HTTP 请求
 里挪进 job_runner 车道，供 /memory 页的批量加载用。
 
+所有对外部 webui 的一跳都走 src/memory/gateway.py 的 bridge_request /
+brief_load / brief_load_progress；本文件只负责轮询节奏与 BriefLoadError
+的文案，不再自己拼外部 URL——全仓唯一的地址读取点在 gateway。
+
 ## 为什么不直接在请求里转发
 
-外部 webui 的 `/api/briefs/load` 是 thread-per-job：没有队列，也没有并发
-上限。那边的 `_MAX_ACTIVE_JOBS = 8` 只挂在 ingest/chat 两类任务上，brief
-load 一个都没接——所以用户在日期列表上连点几行，就会同时开十几个 job，
-朝同一个 LLM 网关和 embedding 端点一起冲，更慢也更爱互相撞车；同一个日期
-被并发跑两遍还会写进重复的记忆行（它那边的去重靠 `state["done"]` 标记，
-两个 job 同时读到"没跑过"就会都跑）。
+外部 webui 的 `/api/briefs/load` 注册现在走 `_reserve_job`，有自己的
+per-registry 活跃上限了（`_MAX_ACTIVE_JOBS = 8`，server.py 的
+`_BRIEF_LOAD_JOBS` + jobs.py；早先"完全没有并发上限"的说法随那边补闸门
+已经过时）。但它依旧没有跨日期队列，而且是 thread-per-job——日期列表上
+连点几行，8 个 job 会一起朝同一个 LLM 网关和 embedding 端点冲，更慢也更
+爱互相撞车；同一个日期并发跑两遍还会写进重复记忆行（它那边的去重靠
+`state["done"]` 标记，check-then-act 之间没有锁，两个 job 同时读到"没跑过"
+就会都跑）。
 
-这里把它改成**一天一个本地 job、过 job_runner 那条串行队列**，并发天然
-被限制成 1，同时白拿队列已有的取消/重试/历史查询。
+所以这里改成**一天一个本地 job、过 job_runner 那条串行队列**，把外部并发
+压成 1——cap=8 是那边自家的闸门，串行=1 是我们自己的第二道闸门，两者并不
+重复。队列也顺带白拿已有的取消/重试/历史查询。
 
 ## 语义差异（有意保留）
 
@@ -28,20 +35,22 @@ load 一个都没接——所以用户在日期列表上连点几行，就会同
 """
 import asyncio
 import logging
-import os
 from typing import Any, Dict
 
 import httpx
 
+from src.memory import gateway
+
 logger = logging.getLogger(__name__)
 
-# 与 api/v1/llmmemory.py 同源：同一个外部服务，同一个环境变量，同一份默认值。
-LLM_MEMORY_URL = os.environ.get("LLM_MEMORY_URL", "http://127.0.0.1:8765").rstrip("/")
+# 地址的唯一读取点在 gateway 桥侧；这里只是给日志行留个同名的别名。
+LLM_MEMORY_URL = gateway.LLM_MEMORY_URL
 
 # 轮询间隔。外部 job 自己也是靠这个接口被查询的，3s 足够，再快只是白耗连接。
 _POLL_INTERVAL_S = 3.0
 # 单次 HTTP 调用的超时。load/progress 都是即时返回的轻请求，读超时给 30s
 # 已经留了很大余量——真正耗时的部分在后台线程里，不占这条连接。
+# 只是超时对象，真正发请求的是 gateway.bridge_request。
 _TIMEOUT = httpx.Timeout(15.0, read=30.0)
 
 
@@ -49,12 +58,9 @@ class BriefLoadError(RuntimeError):
     """外部服务不可达、拒绝了这个日期，或返回了预期外的形状。"""
 
 
-def _detail_from(resp: httpx.Response) -> str:
-    """把错误响应压成一行文本，优先用 JSON 里的 detail/error 字段。"""
-    try:
-        body = resp.json()
-    except ValueError:
-        return (resp.text or "")[:300]
+def _flatten(body) -> str:
+    """把错误响应（gateway 解析后的 body）压成一行文本，优先用
+    detail/error/message 字段——键序与旧的 _detail_from 一致。"""
     if isinstance(body, dict):
         for key in ("detail", "error", "message"):
             value = body.get(key)
@@ -78,51 +84,48 @@ async def load_date(date: str) -> Dict[str, Any]:
     sleep 都是可取消的，取消会原样变成 CancelledError 抛出去，不需要额外
     的 cancel_check 协议。
     """
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+    try:
+        status, payload = await gateway.brief_load([date], timeout=_TIMEOUT)
+    except gateway.BridgeError as exc:
+        # transport 级失败的文案由 gateway 逐字保住旧措辞，job_runner 的
+        # "加载简报 X 失败: {e}" 外层包起来后与改前一致。
+        raise BriefLoadError(str(exc.detail)) from exc
+
+    if status >= 400:
+        raise BriefLoadError(f"外部服务拒绝加载 {date}："
+                             f"HTTP {status} {_flatten(payload)}")
+
+    payload = payload or {}
+    external_job_id = payload.get("job_id")
+    if not isinstance(external_job_id, str) or not external_job_id:
+        raise BriefLoadError(f"外部服务没有返回 job_id：{payload}")
+
+    logger.info("简报加载已交给外部服务 %s: date=%s job=%s",
+                LLM_MEMORY_URL, date, external_job_id[:8])
+
+    while True:
         try:
-            resp = await client.post(f"{LLM_MEMORY_URL}/api/briefs/load",
-                                     json={"dates": [date]})
-        except httpx.HTTPError as exc:
+            status, job = await gateway.brief_load_progress(
+                external_job_id, timeout=_TIMEOUT)
+        except gateway.BridgeError as exc:
             raise BriefLoadError(
-                f"LLM-Memory webui 不可达（{LLM_MEMORY_URL}）：{exc}. "
-                "请确认已运行: python scripts/webui/server.py --port 8765"
-            ) from exc
+                f"查询 {date} 的加载进度失败（job={external_job_id[:8]}）："
+                f"{exc.detail}") from exc
 
-        if resp.status_code >= 400:
-            raise BriefLoadError(f"外部服务拒绝加载 {date}："
-                                 f"HTTP {resp.status_code} {_detail_from(resp)}")
+        if status >= 400:
+            raise BriefLoadError(f"查询 {date} 的加载进度失败：HTTP "
+                                 f"{status} {_flatten(job)}")
 
-        payload = resp.json() or {}
-        external_job_id = payload.get("job_id")
-        if not isinstance(external_job_id, str) or not external_job_id:
-            raise BriefLoadError(f"外部服务没有返回 job_id：{payload}")
+        job = job or {}
+        if job.get("done"):
+            loaded = bool(job.get("loaded"))
+            errors = job.get("errors") or []
+            if errors:
+                logger.warning("简报日期 %s 加载完成但有警告：%s", date, errors)
+            return {
+                "loaded": loaded,
+                "skipped": bool(job.get("skipped")),
+                "errors": [str(e) for e in errors],
+            }
 
-        logger.info("简报加载已交给外部服务 %s: date=%s job=%s",
-                    LLM_MEMORY_URL, date, external_job_id[:8])
-
-        progress_url = f"{LLM_MEMORY_URL}/api/briefs/load/progress/{external_job_id}"
-        while True:
-            try:
-                resp = await client.get(progress_url)
-            except httpx.HTTPError as exc:
-                raise BriefLoadError(
-                    f"查询 {date} 的加载进度失败（job={external_job_id[:8]}）：{exc}"
-                ) from exc
-
-            if resp.status_code >= 400:
-                raise BriefLoadError(f"查询 {date} 的加载进度失败：HTTP "
-                                     f"{resp.status_code} {_detail_from(resp)}")
-
-            job = resp.json() or {}
-            if job.get("done"):
-                loaded = bool(job.get("loaded"))
-                errors = job.get("errors") or []
-                if errors:
-                    logger.warning("简报日期 %s 加载完成但有警告：%s", date, errors)
-                return {
-                    "loaded": loaded,
-                    "skipped": bool(job.get("skipped")),
-                    "errors": [str(e) for e in errors],
-                }
-
-            await asyncio.sleep(_POLL_INTERVAL_S)
+        await asyncio.sleep(_POLL_INTERVAL_S)

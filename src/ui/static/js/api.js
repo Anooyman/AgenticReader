@@ -159,6 +159,13 @@ const API = (function () {
             async chatProgress(jobId, options = {}) {
                 return request(LLM_MEMORY_BASE + '/chat/progress/' + jobId,
                     withDefaults({ raw: true }, options));
+            },
+
+            // flag 式取消：外部 job 在下一次检索检查点自行收尾；
+            // 页面先停本地轮询，这里只是把停止请求递过去。
+            async chatStop(jobId, options = {}) {
+                return request(LLM_MEMORY_BASE + '/chat/stop/' + encodeURIComponent(jobId),
+                    withDefaults({ method: 'POST', raw: true }, options));
             }
         },
 
@@ -246,6 +253,12 @@ const API = (function () {
             async rename(sessionId, newTitle, options = {}) {
                 return request('/api/v1/sessions/' + sessionId + '/rename',
                     withDefaults({ method: 'PATCH', json: { new_title: newTitle }, errorText: 'Failed to rename session' }, options));
+            },
+
+            // 会话级记忆检索范围：null 恢复默认白名单，显式列表为子集。
+            async setMemoryScope(sessionId, namespaces, options = {}) {
+                return request('/api/v1/sessions/' + sessionId + '/memory-scope',
+                    withDefaults({ method: 'PATCH', json: { namespaces }, errorText: 'Failed to set memory scope' }, options));
             }
         },
 

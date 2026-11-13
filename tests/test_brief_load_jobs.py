@@ -110,6 +110,9 @@ async def _run_load_job(monkeypatch, outcome):
      True, "2026-10-13/radar: boom"),
     # 外部服务一口没吃：失败，好让 UI 给出"重试"
     ({"loaded": False, "skipped": False, "errors": []}, False, None),
+    # skipped=True 但 loaded=False：这天的 state.done 早就有、这次实际
+    # 什么都没写——不算成功，防"跳过"被误判成"完成"的契约漂移
+    ({"loaded": False, "skipped": True, "errors": []}, False, None),
 ])
 async def test_run_job_outcomes(monkeypatch, outcome, expect_ok, expect_detail):
     result = await _run_load_job(monkeypatch, outcome)

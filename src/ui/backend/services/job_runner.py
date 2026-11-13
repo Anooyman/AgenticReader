@@ -268,14 +268,14 @@ async def _run_job(job: dict) -> dict:
         return {"ok": True}
 
     if kind == "load_brief_date":
-        # 把一天的简报灌进外部 LLM-Memory 的记忆库（namespace AATF）。
-        # target 就是一个 YYYY-MM-DD；外部服务那边一天一个 job 也串行，
-        # 我们这里同样一天一个 job，等于给它补上了缺的那道并发闸门。
-        from src.ui.backend.services import brief_memory
+        # 把一天的简报灌进 LLM-Memory 的记忆库（现驱动 namespace AATF）。
+        # target 就是一个 YYYY-MM-DD；gateway.load_brief_date 是 DA 分派槽位
+        # （MEMORY_BRIEF_DRIVER=bridge|local，现恒 bridge→brief_memory.load_date）。
+        from src.memory import gateway
 
         try:
             outcome = await asyncio.wait_for(
-                brief_memory.load_date(target), timeout=TIMEOUTS["load_brief_date"],
+                gateway.load_brief_date(target), timeout=TIMEOUTS["load_brief_date"],
             )
         except asyncio.TimeoutError:
             return {"error": f"加载简报 {target} 超时"

@@ -4,7 +4,10 @@ const CHAT_STORAGE_KEY = "AgenticReader_memory_chat_v1";
 const state = { dates: [], selected: new Set(), chatHistory: [],
                 conversationId: 0, datesInitialized: false,
                 // jobs: 当前日期相关的加载任务快照，日期行徽章靠它
-                jobs: [] };
+                jobs: [],
+                // chatTimer/chatJobId: 正在进行的对话轮询——存下来是为了
+                // "停止"按钮能真正掐掉它（此前 timer 是 pollChat 的局部变量）
+                chatTimer: null, chatJobId: null };
 
 function esc(s) {
     const d = document.createElement("div");
@@ -137,10 +140,10 @@ function renderDates() {
 
 // ---------- 加载：走 AgenticReader 自己的串行车道，一天一个 job ----------
 //
-// 这里刻意不再把请求直接转给外部服务的 /load。那边是 thread-per-job：没有
-// 队列也没有并发上限（它自己的 _MAX_ACTIVE_JOBS 只挂在 ingest/chat 上），
-// 日期列表上连点几行就会同时开好几个 job 去抢同一个网关，同一个日期被并发
-// 跑两遍还会往记忆库里写重复行。/load-jobs 把日期登记进 job_runner 的队列，
+// 这里刻意不再把请求直接转给外部服务的 /load。那边 brief load 现在注册走
+// _reserve_job，有 cap=8 的并发上限了，但它依旧没有跨日期队列，同一日期
+// 并发跑两遍（去重是 check-then-act 没锁）还是会写重复行——外部那道闸门
+// 管不到"串行"这个粒度。/load-jobs 把日期登记进 job_runner 的队列，
 // 一天一个任务串行执行，进度/取消/重试都从同一份 job 账本里看。
 
 async function enqueueLoad(dates) {
@@ -683,6 +686,9 @@ async function sendChat() {
 }
 
 function pollChat(jobId, bubble, conversationId) {
+    // timer 存进 state：停止按钮要能掐掉它，新一轮轮询开始前也先掐旧的。
+    if (state.chatTimer) { clearInterval(state.chatTimer); state.chatTimer = null; }
+    state.chatJobId = jobId;
     const t = setInterval(async () => {
         let job;
         try {
@@ -690,10 +696,12 @@ function pollChat(jobId, bubble, conversationId) {
             job = await r.json();
             if (!r.ok) throw new Error(detail(job));
         } catch (e) { clearInterval(t); bubble.textContent = "进度查询失败：" + e.message;
+                     if (state.chatTimer === t) { state.chatTimer = null; state.chatJobId = null; }
                      document.getElementById("sendBtn").disabled = false;
                      document.getElementById("chatStatus").textContent = ""; return; }
         if (!job.done) return;
         clearInterval(t);
+        if (state.chatTimer === t) { state.chatTimer = null; state.chatJobId = null; }
         if (conversationId === state.conversationId) {
             document.getElementById("sendBtn").disabled = false;
             document.getElementById("chatStatus").textContent = "";
@@ -715,6 +723,19 @@ function pollChat(jobId, bubble, conversationId) {
         if (state.chatHistory.length > 20) state.chatHistory.splice(0, state.chatHistory.length - 20);
         saveChatHistory();
     }, 1500);
+    state.chatTimer = t;
+}
+
+// 停止当前对话检索：本地先掐掉轮询，再把停止请求透传给外部服务。
+// 外部是 flag 式 cancel——job 在下一个检索边界自己收尾，可能仍会把
+// 当前这一步跑完；我们不发明第二套取消语义，UI 只是不再盯它。
+function stopChat() {
+    if (state.chatTimer) { clearInterval(state.chatTimer); state.chatTimer = null; }
+    const jobId = state.chatJobId;
+    state.chatJobId = null;
+    if (jobId) API.llmmemory.chatStop(jobId).catch(() => { /* 停止请求失败无所谓：轮询已停 */ });
+    document.getElementById("sendBtn").disabled = false;
+    document.getElementById("chatStatus").textContent = "已停止";
 }
 
 function linkify(s) {
@@ -734,9 +755,16 @@ function linkify(s) {
 wireInlinePaperActions();
 
 document.getElementById("sendBtn").onclick = sendChat;
+document.getElementById("stopChatBtn").onclick = stopChat;
 document.getElementById("newConversationBtn").onclick = () => {
     state.conversationId++;
     state.chatHistory = [];
+    // 掐掉上一轮还在跑的轮询：结果本来就被 conversationId 守卫挡住不
+    // 入新会话的账，这里只是别让它空转占着发送键。不发 /chat/stop——
+    // 换对话不构成"取消这次检索"的意图，外部那一轮会自己跑完。
+    if (state.chatTimer) { clearInterval(state.chatTimer); state.chatTimer = null; }
+    state.chatJobId = null;
+    document.getElementById("sendBtn").disabled = false;
     try { sessionStorage.removeItem(CHAT_STORAGE_KEY); } catch (error) { /* ignore */ }
     log().innerHTML = '<div class="chat-bubble assistant">新对话已开始。可以继续询问记忆库中的内容。</div>';
     document.getElementById("chatStatus").textContent = "";
