@@ -345,6 +345,24 @@ const API = (function () {
             async reset(options = {}) {
                 return request('/api/v1/config/reset',
                     withDefaults({ method: 'POST', errorText: '重置配置失败' }, options));
+            },
+
+            // 模型注册表（/api/v1/config/models）
+            async getModels(options = {}) {
+                return request('/api/v1/config/models',
+                    withDefaults({ errorText: '加载模型列表失败' }, options));
+            },
+
+            async saveModels(registryUpdate, options = {}) {
+                return request('/api/v1/config/models',
+                    withDefaults({ method: 'POST', json: registryUpdate,
+                                   useDetailError: true, errorText: '保存模型列表失败' }, options));
+            },
+
+            async testModel(testReq, options = {}) {
+                return request('/api/v1/config/models/test',
+                    withDefaults({ method: 'POST', json: testReq,
+                                   useDetailError: true, errorText: '模型测试请求失败' }, options));
             }
         },
 

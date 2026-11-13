@@ -93,15 +93,15 @@ CHAT_API_KEY=your_azure_api_key
 CHAT_AZURE_ENDPOINT=https://your-endpoint.openai.azure.com/
 CHAT_DEPLOYMENT_NAME=your_deployment_name
 CHAT_API_VERSION=2024-02-15-preview
-CHAT_MODEL_NAME=gpt-4
+CHAT_MODEL_NAME=gpt-6-luna
 EMBEDDING_API_KEY=your_embedding_api_key
 EMBEDDING_API_VERSION=2024-02-15-preview
 EMBEDDING_AZURE_ENDPOINT=https://your-endpoint.openai.azure.com/
 EMBEDDING_DEPLOYMENT=your_embedding_deployment
 
 # === 或 OpenAI ===
-# OPENAI_API_KEY=***            # 默认模型 gpt-3.5-turbo / text-embedding-ada-002
-# OPENAI_MODEL_NAME=gpt-4o
+# OPENAI_API_KEY=***            # 默认模型 gpt-6-luna / text-embedding-ada-002
+# OPENAI_MODEL_NAME=gpt-6-luna
 # OPENAI_BASE_URL=https://api.openai.com/v1/
 
 # === 或 Ollama（本地） ===
@@ -190,7 +190,7 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 | 变量 | 说明 |
 |---|---|
 | `CHAT_API_KEY` `CHAT_API_VERSION` `CHAT_AZURE_ENDPOINT` `CHAT_DEPLOYMENT_NAME` `CHAT_MODEL_NAME` | Azure OpenAI |
-| `OPENAI_API_KEY` `OPENAI_MODEL_NAME`（默认 gpt-3.5-turbo） `OPENAI_BASE_URL` | OpenAI |
+| `OPENAI_API_KEY` `OPENAI_MODEL_NAME`（默认 gpt-6-luna） `OPENAI_BASE_URL` | OpenAI |
 | `OLLAMA_BASE_URL`（默认 `http://localhost:11434`） `OLLAMA_MODEL_NAME`（默认 llama3） | Ollama |
 | `GEMINI_API_KEY` `GEMINI_MODEL_NAME`（默认 gemini-1.5-pro） `GEMINI_BASE_URL` | Gemini |
 

@@ -93,15 +93,15 @@ CHAT_API_KEY=your_azure_api_key
 CHAT_AZURE_ENDPOINT=https://your-endpoint.openai.azure.com/
 CHAT_DEPLOYMENT_NAME=your_deployment_name
 CHAT_API_VERSION=2024-02-15-preview
-CHAT_MODEL_NAME=gpt-4
+CHAT_MODEL_NAME=gpt-6-luna
 EMBEDDING_API_KEY=your_embedding_api_key
 EMBEDDING_API_VERSION=2024-02-15-preview
 EMBEDDING_AZURE_ENDPOINT=https://your-endpoint.openai.azure.com/
 EMBEDDING_DEPLOYMENT=your_embedding_deployment
 
 # === Or OpenAI ===
-# OPENAI_API_KEY=***            # defaults: gpt-3.5-turbo / text-embedding-ada-002
-# OPENAI_MODEL_NAME=gpt-4o
+# OPENAI_API_KEY=***            # defaults: gpt-6-luna / text-embedding-ada-002
+# OPENAI_MODEL_NAME=gpt-6-luna
 # OPENAI_BASE_URL=https://api.openai.com/v1/
 
 # === Or Ollama (local) ===
@@ -191,7 +191,7 @@ python tests/test_imports.py   # zero-dependency import smoke test, no network, 
 | Variable | Notes |
 |---|---|
 | `CHAT_API_KEY` `CHAT_API_VERSION` `CHAT_AZURE_ENDPOINT` `CHAT_DEPLOYMENT_NAME` `CHAT_MODEL_NAME` | Azure OpenAI |
-| `OPENAI_API_KEY` `OPENAI_MODEL_NAME` (default gpt-3.5-turbo) `OPENAI_BASE_URL` | OpenAI |
+| `OPENAI_API_KEY` `OPENAI_MODEL_NAME` (default gpt-6-luna) `OPENAI_BASE_URL` | OpenAI |
 | `OLLAMA_BASE_URL` (default `http://localhost:11434`) `OLLAMA_MODEL_NAME` (default llama3) | Ollama |
 | `GEMINI_API_KEY` `GEMINI_MODEL_NAME` (default gemini-1.5-pro) `GEMINI_BASE_URL` | Gemini |
 
