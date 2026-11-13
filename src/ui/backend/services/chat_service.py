@@ -227,9 +227,14 @@ class ChatService:
                 if cb_result is not None:
                     await cb_result
 
+            # 会话级记忆检索范围：缺省/None 交给 orchestrator 子 agent 的
+            # 补值链，最终由 src/memory/gateway 换成自库白名单（D-B 缺省）。
+            memory_namespaces = session.get("memory_namespaces") or None
+
             result = await orchestrator_ask(
                 user_query,
                 doc_name=doc_name,
+                namespaces=memory_namespaces,
                 history=history,
                 on_progress=on_progress,
                 # 与文档校验路径同源：/config 页选的 provider 真正贯通到

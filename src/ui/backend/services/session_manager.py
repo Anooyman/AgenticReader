@@ -166,6 +166,8 @@ class SessionManager:
             "selected_docs": [doc_name],
             "enabled_tools": ["retrieve_documents"],
             "agents_used": [],  # 初始化agents记录
+            # 会话级记忆检索范围；None/缺字段 = 缺省自库白名单（gateway 解析）
+            "memory_namespaces": None,
             "title": f"单文档对话: {doc_name}",
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat(),
@@ -218,6 +220,8 @@ class SessionManager:
             "selected_docs": selected_docs,
             "enabled_tools": enabled_tools or [],
             "agents_used": [],  # 初始化agents记录
+            # 会话级记忆检索范围；None/缺字段 = 缺省自库白名单（gateway 解析）
+            "memory_namespaces": None,
             "title": title,
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat(),
@@ -387,6 +391,7 @@ class SessionManager:
                     "doc_name": session_data.get("doc_name"),
                     "selected_docs": session_data.get("selected_docs"),
                     "enabled_tools": session_data.get("enabled_tools"),
+                    "memory_namespaces": session_data.get("memory_namespaces"),
                     "title": session_data.get("title"),
                     "created_at": session_data.get("created_at"),
                     "updated_at": session_data.get("updated_at"),
@@ -446,6 +451,32 @@ class SessionManager:
             return None
 
         session["title"] = new_title
+        session["updated_at"] = datetime.now().isoformat()
+
+        session_path = self._get_session_path(session_id)
+        self._save_session_file(session_path, session)
+
+        return session
+
+    def set_session_memory_namespaces(self, session_id: str,
+                                     namespaces: Optional[List[str]]) -> Optional[Dict]:
+        """
+        设置会话级记忆检索范围。
+
+        Args:
+            session_id: 会话ID
+            namespaces: namespace 列表；None 表示恢复默认（自库白名单，
+                由 src/memory/gateway 解析）。值的合法性校验属调用方
+                （api 层）的职责，本方法只做落盘。
+
+        Returns:
+            更新后的会话数据；会话不存在时返回 None。
+        """
+        session = self.load_session(session_id)
+        if not session:
+            return None
+
+        session["memory_namespaces"] = namespaces
         session["updated_at"] = datetime.now().isoformat()
 
         session_path = self._get_session_path(session_id)

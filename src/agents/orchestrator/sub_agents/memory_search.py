@@ -29,9 +29,9 @@ class MemorySearchAgent(SubAgent):
                     "summaries and prior conversation notes) for anything semantically "
                     "relevant to the user's question. Use this FIRST for any question that "
                     "references remembered content, even vaguely (e.g. 'that paper about X', "
-                    "'what did we discuss about Y'). Searches across ALL memory by default "
-                    "(namespace omitted) — only pass namespace if the user's question is "
-                    "explicitly scoped to one kind of content. Returns a synthesized answer "
+                    "'what did we discuss about Y'). Searches AgenticReader's own memory "
+                    "(ai-research + webapp-chat) by default — only pass namespace to narrow "
+                    "the search to one kind of content. Returns a synthesized answer "
                     "plus a list of hits, each optionally carrying a source_id you can pass to "
                     "deep_dive_document for details beyond the stored summary."
                 ),
@@ -44,7 +44,8 @@ class MemorySearchAgent(SubAgent):
                             "description": (
                                 "Optional. Restrict the search to one namespace (e.g. "
                                 "'ai-research' for paper/article summaries, 'webapp-chat' for "
-                                "prior conversation notes). Omit to search across all memory."
+                                "prior conversation notes). Omit to search the default "
+                                "self-library scope (ai-research + webapp-chat)."
                             ),
                         },
                     },
@@ -67,10 +68,12 @@ class MemorySearchAgent(SubAgent):
                 await result
 
         try:
-            from src.memory.search import agentic_search
+            # 实现经 src/memory/gateway.py 接入（收敛层）：effective_namespace
+            # 为 None/空时由 gateway 换成自库白名单（D-B 缺省），"*" 透传为全部。
+            from src.memory import gateway
 
-            result = await agentic_search(
-                query, namespace=effective_namespace,
+            result = await gateway.search(
+                query, namespaces=effective_namespace,
                 provider=resolve_provider(kwargs.get("provider")))
             return {"answer": result.get("answer", ""), "hits": self._shape_hits(result.get("results", []))}
         except Exception as e:  # noqa: BLE001

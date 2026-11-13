@@ -28,6 +28,7 @@ TOP_LEVEL_MODULES = [
     "src.core.vector_db",
     "src.core.parallel",
     "src.memory",
+    "src.memory.gateway",
     "src.agents",
     "src.agents.indexing",
     "src.agents.answer",

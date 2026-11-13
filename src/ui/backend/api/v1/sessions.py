@@ -97,3 +97,56 @@ async def rename_session(session_id: str, request: RenameRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class MemoryScopeRequest(BaseModel):
+    """会话记忆检索范围请求。namespaces=null 表示恢复默认（自库白名单）。"""
+    namespaces: Optional[List[str]]
+
+
+@router.patch("/{session_id}/memory-scope")
+async def set_memory_scope(session_id: str, request: MemoryScopeRequest):
+    """
+    设置会话级记忆检索范围（供 chat_service 透传给 Orchestrator）。
+
+    校验集合 = gateway.DEFAULT_SEARCH_NAMESPACES（自库白名单）
+             + NAMESPACE_AATF（DA 预留）+ gateway.EXTERNAL_SEARCH_NAMESPACES（占位）。
+    null → 恢复默认；[] → 400（空作用域无意义）；含未知项 → 400；
+    重复项在端点层保序去重后落库。
+    """
+    try:
+        # 函数级延迟 import：api 层不往模块级拖记忆内核依赖链
+        from src.memory import gateway
+
+        allowed = (list(gateway.DEFAULT_SEARCH_NAMESPACES)
+                   + [gateway.NAMESPACE_AATF]
+                   + list(gateway.EXTERNAL_SEARCH_NAMESPACES))
+        if request.namespaces is None:
+            resolved = None
+        else:
+            if not request.namespaces:
+                raise HTTPException(status_code=400, detail="namespaces 不能为空")
+            resolved = []
+            for n in request.namespaces:
+                n = str(n).strip()
+                if n not in allowed:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"未知的 namespace: {n!r}；允许值: {', '.join(allowed)}")
+                if n not in resolved:
+                    resolved.append(n)
+
+        session = chat_service.session_manager.set_session_memory_namespaces(
+            session_id, resolved)
+        if not session:
+            raise HTTPException(status_code=404, detail="会话不存在")
+
+        return {
+            "success": True,
+            "session": session,
+            "message": "记忆检索范围已更新",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

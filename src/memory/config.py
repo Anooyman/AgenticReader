@@ -10,7 +10,7 @@
 """
 import logging
 import os
-from typing import Optional
+from typing import List, Optional
 
 from src.config.settings import (
     DATA_ROOT,
@@ -26,6 +26,24 @@ MEMORY_DB_DIR = os.path.join(DATA_ROOT, "memory_db")
 # 和"webapp 对话历史"分开检索（两者语义不同，混在一起会互相污染 top-k）。
 NAMESPACE_AI_RESEARCH = "ai-research"
 NAMESPACE_WEBAPP_CHAT = "webapp-chat"
+
+# DA 裁决：将来本地 brief 加载写入 A 自库 data/memory_db/ 时落在这个
+# namespace（现桥接侧 /api/v1/llmmemory /chat 的缺省 namespace 也是 AATF，
+# 两边名字保持一致）。
+NAMESPACE_AATF = "AATF"
+
+# D-B 检索作用域语义（唯一实现处在 src/memory/gateway.py 的
+# resolve_search_namespaces）：
+#   namespaces=None → 本白名单（自库两车道：pipeline 摘要 + 对话入库）
+#   namespaces="*"  → 全部 namespace
+#   显式列表        → 按列表子集
+# 底层 vector_store._where 对 None/"*" 的不生成过滤行为保持不变，
+# 天花板只加在 gateway 层。
+DEFAULT_SEARCH_NAMESPACES: List[str] = [NAMESPACE_AI_RESEARCH, NAMESPACE_WEBAPP_CHAT]
+
+# 会话检索范围校验用的外部 namespace 白名单占位（现恒空；将来接外部
+# 记忆源时在这里登记，gateway 与 sessions PATCH 端点共用同一来源）。
+EXTERNAL_SEARCH_NAMESPACES: List[str] = []
 
 # 已知 embedding 模型 -> 向量维度。新增模型时在这里补一条即可。
 _KNOWN_DIMENSIONS = {
