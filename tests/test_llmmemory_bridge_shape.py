@@ -6,7 +6,8 @@ httpx 一跳收编进 src/memory/gateway.py 的 bridge_request / brief_* 之后�
      运行: python scripts/webui/server.py --port 8765" 旧文案；
   ② HTTP >= 400 → 原状态码 + 解析后的 body 透传，body 不是 JSON 时退化为
      {"detail": text[:300]}；
-  ③ 2xx → 返回外部 json body 原样。
+  ③ 2xx → 返回外部 json body 原样；2xx 但 body 解析不出 JSON → 不喂假
+     成功数据，BridgeError(502) 报错不吞（bridge_request docstring 有记录）。
 外加本轮新增的 POST /chat/stop/{job_id} 纯透传的两路（200 / 404）。
 
 全程不碰真实外部服务：只替换 httpx.AsyncClient.request 成会录音的假实现，
@@ -17,6 +18,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from src.memory import gateway
 from src.ui.backend.api.v1 import llmmemory
 
 PREFIX = "/api/v1/llmmemory"
@@ -25,6 +27,10 @@ BASE = "http://127.0.0.1:8765"
 
 @pytest.fixture()
 def client(monkeypatch):
+    # 钉死桥 URL 基准：gateway 的 LLM_MEMORY_URL 在 import 时读 env，测试
+    # 进程若导出了 LLM_MEMORY_URL，下面的 URL 断言会整片红——这里统一
+    # setattr 回 BASE，让本文件对环境变量免疫。
+    monkeypatch.setattr(gateway, "LLM_MEMORY_URL", BASE)
     app = FastAPI()
     app.include_router(llmmemory.router, prefix=PREFIX)
     return TestClient(app)
@@ -72,6 +78,16 @@ def test_non_json_error_body_degrades_to_truncated_detail(client, fake_lm):
     r = client.get(f"{PREFIX}/dates")
     assert r.status_code == 502
     assert r.json()["detail"] == {"detail": "x" * 300}
+
+
+def test_2xx_non_json_maps_to_502_not_fake_success(client, fake_lm):
+    """2xx + 非 JSON body 的刻意决策：不把它当成功数据喂给前端，
+    BridgeError→502（旧 _lm 在这里是 JSONDecodeError→500，"报错不吞"
+    语义相同，映射码 502 属收敛后的形状决策，由本测试钉死）。"""
+    fake_lm["responses"].append(httpx.Response(200, text="<html>nginx</html>"))
+    r = client.get(f"{PREFIX}/dates")
+    assert r.status_code == 502
+    assert "无法解析为 JSON" in r.json()["detail"]
 
 
 def test_2xx_body_passes_through_verbatim(client, fake_lm):

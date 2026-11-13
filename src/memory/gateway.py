@@ -116,15 +116,16 @@ async def ingest(
     provider: Optional[str] = None,
     source_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """统一写入口：直通 ingest.ingest_source，provider=None 时先
-    resolve_provider(None)——与现调用点语义等值（chat_ingest 已是
-    resolve_provider(None)，pipeline 传的是已解析值，gateway 对非 None
-    值直通不二次解析）。返回 report dict 形状逐字不变
-    （chunks_added/chunks_skipped/chunks_deleted/...）。
+    """统一写入口：直通 ingest.ingest_source。provider 与 search() 同源，
+    一律先过 resolve_provider(provider)——None 走全局解析，显式值做
+    strip+lower 归一。读写两侧的 provider 字符串因此恒等价；否则 SDK
+    替换后若调用方传 "Azure" 这类未归一值，embedding 维度会经
+    get_embedding_dimensions(未归一值) 错开分支。返回 report dict 形状
+    逐字不变（chunks_added/chunks_skipped/chunks_deleted/...）。
     """
     return await _ingest_source(
         path, source_type=source_type, namespace=namespace,
-        provider=resolve_provider(provider) if provider is None else provider,
+        provider=resolve_provider(provider),
         source_id=source_id,
     )
 
@@ -155,26 +156,30 @@ def delete_source(namespace: str, source_id: str) -> int:
     护栏），service 层形状不动。"""
     store = _store()
     rows = store.rows_for_source(namespace, source_id)
-    deleted = 0
-    for row in rows:
-        try:
-            store.delete(row.get("id", ""))
-            deleted += 1
-        except Exception:  # noqa: BLE001 —— 单条失败不阻断其余
-            logger.warning("gateway.delete_source: 删除失败 id=%s", row.get("id"), exc_info=True)
-    return deleted
+    return _delete_rows(store, rows, "delete_source")
 
 
 def delete_namespace(namespace: str) -> int:
     """清空 namespace，取行+逐删策略同 delete_source。"""
     store = _store()
+    return _delete_rows(store, store.all_rows(namespace), "delete_namespace")
+
+
+def _delete_rows(store: VectorStore, rows: List[Dict[str, Any]],
+                 tag: str) -> int:
+    """逐删共用实现：缺 id 的行跳过并 warning（旧代码 row["id"] 在这里会
+    KeyError，改 skip 后计数也只记真删，不把幻影行算进 deleted 返回给 UI）。"""
     deleted = 0
-    for row in store.all_rows(namespace):
+    for row in rows:
+        row_id = row.get("id")
+        if not row_id:
+            logger.warning("gateway.%s: 行缺少 id，跳过（不计入删除数）：%s", tag, row)
+            continue
         try:
-            store.delete(row.get("id", ""))
+            store.delete(row_id)
             deleted += 1
-        except Exception:  # noqa: BLE001
-            logger.warning("gateway.delete_namespace: 删除失败 id=%s", row.get("id"), exc_info=True)
+        except Exception:  # noqa: BLE001 —— 单条失败不阻断其余
+            logger.warning("gateway.%s: 删除失败 id=%s", tag, row_id, exc_info=True)
     return deleted
 
 
@@ -199,11 +204,21 @@ LLM_MEMORY_URL: str = os.environ.get("LLM_MEMORY_URL", "http://127.0.0.1:8765").
 _DEFAULT_BRIDGE_TIMEOUT = httpx.Timeout(15.0, read=180.0)
 
 
+# 取舍注记：这里刻意用"每请求一个 AsyncClient"的单函数形态，而不是带
+# keepalive 的连接池会话——brief 轮询每 3s 一跳会新开连接，TCP 握手略多，
+# 换来的是"桥 = 单函数一跳"的收敛形状（SDK 替换时只动本函数体）。
+# 若 SDK 阶段要上连接复用，改动点同样只在这里，调用侧签名不动。
 async def bridge_request(
     method: str, path: str, *, timeout: Optional[httpx.Timeout] = None, **kw,
 ) -> Tuple[int, Any]:
     """外部 webui 一跳：单发 httpx 请求，返回 (status_code, 解析后的 json
-    body)；body 解析失败时退化为 {"detail": text[:300]}（旧 _lm 逐字同构）。
+    body)。body 解析失败时分两种：
+      * HTTP >= 400：退化为 {"detail": text[:300]}，由调用端点原状态码
+        透传（旧 _lm 逐字同构，≥400 退化路径由 shape 测试锁死）；
+      * 2xx：说明上游回了"成功状态 + 非法体"，静默当成功数据返回会把坏
+        形状喂给前端，这里 raise BridgeError(502)。这与旧 _lm 的 r.json()
+        直接抛 JSONDecodeError→500 同属"报错不吞"，映射码从 500 变 502
+        是收敛后刻意的形状决策（502 更准确：上游响应无效）。
     连接失败等 transport 错误 raise BridgeError。本层绝不 import fastapi。"""
     try:
         async with httpx.AsyncClient(timeout=timeout or _DEFAULT_BRIDGE_TIMEOUT) as client:
@@ -217,6 +232,12 @@ async def bridge_request(
     try:
         body = resp.json()
     except ValueError:
+        if resp.status_code < 400:
+            raise BridgeError(
+                502,
+                f"LLM-Memory webui 返回了无法解析为 JSON 的成功响应"
+                f"（HTTP {resp.status_code}, {path}）：{resp.text[:300]}",
+            )
         body = {"detail": resp.text[:300]}
     return resp.status_code, body
 
@@ -281,15 +302,26 @@ BRIEF_DRIVER_ENV = "MEMORY_BRIEF_DRIVER"  # "bridge"（缺省）| "local"
 
 
 async def load_brief_date(date: str) -> Dict[str, Any]:
-    """DA 分派：env MEMORY_BRIEF_DRIVER。
+    """DA 分派：env MEMORY_BRIEF_DRIVER，显式白名单 {bridge, local}。
+    非法值（大小写笔误外的拼错、空串之外的乱值）warning 后按 bridge 跑，
+    避免误设 env 后整条 brief 加载"莫名全挂"（local 位是有意 raise 的，
+    只有显式 local 才进它）。
     bridge → 懒 import brief_memory 模块，属性调用 brief_memory.load_date(date)。
       ★必须是 brief_memory.load_date(...) 属性访问形式，不得写成
       from-import 绑定函数对象——tests/test_brief_load_jobs.py 靠 patch
       模块属性驱动这条链路，形状不能动。
     local → _local_brief_load(date)。
     返回契约恒为 {"loaded","skipped","errors"}（job_runner 的判定只认这三键）。
+
+    ★层界注记：本函数对 brief_memory 的反向 import 是本轮刻意保留的债
+    （上层 UI 服务被记忆内核函数级引用）。SDK 阶段应改由 job_runner 把
+    driver 函数注入 gateway，届时连同 local 分支一起收回上层。
     """
     driver = (os.environ.get(BRIEF_DRIVER_ENV) or "bridge").strip().lower()
+    if driver not in ("bridge", "local"):
+        logger.warning("%s 取值 %r 不在白名单 ['bridge','local']，按 bridge 运行",
+                       BRIEF_DRIVER_ENV, driver)
+        driver = "bridge"
     if driver == "local":
         return await _local_brief_load(date)
     from src.ui.backend.services import brief_memory  # 函数级，防 ui→memory→ui 环
@@ -307,74 +339,3 @@ async def _local_brief_load(date: str) -> Dict[str, Any]:
     )
 
 
-# ---- 服务面工厂 ----
-class MemoryService:
-    """把上面的模块级函数收拢成一层的实例 façade。
-
-    存在理由：B 侧 SDK 化时替换的是 gateway 内部实现，消费方拿这个工厂
-    返回的对象即可，调用形态不用逐处改 import；与模块级函数逐一对应，
-    不叠加任何第二语义。"""
-
-    def search(self, query: str, **kw) -> Any:
-        return search(query, **kw)
-
-    def ingest(self, path: str, source_type: str, namespace: str, **kw) -> Any:
-        return ingest(path, source_type=source_type, namespace=namespace, **kw)
-
-    def browse_all_rows(self, namespace: Union[str, List[str]] = "*") -> List[Dict[str, Any]]:
-        return browse_all_rows(namespace)
-
-    def browse_rows_for_source(self, namespace: Union[str, List[str]], source_id: str) -> List[Dict[str, Any]]:
-        return browse_rows_for_source(namespace, source_id)
-
-    def delete_item(self, memory_id: str) -> None:
-        return delete_item(memory_id)
-
-    def delete_source(self, namespace: str, source_id: str) -> int:
-        return delete_source(namespace, source_id)
-
-    def delete_namespace(self, namespace: str) -> int:
-        return delete_namespace(namespace)
-
-    def load_brief_date(self, date: str) -> Any:
-        return load_brief_date(date)
-
-    def bridge_request(self, method: str, path: str, **kw) -> Any:
-        return bridge_request(method, path, **kw)
-
-    # 桥服务面具名方法：与模块级函数逐一对应，不叠加第二语义。
-    def brief_dates(self, **kw) -> Any:
-        return brief_dates(**kw)
-
-    def brief_papers(self, dates: str = "", **kw) -> Any:
-        return brief_papers(dates, **kw)
-
-    def brief_load(self, dates, **kw) -> Any:
-        return brief_load(dates, **kw)
-
-    def brief_load_progress(self, job_id: str, **kw) -> Any:
-        return brief_load_progress(job_id, **kw)
-
-    def brief_chat(self, message: str, history, namespace, **kw) -> Any:
-        return brief_chat(message, history, namespace, **kw)
-
-    def brief_chat_progress(self, job_id: str, **kw) -> Any:
-        return brief_chat_progress(job_id, **kw)
-
-    def brief_chat_stop(self, job_id: str, **kw) -> Any:
-        return brief_chat_stop(job_id, **kw)
-
-    def deepread_download(self, url: str, **kw) -> Any:
-        return deepread_download(url, **kw)
-
-
-_MEMORY_SERVICE: Optional[MemoryService] = None
-
-
-def get_memory_service() -> MemoryService:
-    """缺省服务实例（无状态 façade，单例足够；需要注入别的实现时
-    直接构造 MemoryService() 或替换 gateway 内部即可）。"""
-    global _MEMORY_SERVICE
-    if _MEMORY_SERVICE is None:
-        _MEMORY_SERVICE = MemoryService()
-    return _MEMORY_SERVICE

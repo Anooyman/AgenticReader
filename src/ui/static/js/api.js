@@ -256,9 +256,11 @@ const API = (function () {
             },
 
             // 会话级记忆检索范围：null 恢复默认白名单，显式列表为子集。
+            // undefined → null 归一：缺键 body 在服务端会撞 422，
+            // "重置"最常见的调用形态 setMemoryScope(id, undefined) 统一走显式 null。
             async setMemoryScope(sessionId, namespaces, options = {}) {
                 return request('/api/v1/sessions/' + sessionId + '/memory-scope',
-                    withDefaults({ method: 'PATCH', json: { namespaces }, errorText: 'Failed to set memory scope' }, options));
+                    withDefaults({ method: 'PATCH', json: { namespaces: namespaces === undefined ? null : namespaces }, errorText: 'Failed to set memory scope' }, options));
             }
         },
 

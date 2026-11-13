@@ -41,6 +41,7 @@
                 <!-- 工具按钮 -->
                 <button id="btn-attach-doc" class="tool-btn" title="选择PDF文档">📎</button>
                 <button id="btn-web-search" class="tool-btn" title="启用网络搜索">🌐</button>
+                <button id="btn-memory-scope" class="tool-btn" title="记忆检索范围">🧠</button>
                 <button id="btn-voice-input" class="tool-btn" title="语音输入">🎤</button>
                 <textarea id="message-input" class="form-control" placeholder="直接输入问题开始对话，或点击 📎 选择文档..." disabled></textarea>
                 <button id="send-btn" class="btn btn-primary" disabled>⬆️</button>
@@ -62,6 +63,37 @@
                     </div>
                     <div class="doc-picker-footer">
                         <button id="doc-picker-confirm" class="btn btn-primary btn-sm">确认</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 记忆检索范围浮层（会话级，改动即存 PATCH /sessions/{id}/memory-scope）
+                 选项与 src/memory/gateway 的允许集合同源：
+                 DEFAULT_SEARCH_NAMESPACES(ai-research/webapp-chat)
+                 + NAMESPACE_AATF(DA 预留) + EXTERNAL_SEARCH_NAMESPACES(现恒空)。 -->
+            <div id="memory-scope-modal" class="doc-picker-modal" style="display: none;">
+                <div class="doc-picker-content" style="max-width: 380px;">
+                    <div class="doc-picker-header">
+                        <span>🧠 记忆检索范围</span>
+                        <button id="memory-scope-close" class="doc-picker-close-btn">✕</button>
+                    </div>
+                    <div style="padding: 0.5rem 1rem 0; font-size: 0.8125rem; color: var(--text-muted);">
+                        缺省 = 全部已勾选（ai-research + webapp-chat）。勾选子集会立即保存到当前会话。
+                    </div>
+                    <div class="doc-picker-list" style="padding: 0.5rem 1rem; max-height: 220px;">
+                        <div class="doc-picker-option">
+                            <label><input type="checkbox" class="memory-scope-cb" value="ai-research" checked> ai-research（简报 / 论文摘要）</label>
+                        </div>
+                        <div class="doc-picker-option">
+                            <label><input type="checkbox" class="memory-scope-cb" value="webapp-chat" checked> webapp-chat（对话历史）</label>
+                        </div>
+                        <div class="doc-picker-option">
+                            <label><input type="checkbox" class="memory-scope-cb" value="AATF" title="DA 预留位：本地简报库数据将随本地 driver 实装落库，当前选择它检索为空"> AATF（本地简报库，数据随本地 driver 落地）</label>
+                        </div>
+                    </div>
+                    <div class="doc-picker-footer" style="display: flex; justify-content: space-between;">
+                        <button id="memory-scope-reset" class="btn btn-sm btn-secondary" title="清除自定义勾选，恢复缺省白名单">恢复缺省</button>
+                        <button id="memory-scope-done" class="btn btn-sm btn-primary">完成</button>
                     </div>
                 </div>
             </div>

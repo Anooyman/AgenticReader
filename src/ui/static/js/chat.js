@@ -8,6 +8,11 @@ class ChatApp {
         this.enabledTools = [];
         this.selectedDocs = null;
         this.sessionId = null;
+        // 会话级记忆检索范围（D-B）：null = 缺省自库白名单
+        // （gateway 解析为 ai-research + webapp-chat）；数组 = 显式子集。
+        // 允许值与 src/memory/gateway 同源：DEFAULT_SEARCH_NAMESPACES
+        // ∪ NAMESPACE_AATF ∪ EXTERNAL_SEARCH_NAMESPACES——改这里记得对点。
+        this.memoryNamespaces = null;
         this.ws = null;
         this.pdfDoc = null;
         this.currentDocName = null;  // 当前显示的PDF文档名
@@ -188,6 +193,19 @@ class ChatApp {
 
         // 🌐 网络搜索按钮
         document.getElementById('btn-web-search').addEventListener('click', () => this.toggleWebSearch());
+
+        // 🧠 记忆检索范围（会话级，改动即存 memory-scope 端点）
+        const scopeBtn = document.getElementById('btn-memory-scope');
+        if (scopeBtn) scopeBtn.addEventListener('click', () => this.toggleMemoryScope());
+        const scopeClose = document.getElementById('memory-scope-close');
+        if (scopeClose) scopeClose.addEventListener('click', () => this.hideMemoryScope());
+        const scopeDone = document.getElementById('memory-scope-done');
+        if (scopeDone) scopeDone.addEventListener('click', () => this.hideMemoryScope());
+        const scopeReset = document.getElementById('memory-scope-reset');
+        if (scopeReset) scopeReset.addEventListener('click', () => this.applyMemoryScope(null));
+        document.querySelectorAll('.memory-scope-cb').forEach(cb => {
+            cb.addEventListener('change', () => this.onMemoryScopeCheckChanged());
+        });
 
         // 🎤 语音输入按钮
         document.getElementById('btn-voice-input').addEventListener('click', () => this.toggleVoiceInput());
@@ -383,6 +401,9 @@ class ChatApp {
             // 更新UI标题
             document.getElementById('chat-title').textContent = 'AgenticReader';
             document.getElementById('chat-subtitle').textContent = '智能文档对话助手';
+
+            // 恢复会话上已持久化的记忆检索范围（异步，不阻塞首屏）
+            this.loadMemoryScope();
 
             // 更新芯片栏
             this.updateChipsBar();
@@ -1801,6 +1822,18 @@ class ChatApp {
             hasChips = true;
         }
 
+        // 记忆范围芯片（仅当显式设置过非缺省子集时显示；✕ 恢复缺省）
+        if (this.memoryNamespaces && this.memoryNamespaces.length > 0) {
+            const chip = document.createElement('span');
+            chip.className = 'chip chip-memory';
+            chip.innerHTML = `🧠 记忆: ${this.memoryNamespaces.join(' + ')} <span class="chip-remove" data-action="reset-memory-scope">✕</span>`;
+            chip.querySelector('.chip-remove').addEventListener('click', () => {
+                this.applyMemoryScope(null);
+            });
+            container.appendChild(chip);
+            hasChips = true;
+        }
+
         // 网络搜索芯片
         if (this.enabledTools.includes('search_web')) {
             const chip = document.createElement('span');
@@ -1957,6 +1990,104 @@ class ChatApp {
             this.enabledTools.push('search_web');
             btn.classList.add('active');
         }
+        this.updateChipsBar();
+    }
+
+    // ==================== 记忆检索范围（会话级，D-B 缺省=白名单） ====================
+
+    // 缺省作用域的展示视图，与 src/memory/gateway 的 DEFAULT_SEARCH_NAMESPACES
+    // 逐字同源；gateway 侧新增/改名缺省项时这里要跟着对点。
+    static get DEFAULT_MEMORY_SCOPES() {
+        return ['ai-research', 'webapp-chat'];
+    }
+
+    /**
+     * 从会话文件恢复 memory_namespaces（旧 session 缺该键 → null = 缺省，
+     * 与 session_manager/chat_service 的向后兼容口径一致）。
+     */
+    async loadMemoryScope() {
+        if (!this.sessionId) return;
+        try {
+            const session = await API.sessions.get(this.sessionId);
+            const ns = (session && Array.isArray(session.memory_namespaces))
+                ? session.memory_namespaces : null;
+            this.memoryNamespaces = this.normalizeMemoryScope(ns);
+        } catch (err) {
+            console.warn('读取会话记忆范围失败:', err);
+        }
+        this.syncMemoryScopeUi();
+    }
+
+    /**
+     * 与缺省两项完全一致的显式列表归一化成 null——不存、不占芯片位，
+     * 保证"看起来是缺省"的状态在前后端口径都是 null。
+     */
+    normalizeMemoryScope(list) {
+        if (!Array.isArray(list) || list.length === 0) return null;
+        const sorted = [...list].sort();
+        const def = [...ChatApp.DEFAULT_MEMORY_SCOPES].sort();
+        if (sorted.length === def.length && sorted.every((v, i) => v === def[i])) {
+            return null;
+        }
+        return sorted;
+    }
+
+    toggleMemoryScope() {
+        const modal = document.getElementById('memory-scope-modal');
+        if (!modal) return;
+        if (modal.style.display === 'block') {
+            this.hideMemoryScope();
+        } else {
+            this.syncMemoryScopeUi();
+            modal.style.display = 'block';
+        }
+    }
+
+    hideMemoryScope() {
+        const modal = document.getElementById('memory-scope-modal');
+        if (modal) modal.style.display = 'none';
+    }
+
+    async onMemoryScopeCheckChanged() {
+        const checked = Array.from(
+            document.querySelectorAll('.memory-scope-cb:checked')).map(cb => cb.value);
+        await this.applyMemoryScope(checked);
+    }
+
+    /**
+     * 落盘记忆范围。null/与缺省等值 → 恢复缺省（PATCH 显式 null）；
+     * 空勾选也走缺省（空作用域服务端本就拒绝）。失败时回滚 UI，
+     * 靠 api.js 的 errorText + toast 提示。
+     */
+    async applyMemoryScope(list) {
+        const normalized = this.normalizeMemoryScope(list);
+        const prev = this.memoryNamespaces;
+        this.memoryNamespaces = normalized;
+        this.syncMemoryScopeUi();
+        if (!this.sessionId) {
+            console.warn('会话尚未初始化，记忆范围未持久化');
+            return;
+        }
+        try {
+            await API.sessions.setMemoryScope(this.sessionId, normalized);
+        } catch (err) {
+            this.memoryNamespaces = prev;
+            this.syncMemoryScopeUi();
+            if (window.UIFeedback) {
+                UIFeedback.toast('记忆范围保存失败', { type: 'error', duration: 4000 });
+            }
+            console.error('记忆范围保存失败:', err);
+        }
+    }
+
+    /** 把浮层勾选态和按钮亮暗同步到 memoryNamespaces。 */
+    syncMemoryScopeUi() {
+        const effective = this.memoryNamespaces || ChatApp.DEFAULT_MEMORY_SCOPES;
+        document.querySelectorAll('.memory-scope-cb').forEach(cb => {
+            cb.checked = effective.includes(cb.value);
+        });
+        const btn = document.getElementById('btn-memory-scope');
+        if (btn) btn.classList.toggle('active', !!this.memoryNamespaces);
         this.updateChipsBar();
     }
 

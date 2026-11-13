@@ -105,6 +105,10 @@ async def load_date(date: str) -> Dict[str, Any]:
 
     while True:
         try:
+            # 注：外层措辞沿用"查询 X 的加载进度失败（job=…）"，内层拼接
+            # gateway BridgeError 的 detail（"webui 不可达…"整段）。旧版本这里
+            # 拼的是原始异常文本，语义同类、job 账本可追，属收敛后的刻意
+            # 口径；逐字保留旧措辞的承诺只在 502 映射处由测试锁死。
             status, job = await gateway.brief_load_progress(
                 external_job_id, timeout=_TIMEOUT)
         except gateway.BridgeError as exc:

@@ -129,8 +129,10 @@ async def ask(
     是否真的调用、要不要先/也查 search_memory，完全由 LLM 判断，不再有
     代码强制注入的首轮 tool_call。
 
-    `namespaces`：用户创建这个 session 时勾选的默认记忆检索范围。省略/空
-    表示不限定，检索全部 namespace。
+    `namespaces`：用户在这个 session 上设置的记忆检索范围（session 级
+    memory_namespaces，经 chat_service 透传）。省略/空不是"全部"：由
+    src/memory/gateway 补成缺省自库白名单（D-B：ai-research +
+    webapp-chat）；显式列表按其子集生效，"*" 才表示全部 namespace。
 
     `history`：本 session 此前的对话消息（[{"role": "user"|"assistant",
     "content": ...}, ...]，不含本次 question）。省略表示全新对话。

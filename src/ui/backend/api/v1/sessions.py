@@ -100,8 +100,14 @@ async def rename_session(session_id: str, request: RenameRequest):
 
 
 class MemoryScopeRequest(BaseModel):
-    """会话记忆检索范围请求。namespaces=null 表示恢复默认（自库白名单）。"""
-    namespaces: Optional[List[str]]
+    """会话记忆检索范围请求。
+
+    namespaces=null 表示恢复默认（自库白名单）。字段带显式缺省 None：
+    pydantic v2 下无默认值的 Optional 键仍属必填，省略整个键的"恢复默认"
+    最常用写法（含 api.js 对 undefined 的序列化缺键）会撞 422。
+    校验层同时接受缺省与显式 null，两者语义等价。
+    """
+    namespaces: Optional[List[str]] = None
 
 
 @router.patch("/{session_id}/memory-scope")
@@ -111,8 +117,11 @@ async def set_memory_scope(session_id: str, request: MemoryScopeRequest):
 
     校验集合 = gateway.DEFAULT_SEARCH_NAMESPACES（自库白名单）
              + NAMESPACE_AATF（DA 预留）+ gateway.EXTERNAL_SEARCH_NAMESPACES（占位）。
-    null → 恢复默认；[] → 400（空作用域无意义）；含未知项 → 400；
+    null / 缺键 → 恢复默认；[] → 400（空作用域无意义）；含未知项 → 400；
     重复项在端点层保序去重后落库。
+    注：AATF 目前随 DA 预留位放行，本地 _local_brief_load 实装前自库恒无
+    AATF 行，选它检索结果为空——前端浮层已加同源提示，避免"加载了但搜
+    不到"的断链错觉（blueprint OQ-1 口径）。
     """
     try:
         # 函数级延迟 import：api 层不往模块级拖记忆内核依赖链
