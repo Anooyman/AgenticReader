@@ -48,9 +48,12 @@ async def post_search(body: dict):
         raise HTTPException(status_code=400, detail="query is required")
     namespace = (body or {}).get("namespace")
 
-    from src.memory.search import agentic_search
+    from src.memory import gateway
 
     from src.config.settings import resolve_provider
-    result = await agentic_search(query, namespace=[namespace] if namespace else None,
+    # 检索测试口保持"缺省=全库"的现行为：不传 namespace 时显式用 "*"
+    # （gateway 层 "*" 与 None 在底层 vector_store._where 都不生成过滤）。
+    result = await gateway.search(query,
+                                  namespaces=[namespace] if namespace else "*",
                                   provider=resolve_provider(None))
     return result

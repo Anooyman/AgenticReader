@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from src.agents.answer import AnswerAgent
-from src.memory.ingest import ingest_source
+from src.memory import gateway
 from src.pipeline.queue_store import claim_item, fail_item, finish_item, select_processable
 
 # 单条目的领域处理函数：async (item) -> None。
@@ -150,7 +150,7 @@ async def ingest_summary_to_memory(
     """
     log_item(item["item_id"], "写入 memory...")
     try:
-        memory_report = await ingest_source(
+        memory_report = await gateway.ingest(
             str(summary_path), source_type=source_type,
             namespace=namespace, provider=provider, source_id=source_id,
         )

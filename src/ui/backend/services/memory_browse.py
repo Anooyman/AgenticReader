@@ -5,6 +5,9 @@
 原实现要跨 venv subprocess 调用 LLM-Memory（因为 webapp 进程不能 import
 它的 lancedb 依赖）；合并进 AgenticReader 后 src.memory.vector_store 与
 本项目其余代码同进程运行，直接调用即可，不再需要 subprocess/worker 脚本。
+本模块现在只组合 src/memory/gateway.py 的 browse_*/delete_* 原语，不再
+自己组装 VectorStore——顺带修掉旧 _vs() 把维度按写死 "azure" 解析的 bug
+（gateway._store() 统一按 resolve_provider(None) 取维度）。
 
 与原实现的一处差异：src/memory/vector_store.py 是单层记忆（不区分
 mid/long tier，见合并计划），所以 build_overview()/build_namespace_list()
@@ -15,18 +18,12 @@ mid/long tier，见合并计划），所以 build_overview()/build_namespace_lis
 import asyncio
 from typing import Any, Dict
 
-from src.memory.config import MEMORY_DB_DIR, get_embedding_dimensions
-from src.memory.vector_store import VectorStore, is_summary_row, load_json_list
-
-
-def _vs() -> VectorStore:
-    return VectorStore(MEMORY_DB_DIR, get_embedding_dimensions("azure"))
+from src.memory import gateway
 
 
 def _build_overview() -> Dict[str, Any]:
     """全库统计：总量 + 每个 namespace 的条数/来源类型分布。"""
-    vs = _vs()
-    rows = vs.all_rows("*")
+    rows = gateway.browse_all_rows("*")
     by_ns: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         ns = row.get("namespace") or "default"
@@ -60,8 +57,7 @@ def _build_namespace_list(namespace: str) -> Dict[str, Any]:
     """某个 namespace 下的记忆，按 source_id 分组——一次 ingest 进来的一个
     来源（一篇论文/一段对话）在 UI 上是一张可展开的卡片，而不是几十张
     互不相干的 chunk 卡片。"""
-    vs = _vs()
-    rows = vs.all_rows(namespace)
+    rows = gateway.browse_all_rows(namespace)
     groups: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         item = {
@@ -70,8 +66,8 @@ def _build_namespace_list(namespace: str) -> Dict[str, Any]:
             "importance": row.get("importance", 0.5),
             "created_at": row.get("created_at", ""),
             "occurred_at": row.get("occurred_at") or row.get("created_at", ""),
-            "keywords": load_json_list(row.get("keywords")),
-            "is_summary": is_summary_row(row),
+            "keywords": gateway.load_json_list(row.get("keywords")),
+            "is_summary": gateway.is_summary_row(row),
         }
         sid = row.get("source_id") or row.get("id")
         group = groups.setdefault(sid, {
@@ -98,8 +94,7 @@ def _build_namespace_list(namespace: str) -> Dict[str, Any]:
 
 
 def _delete_memory(memory_id: str) -> Dict[str, Any]:
-    vs = _vs()
-    vs.delete(memory_id)
+    gateway.delete_item(memory_id)
     return {"ok": True, "id": memory_id}
 
 
@@ -107,24 +102,16 @@ def _delete_source(namespace: str, source_id: str) -> Dict[str, Any]:
     """删掉一个来源（一篇论文/一段对话）在某 namespace 下的全部记忆行——
     对应 UI 上一张 group 卡片。VectorStore 本身没有按 source_id 批量删的
     原子操作，这里跟 LLM-Memory 原实现（_memory_delete_worker.py）一样，
-    先用 rows_for_source 取出全部行再逐条 delete()。"""
-    vs = _vs()
-    rows = vs.rows_for_source(namespace, source_id)
-    deleted = 0
-    for row in rows:
-        vs.delete(row["id"])
-        deleted += 1
+    先用 rows_for_source 取出全部行再逐条 delete()——取行+逐删的策略
+    现在住在 gateway.delete_source 里，这里只组装返回形状。"""
+    deleted = gateway.delete_source(namespace, source_id)
     return {"ok": True, "deleted": deleted, "source_id": source_id}
 
 
 def _delete_namespace(namespace: str) -> Dict[str, Any]:
-    """清空一个 namespace 下的全部记忆——逐条删，理由同 _delete_source。"""
-    vs = _vs()
-    rows = vs.all_rows(namespace)
-    deleted = 0
-    for row in rows:
-        vs.delete(row["id"])
-        deleted += 1
+    """清空一个 namespace 下的全部记忆——逐条删，理由同 _delete_source
+    （策略同样已收进 gateway.delete_namespace）。"""
+    deleted = gateway.delete_namespace(namespace)
     return {"ok": True, "deleted": deleted, "namespace": namespace}
 
 

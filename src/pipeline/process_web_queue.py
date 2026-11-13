@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from src.agents.search import SearchAgent
 from src.agents.search.utils import SearchUtils
 from src.core.llm import LLMBase
-from src.memory.config import NAMESPACE_AI_RESEARCH
+from src.memory import gateway
 from src.pipeline.common import (
     answer_qa_loop,
     ingest_summary_to_memory,
@@ -163,7 +163,7 @@ async def process_item(item: dict) -> None:
     await ingest_summary_to_memory(
         item, summary_path,
         provider=resolve_provider(None), source_id=item["item_id"],
-        source_type="ai_research", namespace=NAMESPACE_AI_RESEARCH,
+        source_type="ai_research", namespace=gateway.NAMESPACE_AI_RESEARCH,
     )
 
     item["pipeline_status"] = "done"

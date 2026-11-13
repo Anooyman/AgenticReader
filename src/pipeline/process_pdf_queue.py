@@ -26,7 +26,7 @@ from pathlib import Path
 
 from src.agents.indexing import IndexingAgent
 from src.config.settings import DATA_ROOT
-from src.memory.config import NAMESPACE_AI_RESEARCH
+from src.memory import gateway
 from src.pipeline.common import (
     answer_qa_loop,
     ingest_summary_to_memory,
@@ -146,7 +146,7 @@ async def process_item(item: dict, provider: str, registry: dict) -> None:
     await ingest_summary_to_memory(
         item, summary_path,
         provider=provider, source_id=doc_name,
-        source_type="ai_research", namespace=NAMESPACE_AI_RESEARCH,
+        source_type="ai_research", namespace=gateway.NAMESPACE_AI_RESEARCH,
     )
 
     item["pipeline_status"] = "done"

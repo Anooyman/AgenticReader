@@ -3,7 +3,8 @@
 改自 ai-research-pipeline 的 webapp/services/chat_ingest.py。原实现里
 "ingest_session() 通过 subprocess 调用 LLM-Memory 的 ingest CLI" 的部分，
 合并进 AgenticReader 后改为直接调用 src.memory.ingest.ingest_source()——
-两者现在同进程运行，不再需要跨 venv 的 subprocess 调用。
+两者现在同进程运行，不再需要跨 venv 的 subprocess 调用。现在这条调用
+统一经 src/memory/gateway.py 接入（收敛层，见该文件）。
 
 Chat 页面合一之后，所有对话都落盘在 SessionManager 的 `data/sessions/`
 （不再有独立的 research chat session 目录）——这里扫的就是那个目录。
@@ -45,9 +46,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from src.config.settings import DATA_ROOT, resolve_provider
-from src.memory.config import NAMESPACE_WEBAPP_CHAT
-from src.memory.ingest import ingest_source
+from src.config.settings import DATA_ROOT
+from src.memory import gateway
 from src.pipeline.paths import write_json_atomic
 
 logger = logging.getLogger(__name__)
@@ -152,9 +152,9 @@ async def ingest_session(session_id: str, path: Path, updated_at: str) -> dict:
 
     try:
         report = await asyncio.wait_for(
-            ingest_source(
+            gateway.ingest(
                 str(path), source_type="webapp_chat",
-                namespace=NAMESPACE_WEBAPP_CHAT, provider=resolve_provider(None), source_id=session_id,
+                namespace=gateway.NAMESPACE_WEBAPP_CHAT, provider=None, source_id=session_id,
             ),
             timeout=INGEST_TIMEOUT,
         )

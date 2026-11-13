@@ -20,8 +20,7 @@ import argparse
 import asyncio
 import json
 
-from src.memory.config import NAMESPACE_AI_RESEARCH
-from src.memory.ingest import ingest_source
+from src.memory import gateway
 from src.pipeline.paths import SUMMARIES_DIR, write_json_atomic
 from src.pipeline.queue_store import load_queue, queue_transaction
 
@@ -85,9 +84,9 @@ async def main_async(limit: int, provider: str, item_id: str = None):
     for iid, summary_path in pending:
         print(f"\n=== ingest {iid}: {summary_path.name} ===")
         try:
-            report = await ingest_source(
+            report = await gateway.ingest(
                 str(summary_path), source_type="ai_research",
-                namespace=NAMESPACE_AI_RESEARCH, provider=provider, source_id=iid,
+                namespace=gateway.NAMESPACE_AI_RESEARCH, provider=provider, source_id=iid,
             )
             print(f"  ✅ 成功: +{report.get('chunks_added')} chunks（跳过 {report.get('chunks_skipped')}）")
             if not mark_memory_ingested(iid):
