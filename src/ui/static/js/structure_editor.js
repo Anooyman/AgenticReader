@@ -153,7 +153,7 @@ class StructureEditor {
             }
         } catch (error) {
             console.error('加载文档列表失败:', error);
-            alert('加载文档列表失败: ' + error.message);
+            this.showNotification('加载文档列表失败: ' + error.message, 'error');
             this.hideLoading();
         }
     }
@@ -205,7 +205,7 @@ class StructureEditor {
             this.hideLoading();
         } catch (error) {
             console.error('加载文档失败:', error);
-            alert('加载文档失败: ' + error.message);
+            this.showNotification('加载文档失败: ' + error.message, 'error');
             this.hideLoading();
         }
     }
@@ -327,7 +327,7 @@ class StructureEditor {
         }
 
         if (value < 1 || value > this.totalPages) {
-            alert(`页码超出范围（1-${this.totalPages}）`);
+            this.showNotification(`页码超出范围（1-${this.totalPages}）`, 'warning');
             return;
         }
 
@@ -462,19 +462,19 @@ class StructureEditor {
         const pagesStr = pagesInput.value.trim();
 
         if (!title) {
-            alert('请输入章节标题');
+            this.showNotification('请输入章节标题', 'warning');
             return;
         }
 
         if (!pagesStr) {
-            alert('请输入页码范围');
+            this.showNotification('请输入页码范围', 'warning');
             return;
         }
 
         // 解析页码
         const pages = this.parsePages(pagesStr);
         if (pages.length === 0) {
-            alert('页码格式无效');
+            this.showNotification('页码格式无效', 'warning');
             return;
         }
 
@@ -649,7 +649,7 @@ class StructureEditor {
 
         // 已在批量模式，执行删除
         if (this.selectedChapters.size === 0) {
-            alert('请先选择要删除的章节');
+            this.showNotification('请先选择要删除的章节', 'warning');
             return;
         }
 
@@ -716,7 +716,7 @@ class StructureEditor {
 
     async rebuild() {
         if (!this.currentDoc) {
-            alert('请先选择文档');
+            this.showNotification('请先选择文档', 'warning');
             return;
         }
 

@@ -34,7 +34,7 @@
   async function fetchAndIndex(btn) {
     const url = btn.dataset.url;
     if (!window.PaperIngest) {
-      alert('下载入库原语未加载（paper-ingest.js）');
+      UIFeedback.toast('下载入库原语未加载（paper-ingest.js）', { type: 'error', duration: 5000 });
       return;
     }
     btn.disabled = true;
@@ -63,7 +63,7 @@
       } else if (s.phase === 'failed') {
         btn.disabled = false;
         btn.textContent = '⬇ 下载入库';
-        alert('下载入库失败：' + (s.error || ''));
+        UIFeedback.toast('下载入库失败：' + (s.error || ''), { type: 'error', duration: 5000 });
       }
     });
   }
@@ -347,7 +347,7 @@
         try {
           await API.jobs.cancel(btn.dataset.jobId);
         } catch (err) {
-          alert(`取消失败：${err.message}`);
+          UIFeedback.toast(`取消失败：${err.message}`, { type: 'error', duration: 5000 });
         }
         loadJobs();
       });
@@ -359,7 +359,7 @@
         try {
           await API.jobs.action(btn.dataset.jobId, 'retry');
         } catch (err) {
-          alert(`重试失败：${err.message}`);
+          UIFeedback.toast(`重试失败：${err.message}`, { type: 'error', duration: 5000 });
           btn.disabled = false;
           btn.textContent = '重试';
           return;
@@ -385,18 +385,18 @@
     const coverageDate = dateSelect.value;
     const itemIds = Array.from(document.querySelectorAll('.brief-checkbox:checked')).map((el) => el.value);
     if (!itemIds.length) {
-      alert('请先勾选要加载的条目');
+      UIFeedback.toast('请先勾选要加载的条目', { type: 'warning', duration: 4000 });
       return;
     }
     const data = await API.briefs.load(coverageDate, itemIds, { checkOk: false });
-    alert(`已排队 ${data.queued}/${data.requested} 个任务`);
+    UIFeedback.toast(`已排队 ${data.queued}/${data.requested} 个任务`, { type: 'success', duration: 4000 });
     await loadCards();
     loadJobs();
   });
 
   document.getElementById('sync-memory-btn').addEventListener('click', async () => {
     await API.briefs.syncMemory({ checkOk: false });
-    alert('补灌任务已排队');
+    UIFeedback.toast('补灌任务已排队', { type: 'success', duration: 4000 });
     loadJobs();
   });
 
@@ -408,9 +408,9 @@
     if (!coverageDate) return;
     try {
       await API.briefs.lightLoad(coverageDate, { checkOk: false });
-      alert(`轻量入库已排队：${coverageDate}`);
+      UIFeedback.toast(`轻量入库已排队：${coverageDate}`, { type: 'success', duration: 4000 });
     } catch (err) {
-      alert(`轻量入库请求失败：${err.message}`);
+      UIFeedback.toast(`轻量入库请求失败：${err.message}`, { type: 'error', duration: 5000 });
     }
     loadJobs();
   });
@@ -438,16 +438,17 @@
     ingestBulkBtn.addEventListener('click', async () => {
       const dates = checkedIngestDates();
       if (!dates.length) {
-        alert('请先勾选要入库的日期');
+        UIFeedback.toast('请先勾选要入库的日期', { type: 'warning', duration: 4000 });
         return;
       }
       ingestBulkBtn.disabled = true;
       try {
         const data = await API.briefs.lightLoad(dates, { checkOk: false });
-        alert(`批量轻量入库已排队：${(data.dates || dates).join('、')}`
-          + '（排队后徽章变"排队中/入库中…"，重复日期后端自动去重）');
+        UIFeedback.toast(`批量轻量入库已排队：${(data.dates || dates).join('、')}`
+          + '（排队后徽章变"排队中/入库中…"，重复日期后端自动去重）',
+          { type: 'success', duration: 4000 });
       } catch (err) {
-        alert(`批量轻量入库请求失败：${err.message}`);
+        UIFeedback.toast(`批量轻量入库请求失败：${err.message}`, { type: 'error', duration: 5000 });
       } finally {
         ingestBulkBtn.disabled = false;
       }

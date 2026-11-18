@@ -175,3 +175,9 @@ const UIFeedback = (function () {
         }
     };
 })();
+
+// 顶层 const 只进脚本的全局词法环境、不挂 window——而 chat.js 的
+// `if (window.UIFeedback)` 守卫依赖后者，导致守卫恒假、toast 永不出屏
+// （2026-11 review 实测）。这里显式挂窗，一处修好所有守卫写法；
+// 后续新代码仍按 manage.js 的惯例裸引用即可，不强制走 window。
+window.UIFeedback = UIFeedback;
