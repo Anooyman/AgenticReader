@@ -61,7 +61,14 @@ def safe_path(base: Path, name: str) -> Path:
     Raises:
         ValueError: 名称非法或解析后越出 base 目录（带中文信息）
     """
-    raw = str(name)
+    # 类型门前置于 str() 转换：原先的 `str(name)` 会把 None 变成 "None"
+    # 这种"合法"文档名——上游缺字段时不报错，反而凭空建目录/建索引；
+    # True/3/list 等同理。标注既然是 name: str，就按标注兑现（2026-11
+    # review 实测后由 Lead 落地，tests/test_path_guard.py 的两条 xfail
+    # 已翻为正式断言）。
+    if not isinstance(name, str):
+        raise ValueError(f"非法名称：期望 str，实际为 {type(name).__name__}")
+    raw = name
 
     if not raw.strip():
         raise ValueError("非法名称：名称不能为空")
