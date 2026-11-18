@@ -25,9 +25,12 @@ store（AATF namespace 数百行、覆盖几十个日期）。本地 driver 实�
     python -m src.memory.migrate_aatf --reembed       # 维度不同，重算向量
     python -m src.memory.migrate_aatf --source /path  # 显式指定 B 库目录
 
-B 库缺省落点解析顺序：--source 参数 > env LLM_MEMORY_STORE_DIR >
-~/Documents/GitHub/LLM-Memory/data/memory（B 侧 webui 的 MEMORY_DATA_DIR
-惯例位置）。跑通后用 GET /api/v1/briefs/memory-status 的 aatf 计数复核。
+B 库缺省落点解析顺序（见 _resolve_b_dir）：--source 参数 > env
+LLM_MEMORY_STORE_DIR > env MEMORY_DATA_DIR 下的 memory 子目录 >
+~/.llm-memory/memory（上游的机器级存储）。这里刻意不写死任何一个路径：
+B 侧的存储位置已经搬过一次家，写死的结果是"迁移脚本读到空库、报告无需
+迁移"，那比直接报错难发现得多。跑通后用 GET /api/v1/briefs/memory-status
+的 aatf 计数复核。
 """
 import argparse
 import asyncio
@@ -42,7 +45,25 @@ from src.config.settings import resolve_provider
 from src.memory.config import MEMORY_DB_DIR, NAMESPACE_AATF, get_embedding_dimensions
 from src.memory.vector_store import _TEXT_FIELDS, VectorStore
 
-_DEFAULT_B_DIR = os.path.expanduser("~/Documents/GitHub/LLM-Memory/data/memory")
+# 上游的库位置是**会移动的**：它原来是某个 checkout 里的 data/memory，后来
+# 变成机器级单一存储。所以这里没有"一个默认路径"，只有解析顺序——写死任何
+# 一处都会在某次上游搬家之后静默读到空库，那比报错糟糕得多。
+_DEFAULT_B_DIR = os.path.expanduser("~/.llm-memory/memory")
+
+
+def _resolve_b_dir(source: Optional[str] = None) -> str:
+    """--source > LLM_MEMORY_STORE_DIR > MEMORY_DATA_DIR/<memory> > 机器级默认。"""
+    for candidate in (
+        source,
+        os.environ.get("LLM_MEMORY_STORE_DIR"),
+        (os.environ.get("MEMORY_DATA_DIR") + "/memory") if os.environ.get("MEMORY_DATA_DIR") else None,
+        _DEFAULT_B_DIR,
+    ):
+        if candidate and os.path.isdir(candidate):
+            return candidate
+    # 最后一个候选即便不存在也返回它：_read_b_rows 会给出"目录不存在"的明确
+    # 报错（含是哪个路径），比在这里猜一个更省排查时间。
+    return _DEFAULT_B_DIR
 _BATCH = 200
 
 
@@ -130,7 +151,7 @@ async def _reembed_all(rows: List[Dict[str, Any]]) -> List[str]:
 
 
 async def _migrate(source: Optional[str], dry_run: bool, reembed: bool) -> None:
-    b_dir = source or os.environ.get("LLM_MEMORY_STORE_DIR") or _DEFAULT_B_DIR
+    b_dir = _resolve_b_dir(source)
     dimensions = get_embedding_dimensions(resolve_provider(None))
     b_rows = _read_b_rows(b_dir)
     if not b_rows:
