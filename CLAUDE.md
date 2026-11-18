@@ -129,7 +129,9 @@ src/
 │                             #   chat-enhancer/chat/manage/config/structure_editor/
 │                             #   briefs/dashboard/base-badge）
 └── utils/                    # path_guard(safe_path 防目录穿越)、helpers、validators、
-                              #   async_utils、json_io(write_json_atomic 唯一实现)
+                              #   async_utils、json_io(write_json_atomic 唯一实现)、
+                              #   file_operations（其中 read_file_with_encoding_detection
+                              #   目前全仓零调用点，chardet 降级路因此静默——见 Testing Notes）
 ```
 
 各 agent 包遵循同一套结构：`agent.py / nodes.py / tools.py / utils.py / state.py / prompts.py`，agent 类继承 `AgentBase`，nodes 等模块通过构造参数持有 agent 实例（依赖注入）。
@@ -377,4 +379,14 @@ speech:    POST /transcribe /synthesize
 - `pytest.ini` + `tests/conftest.py`：缺 LLM 凭据时相关脚本式测试自动 skip；纯逻辑用例可直接跑。
 - `tests/test_imports.py` 是零依赖冒烟基线，重构后先跑它。
 - 涉及索引/问答的脚本测试（test_indexing_agent.py 等）会真实调 LLM，需凭据。
+- **数据根有两个入口且不同源，写测试要两处都钉**：`constants.get_data_root()` 动态读
+  `PathConstants.DATA_ROOT`，而 `DocumentRegistry()` 不传 path 时默认路径来自
+  `src.config.settings.DATA_ROOT`——那是 import 期就固化的快照。只 patch
+  `PathConstants` 的话 delete/registry 类用例会照旧读写仓库真实的 `data/`，删除路径
+  与注册表路径也会各指一处。范式抄 `tests/test_delete_service.py` 的 `data_root`
+  fixture（两个都 monkeypatch），并由 `test_data_root_knobs_agree` 守着这个不变式；
+  新测试直接沿用该 fixture，别只 patch 一边。
+- `src/utils/file_operations.py:read_file_with_encoding_detection` 全仓零调用点，
+  所以 chardet 缺失时那条 ImportError→UTF-8 降级路今天完全静默、也没有任何测试覆盖它。
+  requirements 里已注明该依赖"故意不装"，要启用就显式 `pip install chardet`。
 ```
