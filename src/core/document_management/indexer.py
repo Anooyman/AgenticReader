@@ -87,7 +87,7 @@ def list_available_pdfs() -> list:
         pdf_dir = Path(DATA_ROOT) / "pdf"
         if not pdf_dir.exists():
             logger.warning(f"⚠️  PDF 目录不存在: {pdf_dir}")
-            logger.info(f"💡 提示: 请创建目录并将 PDF 文件放入其中")
+            logger.info("💡 提示: 请创建目录并将 PDF 文件放入其中")
             return []
 
         pdf_files = list(pdf_dir.glob("*.pdf"))
@@ -183,7 +183,7 @@ async def index_pdf_document(
 
         # 调用统一入口进行索引（初始 state 由 IndexingAgent.index_document 构造，
         # 含 doc_type；core 层不直接碰 agent 内部图）
-        logger.info(f"\n🚀 开始索引流程...\n")
+        logger.info("\n🚀 开始索引流程...\n")
         result = await indexing_agent.index_document(
             doc_name=doc_name,
             doc_path=str(pdf_path),  # 注意：使用 doc_path 而不是 pdf_path
@@ -194,25 +194,25 @@ async def index_pdf_document(
         is_complete = result.get("is_complete", False)
 
         if is_complete:
-            logger.info(f"\n✅ 索引完成！")
+            logger.info("\n✅ 索引完成！")
 
             # 显示结果信息
             brief_summary = result.get("brief_summary", "")
             if brief_summary:
-                logger.info(f"\n📝 文档摘要:")
+                logger.info("\n📝 文档摘要:")
                 logger.info(f"{brief_summary[:300]}...")
 
             agenda_dict = result.get("agenda_dict", {})
             if agenda_dict:
                 logger.info(f"\n📚 文档章节: {len(agenda_dict)} 个")
 
-            logger.info(f"\n💾 文档已注册到 DocumentRegistry")
+            logger.info("\n💾 文档已注册到 DocumentRegistry")
             logger.info(f"   文档名: {doc_name}")
 
             return True
         else:
             error_msg = result.get("error")
-            logger.warning(f"⚠️  索引未完成" + (f": {error_msg}" if error_msg else ""))
+            logger.warning("⚠️  索引未完成" + (f": {error_msg}" if error_msg else ""))
             return False
 
     except Exception as e:
@@ -238,7 +238,7 @@ def select_pdf_interactive() -> Optional[str]:
         logger.warning("⚠️  data/pdf 目录下没有 PDF 文件")
         logger.info("\n💡 提示:")
         logger.info(f"   - 请将 PDF 文件放到: {Path(DATA_ROOT) / 'pdf'}")
-        logger.info(f"   - 然后重新运行此程序\n")
+        logger.info("   - 然后重新运行此程序\n")
         return None
 
     # 显示 PDF 文件列表
@@ -301,9 +301,9 @@ async def main_async():
     if success:
         print_section("索引完成")
         logger.info("✅ 文档已成功索引并注册")
-        logger.info(f"\n💡 下一步:")
-        logger.info(f"   - 运行 'python main.py' 开始对话")
-        logger.info(f"   - 在文档选择界面选择该文档即可\n")
+        logger.info("\n💡 下一步:")
+        logger.info("   - 运行 'python main.py' 开始对话")
+        logger.info("   - 在文档选择界面选择该文档即可\n")
     else:
         print_section("索引失败")
         logger.error("❌ 文档索引失败，请查看错误信息\n")

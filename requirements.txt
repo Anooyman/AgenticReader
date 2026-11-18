@@ -105,6 +105,14 @@ tqdm==4.67.1
 # Retry Logic
 tenacity>=8.1.0,<9
 
+# 可选依赖（**故意不装**）：chardet
+# src/utils/file_operations.py:read_file_with_encoding_detection 会探测文本
+# 文件编码，缺 chardet 时代码自己接住 ImportError 退回 UTF-8——功能降级但不
+# 报错、也不影响任何现有链路（该方法当前全仓零调用点）。所以这里既不写进
+# 运行时依赖，也不写进开发依赖：需要真做编码自适应时按需
+# `pip install chardet`，别把它升级成隐式必需。
+# chardet
+
 # Typing
 typing-inspect==0.9.0
 typing-inspection==0.4.1

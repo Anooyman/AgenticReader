@@ -172,7 +172,7 @@ class LimitedChatMessageHistory(InMemoryChatMessageHistory):
 
         # 检查是否需要总结（基于对话轮数）
         if conversation_rounds <= self.summary_threshold:
-            logger.debug(f"[LLM Summary] 未达到总结阈值，跳过总结")
+            logger.debug("[LLM Summary] 未达到总结阈值，跳过总结")
             return
 
         # 检查LLM客户端是否可用
