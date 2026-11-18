@@ -9,6 +9,11 @@ import logging
 
 if TYPE_CHECKING:
     from .agent import RetrievalAgent
+    # 只为类型标注可见：state 是个 TypedDict，函数里根本用不到它的运行时
+    # 定义（validate_state 只按键名校验 dict），旧写法却把它做成了函数内
+    # import——于是签名里那个字符串注解 "'RetrievalState'" 在 pyflakes 眼里
+    # 是个未定义名字，而那次 import 又纯属空转。
+    from .state import RetrievalState
 
 logger = logging.getLogger(__name__)
 
@@ -143,8 +148,6 @@ class RetrievalUtils:
         Raises:
             ValueError: 缺少必需字段时抛出异常
         """
-        from .state import RetrievalState
-
         required_fields = ['query', 'max_iterations']
 
         for field in required_fields:
@@ -159,4 +162,4 @@ class RetrievalUtils:
         if not isinstance(max_iterations, int) or max_iterations <= 0:
             raise ValueError("❌ [Validate] max_iterations必须是正整数")
 
-        logger.debug(f"✅ [Validate] State验证通过")
+        logger.debug("✅ [Validate] State验证通过")

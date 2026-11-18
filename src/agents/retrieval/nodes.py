@@ -251,8 +251,14 @@ class RetrievalNodes:
 
         conversation_turn = state.get("conversation_turn", 0)
         current_iteration = state.get("current_iteration", 0)
-        intermediate_summary = state.get("intermediate_summary", "")
         original_query = state["query"]
+
+        # 注：这里以前还取过 intermediate_summary，打算连它一起写进重写
+        # prompt——但那个字段如今只在 summary 节点的两条失败路上被写成
+        # "未检索到相关内容"/"总结失败"这类占位串（成功路上根本没人写它：
+        # 图里没有独立的中间总结步骤，最终答案是 format 节点直接拿
+        # formatted_data 生成的）。拿占位串去改查询只会把噪声喂给模型，
+        # 所以这个读取删掉了；它现在唯一的消费点在 format 的兜底分支。
 
         logger.info(f"🔄 [Rewrite|{self._doc_tag()}] ========== 步骤0: 查询重写 ==========")
         logger.info(f"🔄 [Rewrite|{self._doc_tag()}] 对话轮次: {conversation_turn}")
@@ -372,8 +378,9 @@ class RetrievalNodes:
             observations = state.get("observations", [])
             retrieved_content = state.get("retrieved_content", [])
 
-            executed_tools = [action.get("tool", "") for action in actions_history]
-
+            # 注：这里曾另算过一个 executed_tools 列表，想"告诉模型哪些工具
+            # 用过了"——但下面喂给 LLM 的 history_json 每条都带 tool 字段，
+            # 日志用的也是 len(actions_history)，两处都不需要它，删掉。
             logger.info(f"🤔 [Think|{self._doc_tag()}] 上下文:")
             logger.info(f"🤔 [Think|{self._doc_tag()}]   - 已执行工具数: {len(actions_history)}")
             logger.info(f"🤔 [Think|{self._doc_tag()}]   - 已检索内容数: {len(retrieved_content)}")
@@ -869,8 +876,9 @@ class RetrievalNodes:
 
                 obs_str = str(observation)
 
-                # 提取关键数字（章节数、结果数等）
-                import re
+                # 提取关键数字（章节数、结果数等）——用模块级的 re，
+                # 这里不再本地 import 一次（那会把模块级那个 import 遮成
+                # 未使用，还会让这个嵌套函数每轮都付一次 import 查找）
 
                 # 检查是否未找到内容
                 if "未找到" in obs_str or "无相关" in obs_str or "没有" in obs_str or "0个" in obs_str:
@@ -937,8 +945,6 @@ class RetrievalNodes:
             current_iter = len(actions)
             is_last_iteration = current_iteration >= max_iterations - 1
 
-            # ========== 分析检索策略效果 ==========
-            attempted_strategies = []
             # ========== 简化：直接构建检索历史 JSON ==========
             observations = state.get("observations", [])
             
@@ -951,7 +957,7 @@ class RetrievalNodes:
                     "observation": observation
                 })
             
-            import json
+            # 模块级已 import json，这里不再本地 import
             history_json = json.dumps(history_data, ensure_ascii=False, indent=2)
             
             prompt = f"""# 用户查询
@@ -1045,9 +1051,21 @@ class RetrievalNodes:
             #logger.info(f"🎯 [Format|{self._doc_tag()}]   - 中间总结长度: {len(intermediate_summary)} 字符")
 
             if not formatted_data:
-                logger.warning(f"⚠️  [Format|{self._doc_tag()}] 无格式化数据，使用中间总结作为最终答案")
-                #state["final_summary"] = intermediate_summary
-                #logger.info(f"🎯 [Format|{self._doc_tag()}] 输出: 使用中间总结 (长度: {len(intermediate_summary)})")
+                # 这一支的日志早就写着"使用中间总结作为最终答案"，可下面那行
+                # 赋值被注释掉了——结果 state["final_summary"] 从没被写过，
+                # RetrievalAgent 的返回（agent.py:229 的 .get(..., "")）与
+                # AnswerAgent 的 context（tools.py:298）双双拿到空串：检索真的
+                # 一无所获时用户看到的是"没答案"而不是"没检索到内容"。
+                #
+                # intermediate_summary 现在确实是有内容的：summary 节点在
+                # "无检索内容"（下方 688 行附近）与"总结失败"两条失败路上都会
+                # 写上它。所以下面优先用它，它也是空才给固定提示——两条失败路
+                # 的语义就此都落到了最终答案里。
+                fallback = (intermediate_summary or "").strip() or \
+                    "未能检索到相关内容。请尝试调整查询或检查文档是否已正确索引。"
+                state["final_summary"] = fallback
+                logger.warning(f"⚠️  [Format|{self._doc_tag()}] 无格式化数据，改用中间总结/提示作为最终答案"
+                               f"（长度: {len(fallback)} 字符）")
 
                 # ============ 状态持久化：保存当前状态供下一轮使用 ============
                 self._save_persistent_state(state)
@@ -1192,9 +1210,16 @@ class RetrievalNodes:
 
         except Exception as e:
             logger.error(f"❌ [Format|{self._doc_tag()}] 失败: {e}", exc_info=True)
-            #intermediate_summary = state.get("intermediate_summary", "")
-            #state["final_summary"] = intermediate_summary
-            #logger.info(f"⚠️  [Format|{self._doc_tag()}] 错误回退: 使用中间总结 (长度: {len(intermediate_summary)})")
+
+            # 异常这条路上 final_summary 同样是空的，而调用方只看这个键。
+            # 补一句提示，语义与"无格式化数据"那支一致——只是别把异常
+            # 粉饰成成功，所以文案里点名是生成失败。
+            if not (state.get("final_summary") or "").strip():
+                state["final_summary"] = (
+                    "生成答案时出错了，暂时拿不到可靠的结果。建议换个更具体的问法，"
+                    "或指定章节/页码范围再试一次。"
+                )
+                logger.info(f"⚠️  [Format|{self._doc_tag()}] 错误回退: 写入提示性 final_summary")
 
             # ============ 状态持久化：即使失败也保存状态 ============
             self._save_persistent_state(state)
@@ -1210,7 +1235,7 @@ class RetrievalNodes:
         logger.info(f"🔍 [ShouldContinue] 检查迭代状态: current={current_iter}, max={max_iter}, is_complete={state.get('is_complete', False)}")
 
         if state.get("is_complete", False):
-            logger.info(f"✅ [ShouldContinue] 检索完成，结束循环")
+            logger.info("✅ [ShouldContinue] 检索完成，结束循环")
             return "finish"
 
         if current_iter >= max_iter:
