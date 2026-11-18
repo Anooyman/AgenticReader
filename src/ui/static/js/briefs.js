@@ -1,5 +1,7 @@
 /**
- * 每日简报浏览页——勾选加载、生成报告、补灌记忆、任务轮询。
+ * 每日简报浏览页——勾选加载、生成报告、补灌记忆、任务轮询，
+ * 外加原 /memory 页并档过来的"轻量入库(全天)"（load_brief_date 任务，
+ * 卡片导读直接入 A 自库 AATF）。
  * 卡片交互改自 ai-research-pipeline 的 webapp/static/js/briefs.js：默认
  * 收起，只露标题+徽章+中文导读第一条（点击卡片头展开/收起）；English
  * brief/原文摘录/为何值得看等英文或次要内容折叠进"更多信息"，不与中文
@@ -19,7 +21,149 @@
     not_loaded: '未加载', queued: '排队中', done: '已完成', failed: '失败',
   };
 
+  // 卡片链接区"⬇ 下载入库"的适用判据：arXiv 直链或 .pdf 后缀
+  const PDF_SOURCE_RE = /(arxiv\.org|\.pdf)/i;
+
   let currentDate = null;
+  // 各日期的真实入库计数 {"2026-11-12": {aatf, heavy_done}}——来自 A 自库
+  // 行 + queue 事实，不是任务账本（bridge 时代的 done 不算 A 自库数据）。
+  let memoryCounts = {};
+
+  // 「⬇ 下载入库」本地链路：下载与索引轮询都在共享原语 PaperIngest
+  // （paper-ingest.js，/chat 回复按钮同用一份）——这里只把状态画到按钮上。
+  async function fetchAndIndex(btn) {
+    const url = btn.dataset.url;
+    if (!window.PaperIngest) {
+      alert('下载入库原语未加载（paper-ingest.js）');
+      return;
+    }
+    btn.disabled = true;
+    btn.textContent = '下载中…';
+    await window.PaperIngest.start(url, (s) => {
+      if (s.phase === 'indexing') {
+        btn.textContent = s.status === 'exists' ? '已在 PDF 库，检查索引…' : '已下载，索引中…';
+      } else if (s.phase === 'indexed') {
+        btn.textContent = '✅ 已入库';
+        btn.classList.add('ok');
+        if (!btn.dataset.deepLink) {
+          btn.dataset.deepLink = '1';
+          const link = document.createElement('a');
+          link.href = '/chat?doc=' + encodeURIComponent(s.docName || '');
+          link.target = '_blank'; link.rel = 'noopener';
+          link.className = 'deep-read-link';
+          link.textContent = '📖 深读 ↗';
+          btn.after(link);
+        }
+      } else if (s.phase === 'timeout') {
+        btn.disabled = false;
+        btn.textContent = '继续检查索引';
+      } else if (s.phase === 'failed') {
+        btn.disabled = false;
+        btn.textContent = '⬇ 下载入库';
+        alert('下载入库失败：' + (s.error || ''));
+      }
+    });
+  }
+
+  async function loadMemoryStatus() {
+    try {
+      const data = await API.briefs.memoryStatus({ checkOk: false });
+      memoryCounts = data.dates || {};
+    } catch (err) {
+      memoryCounts = {};
+    }
+    decorateDateOptions();
+    renderStatusLine();
+    renderIngestPanel();
+  }
+
+  // 日期下拉框每项带入库标记：一眼区分"有 HTML 未入库 / 有 HTML 已入库"
+  //（无 HTML 的日期本来就不出现在列表里）。
+  function decorateDateOptions() {
+    for (const opt of dateSelect.options) {
+      const c = memoryCounts[opt.value] || { aatf: 0, heavy_done: 0 };
+      opt.textContent = (c.aatf || c.heavy_done)
+        ? `${opt.value}（AATF ${c.aatf} · 重管线 ${c.heavy_done}）`
+        : `${opt.value}（未入库）`;
+    }
+  }
+
+  function renderStatusLine() {
+    const line = document.getElementById('memory-status-line');
+    if (!line) return;
+    const c = memoryCounts[dateSelect.value] || { aatf: 0, heavy_done: 0 };
+    line.textContent = `🧠 该日期入库状态：AATF 轻量档 ${c.aatf} 条 · 重管线 done ${c.heavy_done} 条` +
+      (c.aatf === 0 && c.heavy_done === 0
+        ? ' —— 还没进任何记忆库：「轻量入库(全天)」秒级写入，「加载选中」走重管线'
+        : '');
+  }
+
+  // ===== 入库日期面板：跨日期多选批量轻量入库 + 队列可见性 ==================
+  // 原 /memory 页 load 视图的归处：每行一天，徽章是 A 自库真实行 + queue
+  // 事实（memoryCounts），行尾叠加该日 load job 的实时状态（lastJobs）。
+  // 选择状态与上方下拉浏览完全解耦——批量入库不动当前浏览日期。
+  let lastJobs = [];
+
+  function ingestJobBadge(date) {
+    const job = lastJobs.find(j => j.kind === 'load_brief_date' && j.target === date);
+    if (!job) return '';
+    const label = {
+      queued: '排队中', running: '入库中…', cancelling: '取消中',
+      failed: '失败 · 重勾再点可重排队', interrupted: '中断 · 重勾再点可重排队',
+      cancelled: '已取消',
+    }[job.status] ?? job.status;
+    if (job.status === 'done') return '';
+    return ` <span class="ingest-job-badge job-${job.status}">${escapeHtml(label)}</span>`;
+  }
+
+  function renderIngestPanel() {
+    const list = document.getElementById('ingest-date-list');
+    if (!list) return;
+    // 每 5s 轮询都会重建列表——先记住已勾的，重建后原样恢复，
+    // 否则用户刚勾完就被定时刷新清掉了。
+    const prevChecked = new Set(checkedIngestDates());
+    const opts = Array.from(dateSelect.options);
+    list.innerHTML = opts.length
+      ? opts.map(opt => {
+          const c = memoryCounts[opt.value] || { aatf: 0, heavy_done: 0 };
+          const ingested = c.aatf || c.heavy_done;
+          const badge = ingested ? `AATF ${c.aatf} · 重管线 ${c.heavy_done}` : '未入库';
+          return `<li class="ingest-date-item">` +
+            `<label><input type="checkbox" class="ingest-date-cb" value="${escapeHtml(opt.value)}">` +
+            `<span class="ingest-date-name">${escapeHtml(opt.value)}</span></label>` +
+            `<span class="ingest-date-badge${ingested ? ' is-ok' : ''}">${badge}</span>` +
+            `${ingestJobBadge(opt.value)}</li>`;
+        }).join('')
+      : '<li class="meta">没有可入库的日期（BRIEFS_DIR 为空？）</li>';
+    list.querySelectorAll('.ingest-date-cb').forEach(cb => {
+      cb.checked = prevChecked.has(cb.value);
+      cb.addEventListener('change', updateIngestBulkCount);
+    });
+    updateIngestBulkCount();
+  }
+
+  function checkedIngestDates() {
+    return Array.from(document.querySelectorAll('.ingest-date-cb:checked')).map(cb => cb.value);
+  }
+
+  function updateIngestBulkCount() {
+    const el = document.getElementById('ingest-selected-count');
+    if (el) el.textContent = checkedIngestDates().length;
+  }
+
+  function updateIngestQueueLine(jobs) {
+    lastJobs = jobs || [];
+    const line = document.getElementById('ingest-queue-line');
+    if (!line) return;
+    const active = lastJobs.filter(j => j.kind === 'load_brief_date'
+      && ['queued', 'running', 'cancelling'].includes(j.status));
+    if (!active.length) { line.textContent = ''; renderIngestPanel(); return; }
+    const running = active.filter(j => j.status === 'running').map(j => j.target);
+    const queued = active.filter(j => j.status !== 'running').length;
+    line.textContent = `加载队列：running ${running.length} · queued ${queued}`
+      + (running.length ? `｜正在入库 ${running.join('、')}` : '');
+    renderIngestPanel();
+  }
 
   function escapeHtml(str) {
     const div = document.createElement('div');
@@ -56,6 +200,13 @@
     const links = [];
     if (card.url) links.push(`<a href="${escapeHtml(card.url)}" target="_blank" rel="noopener">原文 ↗</a>`);
     if (card.pdf_url) links.push(`<a href="${escapeHtml(card.pdf_url)}" target="_blank" rel="noopener">PDF ↗</a>`);
+    // 「⬇下载入库」：只在能推断出 PDF 来源的卡片上出现（arXiv 直链/显式
+    // PDF 链接），点了走本地 fetch-pdf + IndexingAgent，不再依赖外部服务。
+    const pdfTarget = (card.pdf_url && PDF_SOURCE_RE.test(card.pdf_url)) ? card.pdf_url
+                    : (PDF_SOURCE_RE.test(card.url || '') ? card.url : null);
+    if (pdfTarget) {
+      links.push(`<button type="button" class="fetch-pdf-btn" data-url="${escapeHtml(pdfTarget)}">⬇ 下载入库</button>`);
+    }
 
     // 只保留中文内容：不展示 english_brief/excerpt（原文英文摘要/原文
     // 摘录）；why 字段目前是固定的英文模板句（"Recent submission with
@@ -103,6 +254,9 @@
       const btn = listEl === pdfList ? pdfToggleAllBtn : listEl === webList ? webToggleAllBtn : null;
       syncToggleAllLabel(listEl, btn);
     });
+    article.querySelectorAll('.fetch-pdf-btn').forEach((btn) => {
+      btn.addEventListener('click', () => fetchAndIndex(btn));
+    });
     return article;
   }
 
@@ -110,6 +264,7 @@
     const data = await API.briefs.dates({ checkOk: false });
     dateSelect.innerHTML = data.dates.map((d) => `<option value="${d}">${d}</option>`).join('');
     if (data.dates.length) currentDate = data.dates[0];
+    renderIngestPanel();
   }
 
   async function loadCards() {
@@ -160,13 +315,17 @@
 
   async function loadJobs() {
     const data = await API.jobs.list({ checkOk: false });
+    updateIngestQueueLine(data.jobs);
     jobsTbody.innerHTML = data.jobs.slice(0, 20).map((j) => {
       // 排队中/运行中都能取消；"cancelling"是已发起取消、等待收尾的
-      // 中间态，不能再点一次（避免重复调用 cancel）。
+      // 中间态，不能再点一次（避免重复调用 cancel）。failed/interrupted
+      // 给重试入口——retry 端点一直活着，之前只是这张表没配按钮。
       const cancellable = j.status === 'queued' || j.status === 'running';
+      const retryable = j.status === 'failed' || j.status === 'interrupted';
       const action = cancellable
         ? `<button class="job-cancel-btn" data-job-id="${escapeHtml(j.job_id)}">取消</button>`
-        : (j.status === 'cancelling' ? '取消中…' : '');
+        : (j.status === 'cancelling' ? '取消中…'
+           : (retryable ? `<button class="job-retry-btn" data-job-id="${escapeHtml(j.job_id)}">重试</button>` : ''));
       return `
       <tr>
         <td>${escapeHtml(j.target)}</td>
@@ -190,6 +349,24 @@
         loadJobs();
       });
     });
+    jobsTbody.querySelectorAll('.job-retry-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        btn.textContent = '重排队…';
+        try {
+          await API.jobs.action(btn.dataset.jobId, 'retry');
+        } catch (err) {
+          alert(`重试失败：${err.message}`);
+          btn.disabled = false;
+          btn.textContent = '重试';
+          return;
+        }
+        loadJobs();
+      });
+    });
+    // 任务账本每 5s 刷一次，顺带刷入库状态——load_brief_date 跑完后
+    // 下拉框/状态行的 AATF 计数要跟上，不用手动刷新页面。
+    loadMemoryStatus();
   }
 
   document.getElementById('select-all-btn').addEventListener('click', () => {
@@ -220,12 +397,77 @@
     loadJobs();
   });
 
-  dateSelect.addEventListener('change', loadCards);
+  // 轻量入库：原 /memory 页的"日期加载"并入这里——一天一个
+  // load_brief_date 任务，卡片导读直接写进 A 自库 AATF 命名空间。
+  // 后台任务表里 kind=load_brief_date 的行就是它，取消/重试通用。
+  document.getElementById('light-load-btn').addEventListener('click', async () => {
+    const coverageDate = dateSelect.value;
+    if (!coverageDate) return;
+    try {
+      await API.briefs.lightLoad(coverageDate, { checkOk: false });
+      alert(`轻量入库已排队：${coverageDate}`);
+    } catch (err) {
+      alert(`轻量入库请求失败：${err.message}`);
+    }
+    loadJobs();
+  });
+
+  // ===== 入库日期面板交互（跨日期多选批量轻量入库）=====
+  const ingestUncheckBtn = document.getElementById('ingest-select-unchecked-btn');
+  if (ingestUncheckBtn) {
+    ingestUncheckBtn.addEventListener('click', () => {
+      // 与卡片"全选/清空"同一套 toggle 语义：还有没勾上的就全勾，否则全清。
+      const boxes = [...document.querySelectorAll('.ingest-date-cb')];
+      const shouldCheck = boxes.some((el) => !el.checked);
+      boxes.forEach((el) => { el.checked = shouldCheck; });
+      updateIngestBulkCount();
+    });
+  }
+  const ingestClearBtn = document.getElementById('ingest-clear-btn');
+  if (ingestClearBtn) {
+    ingestClearBtn.addEventListener('click', () => {
+      document.querySelectorAll('.ingest-date-cb').forEach((el) => { el.checked = false; });
+      updateIngestBulkCount();
+    });
+  }
+  const ingestBulkBtn = document.getElementById('ingest-bulk-btn');
+  if (ingestBulkBtn) {
+    ingestBulkBtn.addEventListener('click', async () => {
+      const dates = checkedIngestDates();
+      if (!dates.length) {
+        alert('请先勾选要入库的日期');
+        return;
+      }
+      ingestBulkBtn.disabled = true;
+      try {
+        const data = await API.briefs.lightLoad(dates, { checkOk: false });
+        alert(`批量轻量入库已排队：${(data.dates || dates).join('、')}`
+          + '（排队后徽章变"排队中/入库中…"，重复日期后端自动去重）');
+      } catch (err) {
+        alert(`批量轻量入库请求失败：${err.message}`);
+      } finally {
+        ingestBulkBtn.disabled = false;
+      }
+      loadJobs();
+    });
+  }
+
+  // 「🧠 简报问答」：新标签打开 /chat 并把会话记忆范围预置为 AATF——
+  // 旧 /memory 页对话面板的入口保留在这（检索走本地自库，不再碰外部）。
+  const briefChatBtn = document.getElementById('brief-chat-btn');
+  if (briefChatBtn) {
+    briefChatBtn.addEventListener('click', () => {
+      window.open('/chat?namespaces=AATF', '_blank', 'noopener');
+    });
+  }
+
+  dateSelect.addEventListener('change', () => { loadCards(); renderStatusLine(); });
 
   (async function init() {
     await loadDates();
     await loadCards();
     await loadJobs();
+    await loadMemoryStatus();
     setInterval(loadJobs, 5000);
   })();
 })();

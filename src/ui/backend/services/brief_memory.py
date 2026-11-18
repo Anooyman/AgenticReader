@@ -1,5 +1,7 @@
 """外部 LLM-Memory 简报加载的后台驱动——把「加载某个日期」从 HTTP 请求
-里挪进 job_runner 车道，供 /memory 页的批量加载用。
+里挪进 job_runner 车道。原 /memory 页退役后，它只在 gateway 的 bridge
+兜底分支被触达（MEMORY_BRIEF_DRIVER=bridge；缺省路走 src/memory/
+brief_ingest 直写 A 自库）。
 
 所有对外部 webui 的一跳都走 src/memory/gateway.py 的 bridge_request /
 brief_load / brief_load_progress；本文件只负责轮询节奏与 BriefLoadError

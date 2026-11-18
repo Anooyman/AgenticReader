@@ -14,9 +14,31 @@
             <select id="brief-date-select"></select>
             <button id="select-all-btn">全选</button>
             <button id="load-selected-btn" class="primary">加载选中</button>
-            <button id="sync-memory-btn">补灌记忆</button>
+            <button id="light-load-btn" title="把这一天的简报卡片直接写进本地记忆库 AATF 命名空间：秒级完成，不下载 PDF、不做多维问答">轻量入库(全天)</button>
+            <button id="sync-memory-btn" title="只救重管线欠账：把 summaries/ 里已生成、但没写进 ai-research 的 QA 摘要补灌入库。与「轻量入库」是两个通道、两个 namespace，互不重复（AATF 的账由轻量入库自己管）">补灌记忆</button>
+            <button id="brief-chat-btn" title="新标签打开对话页，并把本会话的记忆检索范围预置为 AATF（简报库）">🧠 简报问答</button>
         </div>
+        <!-- 当前日期的真实入库计数（A 自库行 + queue 事实，不是任务账本）；
+             下拉框每项也带 AATF/重管线计数标记 -->
+        <div id="memory-status-line" class="memory-status-line"></div>
     </div>
+
+    <!-- 入库日期面板（原 /memory 页 load 视图的归处）：跨日期多选批量
+         轻量入库，不切换上方浏览日期；每行徽章 = A 自库真实行 + queue 事实，
+         行尾是当日 load job 的实时状态。默认收起，保持首屏是简报本身。 -->
+    <details class="ingest-panel">
+        <summary>🗓 入库日期 <span class="ingest-summary-hint">多选一天或多天，一次排队</span>
+            <span id="ingest-queue-line" class="ingest-queue-line"></span>
+        </summary>
+        <div class="ingest-toolbar">
+            <button id="ingest-select-unchecked-btn" type="button">全选未入库</button>
+            <button id="ingest-clear-btn" type="button">清空</button>
+            <button id="ingest-bulk-btn" class="primary" type="button"
+                    title="把勾选日期的简报卡片逐日写入 A 自库 AATF：零 LLM、幂等，已在排队的日期自动跳过">
+                批量轻量入库(<span id="ingest-selected-count">0</span> 天)</button>
+        </div>
+        <ul id="ingest-date-list" class="ingest-date-list"></ul>
+    </details>
 
     <h2 class="section-heading">
         📄 论文 (<span id="brief-pdf-count">0</span>)
@@ -41,5 +63,6 @@
 {% endblock %}
 
 {% block extra_js %}
-<script src="/static/js/briefs.js?v=6"></script>
+<script src="/static/js/paper-ingest.js?v=1"></script>
+<script src="/static/js/briefs.js?v=10"></script>
 {% endblock %}

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Request
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..config import TEMPLATES_DIR
 
@@ -46,7 +46,9 @@ async def briefs_page(request: Request):
     return templates.TemplateResponse("briefs.html", {"request": request})
 
 
-@router.get("/memory", response_class=HTMLResponse)
-async def memory_page(request: Request):
-    """LLM-Memory 简报记忆浏览/对话页面（桥接外部 LLM-Memory webui）"""
-    return templates.TemplateResponse("memory.html", {"request": request})
+@router.get("/memory", response_class=RedirectResponse)
+async def memory_page():
+    """/memory 简报记忆页已并入 /briefs（轻量入库按钮）——原页面退役，
+    老书签 302 重定向。本地 brief 加载现由 gateway 的 local driver 直接
+    写 A 自库 namespace AATF，检索走 /chat 的 memory-scope 勾选项。"""
+    return RedirectResponse(url="/briefs", status_code=302)

@@ -293,3 +293,116 @@
         opacity: 0.5;
         cursor: not-allowed;
     }
+
+    /* 任务失败/中断的重试按钮：与取消同尺寸，配色走主色以示"继续"而非"停止" */
+    .job-retry-btn {
+        border: 1px solid var(--primary-color);
+        border-radius: 6px;
+        background: var(--bg-primary);
+        color: var(--primary-color);
+        cursor: pointer;
+    }
+
+    .job-retry-btn:hover {
+        background: var(--primary-color);
+        color: var(--text-white);
+    }
+
+    .job-retry-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+
+    /* 当前日期的真实入库状态行（下拉框旁边那一条） */
+    .memory-status-line {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--text-muted);
+        min-height: 16px;
+    }
+
+    /* 入库日期面板：跨日期多选批量轻量入库 + 队列可见性 */
+    .ingest-panel {
+        margin: var(--spacing-md) 0 var(--spacing-lg);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        padding: 0 var(--spacing-md) var(--spacing-sm);
+        background: var(--card-bg, var(--bg-secondary, transparent));
+    }
+
+    .ingest-panel > summary {
+        cursor: pointer;
+        padding: var(--spacing-sm) 0;
+        font-weight: 600;
+    }
+
+    .ingest-summary-hint {
+        font-weight: 400;
+        font-size: 12px;
+        color: var(--text-muted);
+        margin-left: 8px;
+    }
+
+    .ingest-queue-line {
+        float: right;
+        font-size: 12px;
+        font-weight: 400;
+        color: var(--text-muted);
+    }
+
+    .ingest-toolbar {
+        display: flex;
+        gap: var(--spacing-sm);
+        margin-bottom: var(--spacing-sm);
+    }
+
+    .ingest-date-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        max-height: 260px;
+        overflow-y: auto;
+    }
+
+    .ingest-date-item {
+        display: flex;
+        align-items: center;
+        gap: var(--spacing-sm);
+        padding: 3px 0;
+        font-size: 13px;
+    }
+
+    .ingest-date-item label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 140px;
+        cursor: pointer;
+    }
+
+    .ingest-date-badge {
+        font-size: 11px;
+        color: var(--text-muted);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        padding: 0 8px;
+    }
+
+    .ingest-date-badge.is-ok {
+        border-color: var(--success-color, #2e7d32);
+        color: var(--success-color, #2e7d32);
+    }
+
+    .ingest-job-badge {
+        font-size: 11px;
+        color: var(--text-muted);
+    }
+
+    .ingest-job-badge.job-running {
+        color: var(--primary-color);
+    }
+
+    .ingest-job-badge.job-failed,
+    .ingest-job-badge.job-interrupted {
+        color: var(--danger-color);
+    }

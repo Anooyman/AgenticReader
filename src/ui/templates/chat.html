@@ -70,7 +70,7 @@
             <!-- 记忆检索范围浮层（会话级，改动即存 PATCH /sessions/{id}/memory-scope）
                  选项与 src/memory/gateway 的允许集合同源：
                  DEFAULT_SEARCH_NAMESPACES(ai-research/webapp-chat)
-                 + NAMESPACE_AATF(DA 预留) + EXTERNAL_SEARCH_NAMESPACES(现恒空)。 -->
+                 + NAMESPACE_AATF(简报页轻量入库写入) + EXTERNAL_SEARCH_NAMESPACES(现恒空)。 -->
             <div id="memory-scope-modal" class="doc-picker-modal" style="display: none;">
                 <div class="doc-picker-content" style="max-width: 380px;">
                     <div class="doc-picker-header">
@@ -88,7 +88,7 @@
                             <label><input type="checkbox" class="memory-scope-cb" value="webapp-chat" checked> webapp-chat（对话历史）</label>
                         </div>
                         <div class="doc-picker-option">
-                            <label><input type="checkbox" class="memory-scope-cb" value="AATF" title="DA 预留位：本地简报库数据将随本地 driver 实装落库，当前选择它检索为空"> AATF（本地简报库，数据随本地 driver 落地）</label>
+                            <label><input type="checkbox" class="memory-scope-cb" value="AATF" title="简报卡片导读已落 A 自库：在「简报」页点「轻量入库(全天)」加载；未加载过时此项检索为空"> AATF（简报库，简报页"轻量入库"写入）</label>
                         </div>
                     </div>
                     <div class="doc-picker-footer" style="display: flex; justify-content: space-between;">
@@ -171,6 +171,7 @@
 <script src="/static/js/utils.js"></script>
 <script src="/static/js/ui-components.js"></script>
 <script src="/static/js/pdf-viewer.js"></script>
-<script src="/static/js/chat.js"></script>
+<script src="/static/js/paper-ingest.js?v=1"></script>
+<script src="/static/js/chat.js?v=1"></script>
 <script src="/static/js/chat-enhancer.js"></script>
 {% endblock %}

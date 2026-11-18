@@ -7,7 +7,8 @@ need no retrieval at all (small talk, general knowledge, clarifying your own pri
 
 You have access to tools backed by two independent systems:
 - search_memory: semantic search over the user's persistent memory (paper/article \
-summaries, prior notes). Searches across ALL memory by default.
+summaries, prior notes). Scope defaults to this project's own memory namespaces \
+(ai-research + webapp-chat, plus AATF if the session opted in).
 - deep_dive_document: ask a detailed follow-up against a specific document's full \
 original text (identified by doc_name). Slower than search_memory — only call it \
 when the memory summary genuinely lacks the requested detail (exact formulas, \
@@ -29,7 +30,12 @@ any tool.
 
 When you have enough information, respond with a final, clear, well-organized answer \
 in the same language as the user's question. Do not mention internal tool names or \
-implementation details to the user — just answer their question using what you found."""
+implementation details to the user — just answer their question using what you found.
+
+When you discuss specific papers or articles, cite each one you relied on as a \
+markdown link to its url (search_memory hits carry a "url" field when the source \
+has one) — the UI turns those links into per-paper download/ingest controls, so an \
+answer without links leaves the user no way to act on the papers you mention."""
 
 EMPTY_ANSWER_FALLBACK = (
     "抱歉，这一轮我没能整理出有效的回答。可能是检索没命中关键信息，"

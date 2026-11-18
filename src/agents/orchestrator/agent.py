@@ -81,7 +81,11 @@ async def _safe_invoke(name: str, on_progress: ProgressCallback, args: dict,
 async def _run_tool_calls(tool_calls, on_progress: ProgressCallback,
                            default_namespaces: Optional[List[str]] = None,
                            provider: Optional[str] = None):
-    """并行执行 LLM 在某一轮里发起的全部 tool_calls（不逐个 await）。"""
+    """并行执行 LLM 在某一轮里发起的全部 tool_calls（不逐个 await）。
+
+    第三个返回值是本轮各子 agent 带回的检索命中（search_memory 的
+    hits）——原样取出交给 ask() 去重，UI 靠它渲染"提及论文"条目，
+    不必等模型自己在正文里写出链接。"""
     async def _run_one(tool_call):
         name = tool_call["name"]
         args = tool_call.get("args") or {}
@@ -94,7 +98,11 @@ async def _run_tool_calls(tool_calls, on_progress: ProgressCallback,
         for tc, (_, result) in zip(tool_calls, outcomes)
     ]
     sources_used = [name for name, _ in outcomes]
-    return tool_messages, sources_used
+    round_hits: List[Dict[str, Any]] = []
+    for _, result in outcomes:
+        if isinstance(result, dict):
+            round_hits.extend(h for h in (result.get("hits") or []) if isinstance(h, dict))
+    return tool_messages, sources_used, round_hits
 
 
 def _all_errored(tool_messages: List[ToolMessage]) -> bool:
@@ -121,7 +129,8 @@ async def ask(
     provider: Optional[str] = None,
 ) -> Dict[str, Any]:
     """跑一次完整的 Orchestrator 编排，返回
-    {"answer": str, "sources_used": [子agent name, ...], "stop_reason": str}。
+    {"answer": str, "sources_used": [子agent name, ...],
+     "memory_hits": [本次检索命中的记忆条目, ...], "stop_reason": str}。
 
     `doc_name`：UI 层已知的、这次提问明确关联的文档（例如单文档对话模式，
     或从 report 页面"针对这篇继续提问"跳转过来）。已知时只是作为上下文
@@ -159,6 +168,22 @@ async def ask(
         )
     messages.append(HumanMessage(content=question_content))
     sources_used: List[str] = []
+    # 本轮起各轮 search_memory 带回的命中账本——UI 的"提及论文可下载"
+    # 条目靠它，不依赖模型在正文里是否写出链接。
+    memory_hits: List[Dict[str, Any]] = []
+    _seen_hit_keys: set = set()
+
+    def _note_hits(hits: List[Dict[str, Any]]) -> None:
+        for h in hits:
+            abstract = (h.get("abstract") or "").strip()
+            key = h.get("id") or (h.get("source_id", ""), abstract[:80])
+            if not key or key in _seen_hit_keys:
+                continue
+            _seen_hit_keys.add(key)
+            if len(memory_hits) < 20:
+                entry = {k: h[k] for k in ("source_id", "source_type", "url", "doc_name") if h.get(k)}
+                entry["abstract"] = abstract[:160]
+                memory_hits.append(entry)
 
     async def finalize(reason: str) -> Dict[str, Any]:
         """强制关闭工具调用，逼模型基于已有信息给出结论。"""
@@ -167,7 +192,8 @@ async def ask(
         answer = (response.content or "").strip()
         if not answer:
             answer = EMPTY_ANSWER_FALLBACK
-        return {"answer": answer, "sources_used": sources_used, "stop_reason": reason}
+        return {"answer": answer, "sources_used": sources_used,
+                "memory_hits": memory_hits, "stop_reason": reason}
 
     consecutive_error_rounds = 0
     deadline = time.monotonic() + OVERALL_DEADLINE
@@ -183,14 +209,16 @@ async def ask(
         if not tool_calls:
             answer = (response.content or "").strip()
             return {"answer": answer or EMPTY_ANSWER_FALLBACK,
-                    "sources_used": sources_used, "stop_reason": "answered"}
+                    "sources_used": sources_used,
+                    "memory_hits": memory_hits, "stop_reason": "answered"}
 
         messages.append(response)
 
-        tool_messages, round_sources = await _run_tool_calls(
+        tool_messages, round_sources, round_hits = await _run_tool_calls(
             tool_calls, on_progress, namespaces, provider=resolved_provider)
         messages.extend(tool_messages)
         sources_used.extend(round_sources)
+        _note_hits(round_hits)
 
         # 子 agent 失败时返回的是 {"error": ...}，模型看到的只是"没查到"，
         # 会换个措辞重试——但如果是超时/崩溃这类系统性故障，重试多少次都

@@ -6,7 +6,8 @@ LLM-Memory webui 桥的访问都从这里进出：
   * 写：ingest()            —— 摘要/对话入库
   * 浏览/删：browse_* / delete_* —— /data Memory tab 的 rows 原语
   * 桥：bridge_request()    —— 外部 webui 一跳到 gateway 收敛
-  * DA 槽位：load_brief_date() —— bridge|local 分派，local 本轮只占位
+  * DA 槽位：load_brief_date() —— bridge|local 分派，local 已实装
+    （写 A 自库 AATF，见 brief_ingest）且为缺省，bridge 退为 env 兜底
 将来接 B 侧 SDK 时，替换的只是本文件函数体内的转发目标；公开签名、返回
 形状、namespace/作用域语义不变。
 
@@ -46,7 +47,7 @@ logger = logging.getLogger(__name__)
 # ---- 常量别名（policy 定义仍在 config，消费方只认 gateway）----
 NAMESPACE_AI_RESEARCH: str = NAMESPACE_AI_RESEARCH    # "ai-research"
 NAMESPACE_WEBAPP_CHAT: str = NAMESPACE_WEBAPP_CHAT    # "webapp-chat"
-NAMESPACE_AATF: str = NAMESPACE_AATF                  # "AATF"（DA 预留；桥 chat 缺省）
+NAMESPACE_AATF: str = NAMESPACE_AATF                  # "AATF"（local driver 轻量入库写入；桥 load 的目标 ns）
 DEFAULT_SEARCH_NAMESPACES: List[str] = DEFAULT_SEARCH_NAMESPACES
 EXTERNAL_SEARCH_NAMESPACES: List[str] = EXTERNAL_SEARCH_NAMESPACES  # 现恒为 []
 
@@ -197,10 +198,10 @@ class BridgeError(Exception):
         self.detail = detail
 
 
-# 全仓唯一读取点；llmmemory.py / brief_memory.py 的旧常量退役为本别名。
+# 全仓唯一读取点；原 llmmemory.py 退役后，brief_memory.py 的旧常量收编为本别名。
 LLM_MEMORY_URL: str = os.environ.get("LLM_MEMORY_URL", "http://127.0.0.1:8765").rstrip("/")
 
-# 与旧 llmmemory._TIMEOUT 同形状；brief_memory 有自己的 (15, read=30) 会显式传入。
+# 与旧桥 API 的 _TIMEOUT 同形状；brief_memory 有自己的 (15, read=30) 会显式传入。
 _DEFAULT_BRIDGE_TIMEOUT = httpx.Timeout(15.0, read=180.0)
 
 
@@ -243,8 +244,8 @@ async def bridge_request(
 
 
 # ---- 桥服务面：外部 webui 各端点的具名一跳 ----
-# 外部路由的 URL 与请求体在这里逐字组装——api 层（llmmemory.py）与
-# service 层（brief_memory.py）都不再自己拼外部路径，只把 (status, body)
+# 外部路由的 URL 与请求体在这里逐字组装——service 层
+# （brief_memory.py）不再自己拼外部路径，只把 (status, body)
 # 映射成自己需要的形状（transport 错误统一 raise BridgeError）。
 # B 侧 SDK 化时，这批方法名就是 SDK 方法面的镜像，改动只落本文件。
 
@@ -291,37 +292,36 @@ async def brief_chat_stop(job_id: str, **kw) -> Tuple[int, Any]:
     return await bridge_request("POST", f"/api/chat/stop/{job_id}", **kw)
 
 
-async def deepread_download(url: str, **kw) -> Tuple[int, Any]:
-    """POST /api/deepread/download {url} —— 外部侧把 PDF 写进 data/pdf/。"""
-    return await bridge_request("POST", "/api/deepread/download",
-                                json={"url": url}, **kw)
+# 注：deepread_download（旧 /memory 页"回复里下载论文"走的 B 侧端点）已删
+# ——论文下载入库改为本地路线：POST /api/v1/briefs/fetch-pdf 直接拉进
+# data/pdf/ 并触发 IndexingAgent 索引，不再依赖外部服务。
 
 
 # ---- DA：brief 加载驱动槽位 ----
-BRIEF_DRIVER_ENV = "MEMORY_BRIEF_DRIVER"  # "bridge"（缺省）| "local"
+BRIEF_DRIVER_ENV = "MEMORY_BRIEF_DRIVER"  # "local"（缺省）| "bridge"
 
 
 async def load_brief_date(date: str) -> Dict[str, Any]:
     """DA 分派：env MEMORY_BRIEF_DRIVER，显式白名单 {bridge, local}。
-    非法值（大小写笔误外的拼错、空串之外的乱值）warning 后按 bridge 跑，
-    避免误设 env 后整条 brief 加载"莫名全挂"（local 位是有意 raise 的，
-    只有显式 local 才进它）。
+    非法值 warning 后按 local 跑——DA 裁决本地 brief 落 A 自库，local
+    已实装，它就是缺省路；bridge 退为显式兜底（外部服务出问题时的逃生
+    口，env 设 bridge 即整条链路回到桥驱动）。
+    local → _local_brief_load(date)：写 A 自库 namespace AATF。
     bridge → 懒 import brief_memory 模块，属性调用 brief_memory.load_date(date)。
       ★必须是 brief_memory.load_date(...) 属性访问形式，不得写成
-      from-import 绑定函数对象——tests/test_brief_load_jobs.py 靠 patch
-      模块属性驱动这条链路，形状不能动。
-    local → _local_brief_load(date)。
+      from-import 绑定函数对象——tests 靠 patch 模块属性驱动这条链路，
+      形状不能动。
     返回契约恒为 {"loaded","skipped","errors"}（job_runner 的判定只认这三键）。
 
-    ★层界注记：本函数对 brief_memory 的反向 import 是本轮刻意保留的债
-    （上层 UI 服务被记忆内核函数级引用）。SDK 阶段应改由 job_runner 把
-    driver 函数注入 gateway，届时连同 local 分支一起收回上层。
+    ★层界注记：bridge 分支对 brief_memory 的反向 import 仍是刻意保留的债
+    （上层 UI 服务被记忆内核函数级引用）；local 分支不碰 src.ui，内核
+    侧自给自足（brief_ingest 住在 src/memory/）。
     """
-    driver = (os.environ.get(BRIEF_DRIVER_ENV) or "bridge").strip().lower()
+    driver = (os.environ.get(BRIEF_DRIVER_ENV) or "local").strip().lower()
     if driver not in ("bridge", "local"):
-        logger.warning("%s 取值 %r 不在白名单 ['bridge','local']，按 bridge 运行",
+        logger.warning("%s 取值 %r 不在白名单 ['bridge','local']，按 local 运行",
                        BRIEF_DRIVER_ENV, driver)
-        driver = "bridge"
+        driver = "local"
     if driver == "local":
         return await _local_brief_load(date)
     from src.ui.backend.services import brief_memory  # 函数级，防 ui→memory→ui 环
@@ -329,13 +329,15 @@ async def load_brief_date(date: str) -> Dict[str, Any]:
 
 
 async def _local_brief_load(date: str) -> Dict[str, Any]:
-    """预留实现位（DA）：本轮不执行。将来写 A 自库 data/memory_db/ 的
-    NAMESPACE_AATF——DA 已裁决落点为 A 自库（覆盖了 blueprint Phase 3 的
-    "store 落点=B 目录"条目）。函数体只留 raise；保留签名与 docstring 作为
-    接口位，SDK 内核替换落地时在此接本地 ingest。"""
-    raise NotImplementedError(
-        "local brief driver（写 A 自库 namespace AATF）随 B SDK 内核替换落地，"
-        "本轮仅预留接口位；现驱动走 bridge。"
-    )
+    """本地驱动实现位（DA 裁决已落地）：写 A 自库 data/memory_db/ 的
+    NAMESPACE_AATF——与对话记忆同库，只靠 namespace 隔离，不再维护第二套
+    存储（"不想长期维护两套 memory"的收敛结果）。
+
+    实现在 brief_ingest.load_brief_date_local：解析 BRIEFS_DIR 该天的
+    HTML 卡片，逐卡写一行（source_id=item_id，chunk 内容 hash 幂等，
+    零 LLM 调用——简报本身就是人写的中文导读，再做 condense 纯属浪费）。
+    """
+    from src.memory.brief_ingest import load_brief_date_local
+    return await load_brief_date_local(date)
 
 

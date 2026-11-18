@@ -29,6 +29,7 @@ TOP_LEVEL_MODULES = [
     "src.core.parallel",
     "src.memory",
     "src.memory.gateway",
+    "src.memory.brief_ingest",
     "src.agents",
     "src.agents.indexing",
     "src.agents.answer",

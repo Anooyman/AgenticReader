@@ -27,7 +27,6 @@
 
 const API = (function () {
     const JSON_CONTENT_TYPE = 'application/json';
-    const LLM_MEMORY_BASE = '/api/v1/llmmemory';
 
     function buildInit(options) {
         const init = { method: options.method || 'GET' };
@@ -130,44 +129,9 @@ const API = (function () {
             }
         },
 
-        // LLM-Memory 桥（/api/v1/llmmemory/*，转发给外部 LLM-Memory webui）
-        // 同 documents 的三个 raw 封装：/memory 页自己判状态码并解析 detail。
-        llmmemory: {
-            async dates(options = {}) {
-                return request(LLM_MEMORY_BASE + '/dates', withDefaults({ raw: true }, options));
-            },
-
-            async enqueueLoadJobs(dates, options = {}) {
-                return request(LLM_MEMORY_BASE + '/load-jobs',
-                    withDefaults({ method: 'POST', json: { dates }, raw: true }, options));
-            },
-
-            async loadJobs(options = {}) {
-                return request(LLM_MEMORY_BASE + '/load-jobs', withDefaults({ raw: true }, options));
-            },
-
-            async download(url, options = {}) {
-                return request(LLM_MEMORY_BASE + '/download',
-                    withDefaults({ method: 'POST', json: { url }, raw: true }, options));
-            },
-
-            async chat(message, history, options = {}) {
-                return request(LLM_MEMORY_BASE + '/chat',
-                    withDefaults({ method: 'POST', json: { message, history }, raw: true }, options));
-            },
-
-            async chatProgress(jobId, options = {}) {
-                return request(LLM_MEMORY_BASE + '/chat/progress/' + jobId,
-                    withDefaults({ raw: true }, options));
-            },
-
-            // flag 式取消：外部 job 在下一次检索检查点自行收尾；
-            // 页面先停本地轮询，这里只是把停止请求递过去。
-            async chatStop(jobId, options = {}) {
-                return request(LLM_MEMORY_BASE + '/chat/stop/' + encodeURIComponent(jobId),
-                    withDefaults({ method: 'POST', raw: true }, options));
-            }
-        },
+        // 注：原 llmmemory 域（/api/v1/llmmemory/*，/memory 页的桥接面）随
+        // 该页退役删除——外部桥若需要仍在 gateway/brief_memory 内部可达，
+        // 不再经 HTTP 层透传。
 
         // 聊天
         chat: {
@@ -385,6 +349,26 @@ const API = (function () {
             async syncMemory(options = {}) {
                 return request('/api/v1/briefs/sync-memory',
                     withDefaults({ method: 'POST', parse: 'none', errorText: '补灌记忆失败' }, options));
+            },
+
+            // 轻量入库：单日传字符串、批量传日期数组，body 统一走 dates
+            // （后端 /light-load 同时兼容旧 coverage_date 单键）。
+            async lightLoad(dates, options = {}) {
+                const list = Array.isArray(dates) ? dates : [dates];
+                return request('/api/v1/briefs/light-load',
+                    withDefaults({ method: 'POST', json: { dates: list },
+                                   errorText: '轻量入库请求失败' }, options));
+            },
+
+            async memoryStatus(options = {}) {
+                return request('/api/v1/briefs/memory-status',
+                    withDefaults({ errorText: '加载入库状态失败' }, options));
+            },
+
+            async fetchPdf(url, options = {}) {
+                return request('/api/v1/briefs/fetch-pdf',
+                    withDefaults({ method: 'POST', json: { url }, useDetailError: true,
+                                   errorText: '下载入库失败' }, options));
             }
         },
 

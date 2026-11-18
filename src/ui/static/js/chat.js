@@ -62,6 +62,14 @@ class ChatApp {
 
         const doc = params.get('doc');
         const docsParam = params.get('docs');
+        // 🧠 记忆范围深链：/chat?namespaces=a,b（/briefs 的「简报问答」
+        // 按钮发 /chat?namespaces=AATF）。这里只收集，等会话初始化完、
+        // 会话上已存的作用域恢复之后再统一 apply，避免 loadMemoryScope
+        // 的异步回读把刚设好的 URL 值盖回去。
+        const nsParam = params.get('namespaces');
+        this._urlMemoryNamespaces = (nsParam
+            ? nsParam.split(',').map(s => s.trim()).filter(Boolean)
+            : null);
 
         if (doc) {
             // 单文档模式: /chat?doc=xxx
@@ -402,8 +410,16 @@ class ChatApp {
             document.getElementById('chat-title').textContent = 'AgenticReader';
             document.getElementById('chat-subtitle').textContent = '智能文档对话助手';
 
-            // 恢复会话上已持久化的记忆检索范围（异步，不阻塞首屏）
-            this.loadMemoryScope();
+            // 恢复会话上已持久化的记忆检索范围（异步，不阻塞首屏）。
+            // URL 上带 namespaces= 时，在这之后覆盖为链接指定的作用域
+            // 并持久化——显式深链优先于会话旧值。
+            if (this._urlMemoryNamespaces && this._urlMemoryNamespaces.length > 0) {
+                const urlScopes = this._urlMemoryNamespaces;
+                this._urlMemoryNamespaces = null;  // 只在首次初始化生效一次
+                this.loadMemoryScope().then(() => this.applyMemoryScope(urlScopes));
+            } else {
+                this.loadMemoryScope();
+            }
 
             // 更新芯片栏
             this.updateChipsBar();
@@ -466,7 +482,8 @@ class ChatApp {
                 msg.role,
                 msg.content,
                 msg.references,
-                msg.timestamp
+                msg.timestamp,
+                msg.memory_hits
             );
             fragment.appendChild(messageElement);
         });
@@ -514,7 +531,7 @@ class ChatApp {
             // Remove loading indicator
             this.removeLoadingIndicator();
             // Add assistant response
-            this.addMessage('assistant', data.content, data.references, data.timestamp);
+            this.addMessage('assistant', data.content, data.references, data.timestamp, data.memory_hits);
             // Re-enable send button
             this.isSending = false;
             document.getElementById('send-btn').disabled = false;
@@ -534,7 +551,7 @@ class ChatApp {
      * 创建消息DOM元素（不添加到DOM）
      * @private
      */
-    createMessageElement(role, content, references = null, messageTimestamp = null) {
+    createMessageElement(role, content, references = null, messageTimestamp = null, memoryHits = null) {
         const messageDiv = document.createElement('div');
         messageDiv.className = 'message message-' + role;
 
@@ -568,6 +585,16 @@ class ChatApp {
             ttsBtn.textContent = '🔊';
             ttsBtn.addEventListener('click', () => this.toggleSpeech(ttsBtn, content));
             bubble.insertBefore(ttsBtn, bubble.firstChild);
+
+            // 「⬇ 下载入库」按需选项：回复里出现的 arxiv/pdf 链接旁挂一个
+            // 按钮——点不点由用户决定，不点零动作，绝不自动下载。
+            this.attachPaperDownloadButtons(bubble);
+
+            // 检索命中里带链接/可深读的论文，即使模型没在正文写链接，
+            // 也统一列进气泡底部的"提及论文"条——每条都有独立按钮可选。
+            if (memoryHits && memoryHits.length > 0) {
+                this.renderPaperMentions(bubble, memoryHits);
+            }
         } else {
             bubble.textContent = content;
         }
@@ -600,7 +627,7 @@ class ChatApp {
     /**
      * 添加单条消息到聊天界面（用于实时消息）
      */
-    addMessage(role, content, references = null, messageTimestamp = null) {
+    addMessage(role, content, references = null, messageTimestamp = null, memoryHits = null) {
         const messagesDiv = document.getElementById('messages');
 
         // 移除欢迎消息
@@ -608,7 +635,7 @@ class ChatApp {
         if (welcome) welcome.remove();
 
         // 创建并添加消息元素
-        const messageElement = this.createMessageElement(role, content, references, messageTimestamp);
+        const messageElement = this.createMessageElement(role, content, references, messageTimestamp, memoryHits);
         messagesDiv.appendChild(messageElement);
 
         // 如果是助手消息且用户不在底部，触发新内容提醒
@@ -1731,7 +1758,8 @@ class ChatApp {
                         msg.role,
                         msg.content,
                         msg.references,
-                        msg.timestamp
+                        msg.timestamp,
+                        msg.memory_hits
                     );
                     fragment.appendChild(messageElement);
                 });
@@ -2089,6 +2117,130 @@ class ChatApp {
         const btn = document.getElementById('btn-memory-scope');
         if (btn) btn.classList.toggle('active', !!this.memoryNamespaces);
         this.updateChipsBar();
+    }
+
+    // ==================== 论文按需"下载入库"（用户点选，绝不自动） ====================
+
+    /**
+     * 回复气泡里的 arxiv/pdf 外链旁挂「⬇ 下载入库」按钮。
+     * 判据与 /briefs 卡片侧同源：arxiv.org 或 .pdf 结尾的 http(s) 链接；
+     * 页内引用锚点（📄 p.N）不是外链，天然不受影响。每个 <a> 只挂一次
+     * （dataset 防重入），点击才触发 PaperIngest——不点零动作。
+     */
+    attachPaperDownloadButtons(bubble) {
+        if (!window.PaperIngest) return;
+        const PDF_LINK_RE = /(arxiv\.org|\.pdf([?#]|$))/i;
+        bubble.querySelectorAll('a[href]').forEach((a) => {
+            const href = a.getAttribute('href');
+            if (!href || !/^https?:\/\//i.test(href) || !PDF_LINK_RE.test(href)) return;
+            if (a.dataset.paperIngest) return;
+            a.dataset.paperIngest = '1';
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'paper-ingest-btn';
+            btn.textContent = '⬇ 下载入库';
+            btn.title = '下载到 data/pdf 并索引，完成后可直接深读（只下这一篇）';
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                this.ingestPaperLink(btn, href);
+            });
+            a.insertAdjacentElement('afterend', btn);
+        });
+    }
+
+    /** 走共享原语 PaperIngest（fetch-pdf + 索引轮询），把状态画到按钮上。 */
+    ingestPaperLink(btn, url) {
+        btn.disabled = true;
+        const render = (s) => {
+            if (s.phase === 'downloading') {
+                btn.textContent = '下载中…';
+            } else if (s.phase === 'indexing') {
+                btn.textContent = s.status === 'exists' ? '已在 PDF 库，检查索引…' : '已下载，索引中…';
+            } else if (s.phase === 'indexed') {
+                btn.textContent = '✅ 已入库';
+                btn.classList.add('ok');
+                if (!btn.dataset.deepLink && s.docName) {
+                    btn.dataset.deepLink = '1';
+                    const link = document.createElement('a');
+                    link.href = '/chat?doc=' + encodeURIComponent(s.docName);
+                    link.target = '_blank';
+                    link.rel = 'noopener';
+                    link.className = 'paper-deep-read-link';
+                    link.textContent = '📖 深读 ↗';
+                    btn.after(link);
+                }
+            } else if (s.phase === 'timeout') {
+                btn.textContent = '继续检查索引';
+                btn.disabled = false;
+            } else if (s.phase === 'failed') {
+                btn.textContent = '⬇ 下载失败，重试';
+                btn.disabled = false;
+                if (window.UIFeedback) {
+                    UIFeedback.toast('下载入库失败：' + (s.error || ''), { type: 'error', duration: 5000 });
+                }
+            }
+        };
+        window.PaperIngest.start(url, render);
+    }
+
+    /**
+     * 回复气泡底部"提及论文"条：每个检索命中一行、每行一个独立可选按钮
+     * （点才下载，不点零动作）——覆盖"模型正文只写论文名、不给链接"的
+     * 情形，这正是"我提到了这篇，想直接点下载"的主场景。
+     * 行动面：带 url → ⬇下载入库；ai_research 的 doc_name → 📖深读；
+     * 两者都没有的命中不显示（不放点不动的假按钮占空间）。
+     */
+    renderPaperMentions(bubble, hits) {
+        const items = [];
+        const seen = new Set();
+        for (const h of hits) {
+            if (!h) continue;
+            const key = h.url || h.doc_name || h.source_id || '';
+            if (!key || seen.has(key)) continue;
+            if (!h.url && !h.doc_name) continue;
+            seen.add(key);
+            items.push(h);
+            if (items.length >= 8) break;
+        }
+        if (!items.length) return;
+        const wrap = document.createElement('div');
+        wrap.className = 'paper-mentions';
+        const title = document.createElement('div');
+        title.className = 'paper-mentions-title';
+        title.textContent = `📄 提及论文 ${items.length} 篇（点谁下谁，不点不下载）`;
+        wrap.appendChild(title);
+        for (const h of items) {
+            const row = document.createElement('div');
+            row.className = 'paper-mention-item';
+            const label = document.createElement('span');
+            label.className = 'paper-mention-label';
+            const abstract = (h.abstract || '').replace(/\s+/g, ' ').trim();
+            label.textContent = abstract ? abstract.slice(0, 90) : (h.source_id || h.doc_name || '');
+            if (abstract.length > 90) label.title = abstract;
+            row.appendChild(label);
+            if (h.url && window.PaperIngest) {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'paper-ingest-btn';
+                btn.textContent = '⬇ 下载入库';
+                btn.title = '只下载并索引这篇论文的 PDF';
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    this.ingestPaperLink(btn, h.url);
+                });
+                row.appendChild(btn);
+            } else if (h.doc_name) {
+                const link = document.createElement('a');
+                link.href = '/chat?doc=' + encodeURIComponent(h.doc_name);
+                link.target = '_blank';
+                link.rel = 'noopener';
+                link.className = 'paper-deep-read-link';
+                link.textContent = '📖 深读 ↗';
+                row.appendChild(link);
+            }
+            wrap.appendChild(row);
+        }
+        bubble.appendChild(wrap);
     }
 
 }

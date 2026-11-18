@@ -244,6 +244,9 @@ class ChatService:
 
             final_answer = result.get("answer", "")
             sources_used = result.get("sources_used", [])
+            # 本轮检索命中——跟着消息存下来，前端在回复下方渲染
+            # "提及论文"可下载条目（点不点由用户挑，系统零自动动作）。
+            memory_hits = result.get("memory_hits") or []
 
             # agents_used：把 Orchestrator 的子 agent name 映射成展示标签
             agents_used = []
@@ -262,7 +265,8 @@ class ChatService:
                 role="assistant",
                 content=final_answer,
                 references=references,
-                agents_used=agents_used
+                agents_used=agents_used,
+                memory_hits=memory_hits or None
             )
 
             # 更新会话级别的agents统计
@@ -274,6 +278,7 @@ class ChatService:
             return {
                 "answer": final_answer,
                 "references": references,
+                "memory_hits": memory_hits,
                 "enabled_tools": current_tools,
                 "selected_docs": current_docs
             }
@@ -282,7 +287,7 @@ class ChatService:
             print(f"❌ 聊天处理失败: {e}")
             import traceback
             traceback.print_exc()
-            return {"answer": f"处理失败: {str(e)}", "references": []}
+            return {"answer": f"处理失败: {str(e)}", "references": [], "memory_hits": []}
 
     def register_progress_callback(self, session_id: Optional[str], callback) -> None:
         """按会话ID注册进度回调（websocket 连接建立/收到带会话ID的消息时调用）"""

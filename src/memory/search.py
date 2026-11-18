@@ -15,6 +15,7 @@ bind_tools）驱动工具调用循环，而不是像 LLM-Memory 那样直接用 
 utils.py 的 SimpleMCPClient 是同一个模式的先例）。
 """
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -130,18 +131,50 @@ plain text (no more tool calls) — cite doc_name/source_id when a specific docu
 the caller can offer to look deeper into that specific document if needed."""
 
 
+# 记忆行里"原文链接"的两种存法：AATF 卡片把链接烧进正文行（brief_ingest
+# 的 _card_text：「链接：http…」「PDF：http…」），ai-research 的正文里也
+# 常有裸 arxiv/pdf URL。给命中带上 url 有两个下游收益：LLM 能直接在回答
+# 里给出可点链接（对话内"按需下载入库"按钮挂点），调用方也能拿它去下载。
+# 找到才设，找不到不硬造空字段——宁缺毋滥，检索面的形状不变。
+_URL_LINE_RE = re.compile(r"^(?:链接|PDF)[：:]\s*(\S+)", re.MULTILINE)
+_URL_TOKEN_RE = re.compile(r"https?://[^\s\"'<>)\]]+")
+
+
+def _extract_row_url(row: Dict[str, Any]) -> str:
+    for field in ("raw_source", "detail"):
+        text = row.get(field)
+        if not isinstance(text, str) or not text:
+            continue
+        m = _URL_LINE_RE.search(text)
+        if m:
+            return m.group(1)
+    for field in ("raw_source", "detail", "abstract"):
+        text = row.get(field)
+        if not isinstance(text, str) or "://" not in text:
+            continue
+        for m in _URL_TOKEN_RE.finditer(text):
+            token = m.group(0)
+            if "arxiv.org" in token or ".pdf" in token.lower():
+                return token
+    return ""
+
+
 def _trim_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """裁剪成喂给 LLM 判断相关性所需的最小信息（不含 detail/raw_source/vector）。"""
     out = []
     for r in rows:
-        out.append({
+        entry = {
             "id": r.get("id"),
             "abstract": r.get("abstract", ""),
             "source_type": r.get("source_type", ""),
             "source_id": r.get("source_id", ""),
             "occurred_at": r.get("occurred_at") or r.get("created_at", ""),
             "score": round(float(r.get("semantic_score") or r.get("keyword_score_normalized") or 0.0), 4),
-        })
+        }
+        url = _extract_row_url(r)
+        if url:
+            entry["url"] = url
+        out.append(entry)
     return out
 
 

@@ -27,9 +27,9 @@ MEMORY_DB_DIR = os.path.join(DATA_ROOT, "memory_db")
 NAMESPACE_AI_RESEARCH = "ai-research"
 NAMESPACE_WEBAPP_CHAT = "webapp-chat"
 
-# DA 裁决：将来本地 brief 加载写入 A 自库 data/memory_db/ 时落在这个
-# namespace（现桥接侧 /api/v1/llmmemory /chat 的缺省 namespace 也是 AATF，
-# 两边名字保持一致）。
+# DA 裁决：本地 brief 加载写入 A 自库 data/memory_db/ 时落在这个
+# namespace——已由 brief_ingest.load_brief_date_local 实装（/briefs 页
+# "轻量入库"驱动），缺省检索作用域不含它，按需经会话 memory-scope 勾选。
 NAMESPACE_AATF = "AATF"
 
 # D-B 检索作用域语义（唯一实现处在 src/memory/gateway.py 的

@@ -48,7 +48,7 @@ python src/ui/run_server.py
 uvicorn src.ui.backend.app:app --reload --port 8000
 
 # 页面：/ Dashboard、/chat、/config、/data（数据管理，含 Memory tab）、
-#       /structure 结构编辑器、/briefs 每日简报、/memory 简报记忆桥接页
+#       /structure 结构编辑器、/briefs 每日简报（含轻量入库）；/memory 已退役→302 到 /briefs
 # API 文档：/docs、/redoc；健康检查：/health（status/timestamp/version）
 ```
 
@@ -112,16 +112,16 @@ src/
 │   │   ├── api/pages.py      # 7 个页面路由；api/websocket.py /ws/chat
 │   │   ├── api/v1/           # documents chat pdf structure config
 │   │   │                     #   sessions data+data_storage+data_ops+data_common
-│   │   │                     #   briefs jobs memory speech llmmemory
+│   │   │                     #   briefs jobs memory speech（llmmemory 已随 /memory 页退役）
 │   │   └── services/         # session_manager chat_service chat_ingest job_runner
-│   │                         #   memory_browse task_service briefs_data
-│   ├── templates/            # base dashboard chat config manage structure_editor briefs memory
+│   │                         #   memory_browse task_service briefs_data brief_memory
+│   ├── templates/            # base dashboard chat config manage structure_editor briefs
 │   └── static/               # css/（base/components/variables/api/chat/chat-enhanced/
-│                             #   config/dashboard/manage/briefs/memory 等）+ js/
+│                             #   config/dashboard/manage/briefs 等）+ js/
 │                             #   （api=fetch 唯一出口 / ui-feedback=共享 toast /
 │                             #   pdf-viewer=pdf.js 原语 / utils / ui-components /
 │                             #   chat-enhancer/chat/manage/config/structure_editor/
-│                             #   briefs/dashboard/memory/base-badge）
+│                             #   briefs/dashboard/base-badge）
 └── utils/                    # path_guard(safe_path 防目录穿越)、helpers、validators、
                               #   async_utils、json_io(write_json_atomic 唯一实现)
 ```
@@ -224,15 +224,16 @@ BRIEFS_DIR 下 HTML（env BRIEFS_DIR，默认 ~/Desktop/AATF-Intelligence-Briefs
 
 `src/memory/` 已实际接入（不是 planned），独立 LanceDB 库 `data/memory_db/`（表 `memories`，单表单层，namespace 隔离）：
 
-- **namespace 约定**（`src/memory/config.py:27-28`）：`ai-research`（论文/文章摘要，source_id=doc_name）与 `webapp-chat`（对话历史）。
-- **两条写入通道**：
-  1. 管线：`process_pdf_queue`/`process_web_queue` 处理完即调 `ingest_source()`；`src/pipeline/sync_memory_ingest.py` 补历史欠账。
+- **namespace 约定**（`src/memory/config.py:27-33`）：`ai-research`（论文/文章摘要，source_id=doc_name）、`webapp-chat`（对话历史）与 `AATF`（本地简报卡片导读，source_id=item_id；DA 裁决"本地 brief 落对话同库"的落点）。
+- **三条写入通道**：
+  1. 管线：`process_pdf_queue`/`process_web_queue` 处理完即调 `ingest_source()`（`ai-research`）；`src/pipeline/sync_memory_ingest.py` 补历史欠账。
   2. **chat_ingest 车道**（`src/ui/backend/services/chat_ingest.py`）：与 job_runner 并行的独立后台任务，周期扫描 `data/sessions/` 把"有新内容 + 已静默一段时间 + 至少一轮完整问答"的会话写入 `webapp-chat`；水位线记 `data/pipeline/chat_ingest_state.json`；按 chunk 内容 hash 幂等去重。
-- **读取路径**：Orchestrator 的 `search_memory` 子 agent → `agentic_search()`（semantic/keyword/keywords-pool/list-by-source 四工具的 ReAct 循环，MAX_ITERATIONS=4）。
+  3. **轻量入库**（`src/memory/brief_ingest.py`，由 `/briefs` 页"轻量入库(全天)"经 `job_runner` 的 `load_brief_date` 任务触发）：解析 `BRIEFS_DIR` 该天 HTML 卡片，逐卡一行直接写 `AATF`——零 LLM 调用，chunk 内容 hash 幂等。
+- **读取路径**：Orchestrator 的 `search_memory` 子 agent → `agentic_search()`（semantic/keyword/keywords-pool/list-by-source 四工具的 ReAct 循环，MAX_ITERATIONS=4）；缺省作用域是自库白名单（ai-research + webapp-chat），AATF 需在 /chat 的记忆范围浮层里勾选。
 - **浏览/管理 API**：`/api/v1/memory/*`（overview / namespace 列表 / search / 删除——含 item、
   namespace、按 source 三种 DELETE；单条 item 的 GET 读取端点已删），供 `/data` 页 Memory tab
   使用，实现是 `services/memory_browse.py` 同进程直调。
-- **LLM-Memory 桥**：`/api/v1/llmmemory/*` 是对**外部** LLM-Memory webui（env `LLM_MEMORY_URL`，默认 `http://127.0.0.1:8765`）的透明 HTTP 代理，供 `/memory` 页简报管线用——与本仓库的 src/memory 是两套东西，别混。
+- **LLM-Memory 桥**：外部 LLM-Memory webui（env `LLM_MEMORY_URL`）现在只剩一条路：`gateway.load_brief_date` 的 **bridge 兜底 driver**（env `MEMORY_BRIEF_DRIVER=bridge` 显式点名才走）。原 `/memory` 页与其透明 HTTP 代理 `/api/v1/llmmemory/*` 已退役——本地 driver 实装后不再需要第二套存储入口，页面职责并进了 `/briefs`（重管线 = `/load`，轻量入库 = `/light-load`；老书签 `/memory` 302 到 `/briefs`）。
 - **Embedding 维度**：LanceDB 建表需要固定维度，`src/memory/config.py` 维护模型名→维度映射表；配置缺失只 warning 并按默认 1536 建表。改 embedding 模型名务必走 `settings.get_embedding_model_name()`。
 
 ## MCP Services
@@ -260,7 +261,8 @@ SearchAgent 用到 stdio 一种传输，薄封装就地维护即可）。
 - `CORS_ORIGINS`：逗号分隔来源列表，默认只放行 localhost/127.0.0.1:8000；含 `*` 时自动关闭 `allow_credentials`
 - `RETRIEVAL_DEDUP_WINDOW`：检索去重轮次窗口（默认 5）
 - `BRIEFS_DIR`：简报 HTML 目录
-- `LLM_MEMORY_URL`：外部 LLM-Memory webui 地址（/memory 页桥接）
+- `MEMORY_BRIEF_DRIVER`：brief 加载 driver 分派，`local`（缺省）| `bridge`
+- `LLM_MEMORY_URL`：外部 LLM-Memory webui 地址——只在 `MEMORY_BRIEF_DRIVER=bridge` 兜底路被读取
 
 **Provider 配置来源——CLI 与 UI 的差异**：
 - **唯一入口**：`settings.resolve_provider(provider)` / `get_default_provider()`
@@ -280,7 +282,7 @@ SearchAgent 用到 stdio 一种传输，薄封装就地维护即可）。
 前缀均为 `/api/v1`，注册于 `app.py:89-103`。`/` 开头的是页面路由。
 
 ```
-Pages:   GET /  /chat  /config  /data  /structure  /briefs  /memory
+Pages:   GET /  /chat  /config  /data  /structure  /briefs  /memory→302 到 /briefs
 WS:      /ws/chat                     # 唯一的 WebSocket（origin 校验见 websocket.py）
 Health:  GET /health                  # app.py 内联定义
 
@@ -294,12 +296,15 @@ data:      GET /overview /documents /documents/{name}/summary /documents/pending
            /sessions/stats /tasks/{task_id}
            POST /documents/{name}/index  DELETE /pdfs /documents/{name}/parts /documents
            POST /cleanup/smart?days=N
-briefs:    GET /dates /cards  | POST /load /sync-memory # 数据层 services/briefs_data.py
+briefs:    GET /dates /cards /memory-status  | POST /load /sync-memory /light-load
+           # 数据层 services/briefs_data.py；/light-load 是日期级轻量入库
+           # （load_brief_date 任务，写 AATF）；/memory-status 返回各日期
+           # 真实入库计数 {dates:{d:{aatf,heavy_done}}}——按 A 自库行+queue
+           # 事实而非任务账本（bridge 时代 done ≠ A 自库有数据）
 jobs:      GET "" | POST /{job_id}/retry /cancel        # 任务账本见 job_runner + webapp_jobs.json
 memory:    GET /overview /namespace/{ns} / POST /search
            DELETE /item/{id} /namespace/{ns}/source/{source_id} /namespace/{ns}
 speech:    POST /transcribe /synthesize
-llmmemory: GET /dates /papers ... 等                    # 外部 webui 透传代理（见上节）
 ```
 
 ## UI Features（现状速览）
@@ -310,7 +315,7 @@ llmmemory: GET /dates /papers ... 等                    # 外部 webui 透传�
 - 数据管理页 `/data`：总览、按文档列 JSON/向量库/图片/摘要四类产物、部分/批量删除（`/api/v1/data/documents/{name}/parts`）、smart cleanup、sessions stats，以及 Memory tab（缓存查看/清理、backup、危险的全量 reset 端点已删）。
 - PDF 查看：`/api/v1/pdf/view/{doc_name}`（页面图，图片降级内建于 view）。
 - 结构编辑器 `/structure`：编辑 structure.json 后走 rebuild 图重生成摘要/索引。
-- `/config` 页读写 provider 与系统设置；`/briefs` 页加载简报条目进管线队列；`/memory` 页桥接外部 LLM-Memory。
+- `/config` 页读写 provider 与系统设置（含模型注册表）；`/briefs` 页加载简报条目进管线队列，并有"轻量入库(全天)"直写 AATF——原 `/memory` 页已退役并入这里（老书签 302）。
 - 语音：`/api/v1/speech/transcribe|synthesize`（需 OPENAI_API_KEY）。
 - 安全面：默认仅回环监听 + 本地 CORS；`safe_path()` 统一防 doc_name 目录穿越。
 

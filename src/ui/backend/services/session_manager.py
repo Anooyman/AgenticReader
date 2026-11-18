@@ -257,7 +257,8 @@ class SessionManager:
         role: str,
         content: str,
         references: Optional[List] = None,
-        agents_used: Optional[List[str]] = None
+        agents_used: Optional[List[str]] = None,
+        memory_hits: Optional[List] = None
     ):
         """
         保存消息到会话
@@ -268,6 +269,8 @@ class SessionManager:
             content: 消息内容
             references: 引用信息（可选）
             agents_used: 本条消息使用的agent列表（可选）
+            memory_hits: 本轮检索命中的记忆条目（可选，供 UI 渲染
+                "提及论文可下载"条目——没有它，历史消息刷新后按钮会丢）
         """
         session_path = self._get_session_path(session_id)
         session_data = self._load_session_file(session_path)
@@ -284,6 +287,9 @@ class SessionManager:
 
         if references:
             message["references"] = references
+
+        if memory_hits:
+            message["memory_hits"] = memory_hits
 
         if agents_used:
             message["agents_used"] = agents_used

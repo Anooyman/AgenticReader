@@ -117,3 +117,6 @@ scraped_data/
 # Audit / generated analysis artifacts (not source)
 /_audit/
 /tools_build_report_html.py
+
+# Agent skill artifacts (operating guides, not source)
+skill/

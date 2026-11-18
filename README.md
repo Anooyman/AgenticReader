@@ -38,9 +38,10 @@ AgenticReader 是基于大语言模型（LLM）的智能文档分析与问答工
 - 会话服务端落盘 `data/sessions/{session_id}.json` 平铺文件；浏览器端仅主题偏好使用 localStorage（`AgenticReader_theme` 键）
 
 ### 🧠 长期记忆（src/memory/）
-- 单 LanceDB 表 `memories`，按 namespace 隔离：`ai-research`（简报/文章摘要）与 `webapp-chat`（对话历史）
+- 单 LanceDB 表 `memories`，按 namespace 隔离：`ai-research`（简报/文章摘要）、`webapp-chat`（对话历史）与 `AATF`（简报卡片导读轻量入库）
 - **chat_ingest 后台车道**：周期扫描会话目录，把"有新内容 + 已静默 + 完整问答"的会话自动入库（按内容 hash 幂等去重，水位线在 `data/pipeline/chat_ingest_state.json`）
-- **agentic_search**：semantic / keyword / keywords-pool / list-by-source 四工具的 ReAct 检索循环（上限 4 轮），供 Orchestrator 调用
+- **简报轻量入库**：`/briefs` 页"轻量入库(全天)"按钮把当天简报卡片的中文导读直接写进 `AATF`——零 LLM 调用、chunk hash 幂等，重管线（`/load`）与轻量入库二选一或都点
+- **agentic_search**：semantic / keyword / keywords-pool / list-by-source 四工具的 ReAct 检索循环（上限 4 轮），供 Orchestrator 调用；缺省范围是 ai-research + webapp-chat，`AATF` 需在 `/chat` 的记忆范围里勾选
 - `/data` 页 Memory tab 提供概览、检索、删除（单条 / 按来源 / 整个 namespace）
 
 ### 📰 每日简报管线（src/pipeline/）
@@ -158,8 +159,8 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 | 数据管理 | `/data` | 存储总览、按文档删除四类产物（JSON/向量库/图片/摘要）、批量删除、智能清理、会话统计、Memory tab |
 | 配置中心 | `/config` | 切换 provider、系统设置（落 `data/config/app_config.json`） |
 | 结构编辑器 | `/structure` | 编辑文档章节 structure.json 并重建摘要/索引，PDF 在线预览 |
-| 每日简报 | `/briefs` | 浏览 `BRIEFS_DIR` 简报条目，勾选加载进管线队列，查看后台任务 |
-| 简报记忆桥接 | `/memory` | 桥接**外部** LLM-Memory webui（`LLM_MEMORY_URL`，默认 `http://127.0.0.1:8765`），与内置 `src/memory/` 是两套东西 |
+| 每日简报 | `/briefs` | 浏览 `BRIEFS_DIR` 简报条目，勾选加载进管线队列，"轻量入库(全天)"直写 AATF 记忆，查看后台任务 |
+| ~~简报记忆桥接~~ | `/memory` | 已退役——职责并入 `/briefs`（外部 LLM-Memory 桥仅剩 env 兜底路），老书签自动 302 |
 | API 文档 | `/docs` `/redoc` | FastAPI 自动生成 |
 | 健康检查 | `/health` | status / timestamp / version |
 
@@ -213,7 +214,8 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 | `PROVIDER` | CLI 等无 UI 配置时的 provider 回退 |
 | `RETRIEVAL_DEDUP_WINDOW` | 检索去重的轮次窗口，默认 5 |
 | `BRIEFS_DIR` | 简报 HTML 目录，默认 `~/Desktop/AATF-Intelligence-Briefs` |
-| `LLM_MEMORY_URL` | 外部 LLM-Memory webui 地址（`/memory` 页桥接），默认 `http://127.0.0.1:8765` |
+| `MEMORY_BRIEF_DRIVER` | 简报加载驱动：`local`（缺省，写 A 自库 AATF）或 `bridge`（兜底路，调外部 webui） |
+| `LLM_MEMORY_URL` | 外部 LLM-Memory webui 地址，默认 `http://127.0.0.1:8765`——只在 `MEMORY_BRIEF_DRIVER=bridge` 时被读取 |
 | `DEBUG` | WebSocket 调试输出开关（`true` 开启），默认关闭 |
 
 **两个常见误解**
@@ -241,7 +243,7 @@ AgenticReader/
 │   ├── llm/                    # client（LLMBase + 日志 + embeddings 缓存）/ providers / history
 │   ├── parallel/               # indexing.py（ChapterProcessor）/ retrieval.py（ParallelRetrievalCoordinator）
 │   └── vector_db/              # vector_db_client（FAISS + 轮次去重 + 索引缓存）/ metadata_db
-├── src/memory/                 # LanceDB 长期记忆（config / ingest / search / vector_store / adapters）
+├── src/memory/                 # LanceDB 长期记忆（config / ingest / search / brief_ingest / vector_store / adapters）
 ├── src/pipeline/               # 简报管线（briefs_parser / queue_store / process_pdf_queue /
 │                               #   process_web_queue / generate_qa_brief / render_report / sync_* / paths）
 ├── src/services/scraper/       # Playwright 抓取包（core/browser·downloader·extractor·anti_detection、
@@ -249,14 +251,14 @@ AgenticReader/
 ├── src/ui/
 │   ├── run_server.py           # 启动入口（HOST/PORT、回环安全默认）
 │   ├── backend/                # app.py（lifespan 起 job_runner + chat_ingest 两车道）、config.py
-│   │   ├── api/                # pages（7 页面）、websocket（/ws/chat）、v1/（documents chat pdf
+│   │   ├── api/                # pages（页面路由；/memory 302 到 /briefs）、websocket（/ws/chat）、v1/（documents chat pdf
 │   │   │                       #   structure config sessions data·data_storage·data_ops·data_common
-│   │   │                       #   briefs jobs memory speech llmmemory）
+│   │   │                       #   briefs jobs memory speech）
 │   │   └── services/           # chat_service（走 Orchestrator）、session_manager、chat_ingest、
 │   │                           #   job_runner、memory_browse、task_service、briefs_data、brief_memory
-│   ├── templates/              # base dashboard chat config manage structure_editor briefs memory
-│   └── static/                 # css/（chat manage dashboard briefs memory …）js/（api chat
-│                               #   chat-enhancer manage config dashboard briefs memory …）
+│   ├── templates/              # base dashboard chat config manage structure_editor briefs
+│   └── static/                 # css/（chat manage dashboard briefs …）js/（api chat
+│                               #   chat-enhancer manage config dashboard briefs …）
 ├── src/utils/                  # json_io（write_json_atomic 唯一实现）、path_guard（safe_path 防目录穿越）等
 └── data/                       # 运行时数据（见下）
 ```
@@ -298,12 +300,11 @@ data       GET  /overview /documents /documents/{name}/summary /documents/pendin
                /sessions/stats /tasks/{task_id}
            POST /documents/{filename}/index /cleanup/smart
            DELETE /pdfs /documents/{name}/parts /documents
-briefs     GET  /dates /cards              POST /load /sync-memory
+briefs     GET  /dates /cards /memory-status   POST /load /sync-memory /light-load
 jobs       GET  ""                         POST /{job_id}/retry /cancel
 memory     GET  /overview /namespace/{ns}  POST /search
            DELETE /item/{id} /namespace/{ns}/source/{source_id} /namespace/{ns}
 speech     POST /transcribe /synthesize
-llmmemory  # 外部 LLM-Memory webui 的透传代理（/memory 页）
 ```
 
 注意：会话端点只有 list / get / delete / rename 四个，**没有** import/export（曾有 current/info，因无消费者已删）；`/api/v1/memory` 没有单条 item 的 GET 读取端点。

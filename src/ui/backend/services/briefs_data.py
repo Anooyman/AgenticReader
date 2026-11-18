@@ -9,16 +9,48 @@
 只有用户明确勾选"加载"的条目才进 queue。
 """
 import asyncio
+import logging
 
 from src.pipeline.briefs_parser import list_coverage_dates, parse_briefs_dir
 from src.pipeline.paths import BRIEFS_DIR, SUMMARIES_DIR
 from src.pipeline.queue_store import load_queue, new_queue_item, queue_transaction
+
+logger = logging.getLogger(__name__)
 
 # 卡片状态。not_loaded 之外的都意味着这条已经进过 queue。
 STATUS_NOT_LOADED = "not_loaded"      # 还没点过加载
 STATUS_QUEUED = "queued"              # 在 queue 里等待/正在处理
 STATUS_DONE = "done"                  # 处理完成，有摘要
 STATUS_FAILED = "failed"              # 失败（可重试或已熔断）
+
+
+def date_memory_counts() -> dict:
+    """按日期的**真实入库**计数：{date: {"aatf": n, "heavy_done": m}}。
+
+    - aatf：A 自库 AATF namespace 里 occurred_at 落在该日期的行数——
+      轻量入库是否真的写过这个库，以行数据为准；
+    - heavy_done：queue 里 pipeline_status=done 且 coverage_date 为该日
+      期的条目数。
+    刻意**不看任务账本**：旧 bridge driver 时代的 load_brief_date done
+    全写在外部 B 侧，A 自库行数为 0——按任务显示会把 65 天全标成"已入库"
+    的假状态（审计实锤：23 个 done ↔ 0 行 AATF）。
+    AATF 行读取失败只 warning + 跳过，不拖垮整个接口（heavy_done 仍要
+    给出）。两处都是小表/字典扫描，不解析 HTML。
+    """
+    counts = {}
+    try:
+        from src.memory import gateway  # 函数级 import：UI 服务层不往模块级拖记忆内核
+        for row in gateway.browse_all_rows("AATF"):
+            day = str(row.get("occurred_at") or "")[:10]
+            if day:
+                counts.setdefault(day, {"aatf": 0, "heavy_done": 0})["aatf"] += 1
+    except Exception:  # noqa: BLE001 - 库缺失/损坏不该让简报页报错
+        logger.warning("date_memory_counts: 读取 AATF 行失败，该维度按 0 计", exc_info=True)
+    for item in load_queue().values():
+        day = str(item.get("coverage_date") or "")
+        if day and item.get("pipeline_status") == "done":
+            counts.setdefault(day, {"aatf": 0, "heavy_done": 0})["heavy_done"] += 1
+    return counts
 
 
 def available_dates() -> list:

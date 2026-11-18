@@ -268,9 +268,10 @@ async def _run_job(job: dict) -> dict:
         return {"ok": True}
 
     if kind == "load_brief_date":
-        # 把一天的简报灌进 LLM-Memory 的记忆库（现驱动 namespace AATF）。
+        # 把一天的简报灌进 A 自库 memory（namespace AATF）。
         # target 就是一个 YYYY-MM-DD；gateway.load_brief_date 是 DA 分派槽位
-        # （MEMORY_BRIEF_DRIVER=bridge|local，现恒 bridge→brief_memory.load_date）。
+        # （MEMORY_BRIEF_DRIVER=local|bridge，缺省 local→brief_ingest 直写
+        #  自库，bridge 是 env 兜底走外部 webui）。
         from src.memory import gateway
 
         try:
@@ -284,7 +285,11 @@ async def _run_job(job: dict) -> dict:
             return {"error": f"加载简报 {target} 失败: {e}"}
 
         if not outcome.get("loaded"):
-            errors = outcome.get("errors") or ["外部服务没有写入任何条目"]
+            # skipped-only（该天早已入库 / 空日期）是正常结局不是失败——
+            # /briefs 的"轻量入库"按钮不区分已加载日期，重复点就走这里。
+            if outcome.get("skipped") and not outcome.get("errors"):
+                return {"ok": True, "detail": "已是最新，无新条目写入"}
+            errors = outcome.get("errors") or ["没有写入任何条目"]
             return {"error": f"加载简报 {target} 未完成: {'; '.join(errors)}"}
         # 日期本身处理了，但个别 kind 抽取/入库失败——任务算成功完成，把
         # 警告留在 job.detail 里让 UI 显示，别把整体判成失败。
