@@ -41,7 +41,10 @@
     btn.textContent = '下载中…';
     await window.PaperIngest.start(url, (s) => {
       if (s.phase === 'indexing') {
-        btn.textContent = s.status === 'exists' ? '已在 PDF 库，检查索引…' : '已下载，索引中…';
+        // exists 分支现在会如实带话：索引已在位、还是刚补排了一次——有 note
+        // 就展示后端的说法，别统一刷成"检查索引…"让用户猜。
+        btn.textContent = s.note || (s.status === 'exists' ? '已在 PDF 库，检查索引…' : '已下载，索引中…');
+        if (s.note) btn.title = s.note;
       } else if (s.phase === 'indexed') {
         btn.textContent = '✅ 已入库';
         btn.classList.add('ok');
