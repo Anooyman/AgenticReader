@@ -5,11 +5,10 @@
 
 并发模型见 queue_transaction 的说明——这是全项目唯一允许写 queue 的路径。
 """
-import fcntl
+from src.core import filelock
 import json
 import os
 from contextlib import contextmanager
-from pathlib import Path
 
 from src.pipeline.paths import STATE_DIR, write_json_atomic
 
@@ -53,14 +52,14 @@ def queue_transaction():
     别在事件循环里直接阻塞。
     """
     QUEUE_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(QUEUE_LOCK_PATH, os.O_CREAT | os.O_RDWR)
+    fd = os.open(QUEUE_LOCK_PATH, os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        filelock.acquire(fd)
         queue = load_queue()
         yield queue
         save_queue(queue)
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        filelock.release(fd)
         os.close(fd)
 
 

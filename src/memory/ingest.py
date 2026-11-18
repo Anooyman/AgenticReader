@@ -47,17 +47,19 @@ def _source_lock(namespace: str, source_id: str):
     """同一 (namespace, source_id) 的 ingest 排他锁——防止同一篇文档/同一
     session 被并发 ingest 两次时互相覆盖（chat_ingest 的定期扫描 worker 和
     手动触发的补灌可能同时命中同一个 source_id）。"""
-    import fcntl
+    # Portable on purpose: a POSIX-only flock here is not "works on Linux", it
+    # is "silently no mutual exclusion" the first time this runs on Windows.
+    from src.core import filelock
 
     os.makedirs(LOCK_DIR, exist_ok=True)
     key = hashlib.sha256(f"{namespace}:{source_id}".encode("utf-8")).hexdigest()[:16]
     lock_path = os.path.join(LOCK_DIR, f"{key}.lock")
-    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        filelock.acquire(fd)
         yield
     finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        filelock.release(fd)
         os.close(fd)
 
 
