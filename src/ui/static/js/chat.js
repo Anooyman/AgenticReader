@@ -1070,11 +1070,17 @@ class ChatApp {
         // Send message with tool/doc context
         // session_id：服务端按它把消息写入对应的会话文件，缺省时服务端
         // 会退回到"最近活跃会话"（兼容旧客户端）。
+        //
+        // enabled_tools 现在是真的开关，不只是展示用元数据：服务端按它决定
+        // 哪些工具可以交给编排模型（search_web 只在启用时才在场）。所以
+        // 这里必须**原样**把当前列表发出去、空数组也发——旧写法把它在
+        // 空的时候压成 null，服务端就会退回上一次的取值，结果是"关掉网络
+        // 搜索"这一动作到不了工具层。
         this.ws.send(JSON.stringify({
             type: 'user_message',
             message: message,
             session_id: this.sessionId || null,
-            enabled_tools: this.enabledTools.length > 0 ? this.enabledTools : null,
+            enabled_tools: this.enabledTools,
             selected_docs: this.selectedDocs
         }));
 

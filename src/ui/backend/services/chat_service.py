@@ -4,14 +4,17 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from src.agents.answer import AnswerAgent
 from src.agents.orchestrator import ask as orchestrator_ask
+from src.config.settings import resolve_provider
 from .session_manager import SessionManager
-from ..api.v1.config import load_config
 
 # Orchestrator 的 sub-agent name -> 展示用 agent 标签，用于写入 session 的
 # agents_used（沿用旧 UI 里 RetrievalAgent/SearchAgent 这类标签习惯）。
 _SOURCE_TO_AGENT_LABEL = {
     "search_memory": "MemorySearch",
     "deep_dive_document": "DeepDive",
+    # 第三个子 agent：网络搜索。工具名与 AnswerAgent 侧的 ANSWER_TOOLS 保持
+    # 同名（search_web），标签按 UI 既有风格另起。
+    "search_web": "WebSearch",
 }
 
 
@@ -115,8 +118,14 @@ class ChatService:
             # （真正的问答走 Orchestrator，deep_dive_document 子 agent 内部
             # 会自己按需实例化 AnswerAgent，这里不再需要长期持有一个带
             # 历史状态的实例）。
-            config = load_config()
-            provider = config.get("provider", "openai")
+            #
+            # provider 一律经 resolve_provider(None) 取——这里曾经是
+            # `load_config().get("provider", "openai")`：load_config 的默认
+            # 字典恒含 "provider": "openai" 这个键，于是显式值一路短路
+            # resolve_provider 的"app_config → env PROVIDER → openai"链，
+            # 只在 .env 里设了 PROVIDER 的环境会出现"文档索引用 azure、
+            # 聊天用 openai"这种分裂，且没有任何日志能解释来源。
+            provider = resolve_provider(None)
             print(f"📌 使用 LLM Provider: {provider}")
 
             if self.selected_docs and "retrieve_documents" in self.enabled_tools:
@@ -209,7 +218,9 @@ class ChatService:
 
             # Orchestrator 自己管理对话历史，这里从会话文件里取（在保存本次
             # 用户消息之前读取，避免在 messages 里重复出现这条消息）。
-            history = self.session_manager.get_session_history_for_llm(session)
+            # 长会话由 SessionManager 做窗口化 + 早期摘要，不再原样把整段
+            # 历史灌给编排模型（详见 session_manager.history_for_llm_async）。
+            history = await self.session_manager.history_for_llm_async(session)
 
             # 保存用户消息
             self.session_manager.save_message(
@@ -237,9 +248,15 @@ class ChatService:
                 namespaces=memory_namespaces,
                 history=history,
                 on_progress=on_progress,
-                # 与文档校验路径同源：/config 页选的 provider 真正贯通到
-                # 编排 LLM 与全部子 agent（此前 orchestrator 内部写死 openai）。
-                provider=load_config().get("provider"),
+                # provider 留空让 ask() 自己走 resolve_provider(None)——与
+                # 上面文档校验路径同一个解析入口，一次提问里编排 LLM 和全部
+                # 子 agent 用的都是它。（此前这里传 load_config().get(...)，
+                # 等于把 env PROVIDER 这一级从聊天主线上抹掉了。）
+                #
+                # enabled_tools 现在是真的进工具集了，不再是纯展示元数据：
+                # 前端的「🌐 网络搜索」开关会决定 search_web 要不要广告给
+                # 编排模型，见 orchestrator/agent.py 的 _advertised_tools。
+                enabled_tools=list(current_tools or []),
             )
 
             final_answer = result.get("answer", "")
@@ -344,8 +361,39 @@ class ChatService:
         return self.session_manager.list_sessions(limit)
 
     def delete_session(self, session_id: str):
-        """删除指定会话"""
+        """删除指定会话，并把它在记忆侧留下的痕迹一起回收
+
+        顺序是有讲究的，两步都不许反：
+        1. 先让 SessionManager 删文件——文件不存在它抛 FileNotFoundError
+           （API 层据此回 404），此时后面两步一概不做，免得对着一个根本
+           没删掉的会话做"回收"。
+        2. 再清 memory 行：这条会话经 chat_ingest 车道写进 webapp-chat 的
+           那批 chunk，source_id 就是 session_id，不删的话用户删了会话
+           却还在 /chat 里被"我记得上次我们聊过…"召回——这是最要命的
+           隐私泄漏面，比占地方严重得多。
+        3. 最后清 chat_ingest 的水位线条目，否则那个键会永久留在
+           chat_ingest_state.json 里（扫描只认现存的 session 文件）。
+
+        记忆回收失败不能把删除动作拖失败：会话文件已经没了，回滚没有意义，
+        所以两步都是尽力而为 + 打日志——把异常抛回调用方只会让人以为"会话
+        没删掉"而多点一次删除。
+        """
         self.session_manager.delete_session(session_id)
+
+        memory_deleted = 0
+        try:
+            from src.memory import gateway  # 函数级：service 层不往模块级拖记忆内核
+            memory_deleted = gateway.delete_source(gateway.NAMESPACE_WEBAPP_CHAT, session_id)
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️  会话 {session_id} 的记忆行清理失败（会话已删除，记忆需手动清）: {e}")
+        try:
+            from .chat_ingest import forget_session
+            forget_session(session_id)
+        except Exception as e:  # noqa: BLE001
+            print(f"⚠️  会话 {session_id} 的入库水位线条目清理失败: {e}")
+        if memory_deleted:
+            print(f"🧹 已回收会话 {session_id} 的 webapp-chat 记忆行 {memory_deleted} 条")
+
         # 该会话已不存在，顺带清掉它的进度回调，避免残留引用
         self.unregister_progress_callback(session_id)
         if self.current_session and self.current_session["session_id"] == session_id:

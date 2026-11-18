@@ -82,6 +82,30 @@ def _save_state(state: dict) -> None:
     write_json_atomic(STATE_PATH, state)
 
 
+def forget_session(session_id: str) -> bool:
+    """删掉水位线里某个会话的条目——会话文件已经没了，这条水位线就是纯粹的
+    垃圾：sweep 只会扫现存的 session 文件，永远不会再读到这个 id。
+
+    由 chat_service.delete_session 调用（对话被用户删掉的那一刻）。这里
+    只负责水位线，不碰 memory 本体——记忆行的回收走
+    src/memory/gateway.delete_source，见 chat_service 那边的顺序说明。
+
+    并发上的一个小坑，记录下来而不是另外发明一套锁：worker 的 ingest_session
+    是"先 _load_state 再 _save_state"，如果删除正好插在一次进行中的
+    ingest 中间，那次 save 会把它手里的旧副本写回去、把这个条目又带回来。
+    窗口极窄（要一次 ingest 恰好在跑，而 ingest 的触发条件本来就是"会话
+    已静默 120 秒"），后果也只是留一条无用条目，不影响正确性；下次删除
+    或会话目录扫描都不会重新引用它。
+    """
+    state = _load_state()
+    if session_id not in state.get("sessions", {}):
+        return False
+    state["sessions"].pop(session_id, None)
+    _save_state(state)
+    logger.info("已清理对话入库水位线: %s", session_id)
+    return True
+
+
 def _parse_ts(value: str):
     if not value:
         return None
