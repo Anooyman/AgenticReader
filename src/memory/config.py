@@ -16,6 +16,7 @@ from src.config.settings import (
     DATA_ROOT,
     get_embedding_model_env_var,
     get_embedding_model_name,
+    resolve_provider,
 )
 
 logger = logging.getLogger(__name__)
@@ -117,16 +118,23 @@ def _log_dimension_check(provider: str, model_name: Optional[str]) -> None:
         )
 
 
-def get_embedding_dimensions(provider: str = "azure") -> int:
+def get_embedding_dimensions(provider: Optional[str] = None) -> int:
     """按当前配置的 embedding 模型名解析向量维度。解析不到时回退到 1536
     （text-embedding-ada-002 的维度，也是本项目目前所有 provider 的默认模型），
     不抛异常——维度只影响建表 schema，不该在配置加载阶段就让整个记忆子系统
     无法初始化。
 
+    provider 缺省时走 settings.resolve_provider(None) 而不是写死 "azure"：
+    默认值曾经让"调用方懒得传 provider"的路径按 azure 的 embedding 模型查
+    维度表，而实际建库用的是 app_config/env 选中的那个 provider——两边模型
+    不一样时维度就错配了（错配的后果按 provider 而定：建表能过、写入静默
+    失败）。缺省即"跟全仓 provider 决策链一致"，与 gateway._store() 的调用
+    方式统一。
+
     模型名走 settings.get_embedding_model_name()，与 client.py / providers.py
     创建 embedding 实例时读到的是同一个值；模型名不在已知维度表里时打 ERROR
     （见 _log_dimension_check），避免静默按 1536 建表写坏 LanceDB 库。"""
-    provider = (provider or "azure").lower()
+    provider = (provider or resolve_provider(None)).lower()
     model_name = get_embedding_model_name(provider)
     _log_dimension_check(provider, model_name)
     if model_name is None:

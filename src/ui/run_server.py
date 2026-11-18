@@ -30,6 +30,32 @@ def resolve_host() -> str:
     return host
 
 
+def resolve_log_level() -> str:
+    """uvicorn 的日志级别：读 data/config/app_config.json 的 log_level 键
+    （/config 页写入的即此键），无效/缺失一律退 "info"。
+
+    注意这只是 uvicorn 自身访问日志的级别；应用日志级别写死在
+    src/core/llm/client.py 的 basicConfig(level=INFO)（全仓另有多处各自
+    basicConfig，见该文件注释的统一说明），两者是两回事。README 里宣传的
+    LOGGING_LEVEL 环境变量已无任何代码读取，别再引用它。"""
+    raw = ""
+    try:
+        import json
+        from src.config.settings import APP_CONFIG_FILE  # 单一事实源
+        if APP_CONFIG_FILE.exists():
+            raw = str(json.loads(APP_CONFIG_FILE.read_text(encoding="utf-8"))
+                      .get("log_level") or "")
+    except Exception as e:  # 配置缺失/损坏不该挡住启动
+        logging.getLogger(__name__).warning("读取 app_config.log_level 失败，用 info: %s", e)
+    level = raw.strip().lower()
+    if level not in {"critical", "error", "warning", "info", "debug", "trace"}:
+        if raw:
+            logging.getLogger(__name__).warning(
+                "app_config.log_level=%r 不是 uvicorn 认可的级别，按 info 处理", raw)
+        return "info"
+    return level
+
+
 def setup_windows_optimizations():
     """Windows 平台优化配置"""
     if sys.platform != "win32":
@@ -109,7 +135,7 @@ if __name__ == "__main__":
             port=port,
             reload=True,
             reload_excludes=["*.pyc", "__pycache__", ".venv/*", ".git/*", "*.egg-info"],
-            log_level="info"
+            log_level=resolve_log_level()
         )
     except KeyboardInterrupt:
         print("\n\n👋 服务器已停止")

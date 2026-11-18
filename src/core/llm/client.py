@@ -43,7 +43,14 @@ from src.core.llm.providers import (
 )
 
 logging.basicConfig(
-    level=logging.INFO,  # 可根据需要改为 DEBUG
+    # 全仓 5 处模块级 basicConfig 之一（另见 vector_db_client.py、
+    # document_management/{indexer,manager}.py、main.py）。Python 的
+    # basicConfig 只在 root logger 未配置时生效——即"第一个被 import 的"
+    # 那处赢，其余静默无效，想调 DEBUG 改这里未必管用；先确认进程入口。
+    # 注意 LOGGING_LEVEL 环境变量没有任何代码读取，README 的说法已过时；
+    # UI 侧 uvicorn 的日志级别另走 app_config.json 的 log_level 键
+    # （src/ui/run_server.py:resolve_log_level）。
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 logger = logging.getLogger(__name__)

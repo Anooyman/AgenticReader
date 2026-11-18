@@ -21,7 +21,7 @@ AgenticReader 是基于大语言模型（LLM）的智能文档分析与问答工
 - **AnswerAgent**：确定性单轮问答图——`rewrite_query → plan → (execute → generate | generate) → END`；plan 按用户勾选的工具纯代码构造调用（无 LLM 决策、无回环）
 - **RetrievalAgent**：单/多文档 ReAct 检索循环（语义检索 + 观察 + 总结）
 - **SearchAgent**：网络搜索与 URL 分析（DuckDuckGo MCP 搜索 + web_scraper MCP 爬取；大内容自动转索引后对话）
-- **Orchestrator**：Web 聊天的真正入口，ReAct 循环自主决定调用 `search_memory`（查长期记忆）和/或 `deep_dive_document`（深挖某文档原文），多个工具调用并行执行
+- **Orchestrator**：Web 聊天的真正入口，ReAct 循环自主决定调用 `search_memory`（查长期记忆）、`deep_dive_document`（深挖某文档原文），会话勾了"网络搜索"时还能调 `search_web`（→ SearchAgent），多个工具调用并行执行；工具集按会话的启用勾选裁剪（前两个恒开，第三个要开关才进）
 
 ### 📄 文档处理
 - PDF 转图片逐页解析、目录/章节结构自动检测、章节级分块
@@ -155,11 +155,11 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 | 页面 | 地址 | 用途 |
 |---|---|---|
 | 仪表板 | `/` | 已索引文档概览、快速索引、进入聊天 |
-| 智能聊天 | `/chat` | WebSocket 实时对话（走 Orchestrator），Markdown/LaTeX 渲染，勾选工具与文档，消息带 MemorySearch/DeepDive 标签 |
+| 智能聊天 | `/chat` | WebSocket 实时对话（走 Orchestrator），Markdown/LaTeX 渲染，勾选工具与文档，消息带 MemorySearch/DeepDive/WebSearch 标签 |
 | 数据管理 | `/data` | 存储总览、按文档删除四类产物（JSON/向量库/图片/摘要）、批量删除、智能清理、会话统计、Memory tab |
-| 配置中心 | `/config` | 切换 provider、系统设置（落 `data/config/app_config.json`） |
+| 配置中心 | `/config` | 切换 provider、每 provider 多模型的注册表（增删/设为当前/一键测试）、系统设置（落 `data/config/app_config.json`） |
 | 结构编辑器 | `/structure` | 编辑文档章节 structure.json 并重建摘要/索引，PDF 在线预览 |
-| 每日简报 | `/briefs` | 浏览 `BRIEFS_DIR` 简报条目，勾选加载进管线队列，"轻量入库(全天)"直写 AATF 记忆，查看后台任务 |
+| 每日简报 | `/briefs` | 浏览 `BRIEFS_DIR` 简报条目，勾选加载进管线队列，"轻量入库(全天)"直写 AATF 记忆，卡片里的论文可一键下载入库（`POST /briefs/fetch-pdf` 落 `data/pdf` + 后台索引），查看后台任务 |
 | ~~简报记忆桥接~~ | `/memory` | 已退役——职责并入 `/briefs`（外部 LLM-Memory 桥仅剩 env 兜底路），老书签自动 302 |
 | API 文档 | `/docs` `/redoc` | FastAPI 自动生成 |
 | 健康检查 | `/health` | status / timestamp / version |
@@ -219,7 +219,7 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 | `DEBUG` | WebSocket 调试输出开关（`true` 开启），默认关闭 |
 
 **两个常见误解**
-- **没有 `LOGGING_LEVEL` 环境变量**：代码不读取它，日志级别写死在 `src/core/llm/client.py` 的 `logging.basicConfig(level=logging.INFO)`，调 DEBUG 需改这一行。
+- **没有 `LOGGING_LEVEL` 环境变量**：代码不读取它。应用日志级别写死在 `src/core/llm/client.py` 的 `logging.basicConfig(level=logging.INFO)`（全仓共 5 处同样的 basicConfig，只有第一个生效的算数），调 DEBUG 改这些行；uvicorn 自身的访问日志级别则读 `data/config/app_config.json` 的 `log_level` 键（`src/ui/run_server.py:resolve_log_level`，/config 页写入的就是这个键，无效值按 info 处理）。
 - **没有前端会话存储**：会话一律服务端落盘，localStorage 仅保存主题偏好（`base.html` 的 `AgenticReader_theme` 键）。
 
 ---
@@ -235,7 +235,7 @@ AgenticReader/
 │   ├── answer/                 #   AnswerAgent（tools_config.py 注册工具；components/ 选档·综合·格式化）
 │   ├── retrieval/              #   RetrievalAgent（ReAct 检索）
 │   ├── search/                 #   SearchAgent（utils.py 内置 SimpleMCPClient，stdio 传输）
-│   └── orchestrator/           #   Orchestrator + sub_agents/（memory_search、deep_dive）
+│   └── orchestrator/           #   Orchestrator + sub_agents/（memory_search、deep_dive、search_web）
 ├── src/config/                 # settings.py（LLM/Embedding/MCP 配置）、constants.py、
 │   └── prompts/                #   model_overrides.py；prompts 仅 metadata_prompts.py
 ├── src/core/
@@ -243,7 +243,10 @@ AgenticReader/
 │   ├── llm/                    # client（LLMBase + 日志 + embeddings 缓存）/ providers / history
 │   ├── parallel/               # indexing.py（ChapterProcessor）/ retrieval.py（ParallelRetrievalCoordinator）
 │   └── vector_db/              # vector_db_client（FAISS + 轮次去重 + 索引缓存）/ metadata_db
-├── src/memory/                 # LanceDB 长期记忆（config / ingest / search / brief_ingest / vector_store / adapters）
+├── src/memory/                 # LanceDB 长期记忆（config / gateway / ingest / search / brief_ingest / migrate_aatf / vector_store / adapters）
+│                               #   brief_ingest=「轻量入库(全天)」直写 AATF 的实现体；
+│                               #   migrate_aatf 是一次性 A→B 库迁移 CLI，
+│                               #   用前先 --dry-run 看清单再实跑
 ├── src/pipeline/               # 简报管线（briefs_parser / queue_store / process_pdf_queue /
 │                               #   process_web_queue / generate_qa_brief / render_report / sync_* / paths）
 ├── src/services/scraper/       # Playwright 抓取包（core/browser·downloader·extractor·anti_detection、
@@ -279,7 +282,7 @@ data/
 └── doc_registry.json  # 文档注册表
 ```
 
-**对话数据流**：`/ws/chat` → `chat_service` → **Orchestrator.ask()**（ReAct：可自主调用 `search_memory` → `src/memory/search.py` 的 `agentic_search`，`deep_dive_document` → AnswerAgent 深挖原文；带轮次/上下文/超时三重护栏）。CLI 则由 `main.py` 直接驱动 AnswerAgent / SearchAgent。
+**对话数据流**：`/ws/chat` → `chat_service` → **Orchestrator.ask()**（ReAct：可自主调用 `search_memory` → `src/memory/search.py` 的 `agentic_search`、`deep_dive_document` → AnswerAgent 深挖原文、`search_web` → SearchAgent 联网搜索，后者按会话开关启用；带轮次/上下文/超时三重护栏）。长会话历史由 `session_manager.history_for_llm_async` 窗口化：最近 20 条原文 + 更早部分增量摘要，摘要失败退化为纯截断。CLI 则由 `main.py` 直接驱动 AnswerAgent / SearchAgent。
 
 **索引数据流**：上传/选择 PDF → IndexingAgent 图（check_cache → parse → extract_structure → chunk → process_chapters → build_index → generate_brief_summary → register），出错短路直达 register 且不会标成 completed。
 
@@ -292,28 +295,31 @@ data/
 ```
 documents  GET  /list /available-pdfs      POST /upload /index       DELETE /{doc_name}
 chat       POST /initialize /clear         GET  /load-more-messages
-sessions   GET  /list /{id}  DELETE /{id}  PATCH /{id}/rename
+sessions   GET  /list /{id}  DELETE /{id}  PATCH /{id}/rename /{id}/memory-scope
 pdf        GET  /view/{doc_name}           # PDF 页面图
 structure  GET|PUT /{doc_name}             POST /{doc_name}/rebuild
 config     GET  ""                         POST /provider /system /reset
+               GET  /models                POST /models /models/test
 data       GET  /overview /documents /documents/{name}/summary /documents/pending
                /sessions/stats /tasks/{task_id}
            POST /documents/{filename}/index /cleanup/smart
            DELETE /pdfs /documents/{name}/parts /documents
 briefs     GET  /dates /cards /memory-status   POST /load /sync-memory /light-load
+               POST /fetch-pdf                 # 论文 PDF 拉进 data/pdf 并触发后台索引
 jobs       GET  ""                         POST /{job_id}/retry /cancel
 memory     GET  /overview /namespace/{ns}  POST /search
            DELETE /item/{id} /namespace/{ns}/source/{source_id} /namespace/{ns}
 speech     POST /transcribe /synthesize
 ```
 
-注意：会话端点只有 list / get / delete / rename 四个，**没有** import/export（曾有 current/info，因无消费者已删）；`/api/v1/memory` 没有单条 item 的 GET 读取端点。
+注意：会话端点是 list / get / delete / rename 加一个 `PATCH /{id}/memory-scope`（设定这条会话检索哪些记忆 namespace，缺省 ai-research + webapp-chat，AATF 需显式勾选）——**没有** import/export（曾有 current/info，因无消费者已删）；`/api/v1/memory` 没有单条 item 的 GET 读取端点；页面侧 `/memory` 已退役，302 重定向到 `/briefs`。`DELETE /sessions/{id}` 会顺带按 source 回收这条会话写进 `webapp-chat` 的记忆行并清理 chat_ingest 水位线（尽力而为，失败只记日志）。
 
 ## 安全说明
 
 - 默认仅监听 `127.0.0.1`，CORS 默认只放行本机来源——应用面向本地使用，未做鉴权；改 `HOST` 对外暴露前请自行加防护。
 - 所有按文档名拼数据目录的 API 都过 `safe_path()`（`src/utils/path_guard.py`）防目录穿越。
 - 删除操作收敛在 `delete_service.py` 单点实现，配合路径校验。
+- `POST /briefs/fetch-pdf` 是服务端发起的抓取：scheme 限 http(s)，目标主机解析后过内网/云元数据/保留地址黑名单，重定向由后端逐跳跟且每跳重校验（没有主机白名单，arxiv 与公网照常可达）；与 SearchAgent 的抓取面同级。
 
 ---
 

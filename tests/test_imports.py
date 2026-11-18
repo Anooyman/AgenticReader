@@ -30,6 +30,9 @@ TOP_LEVEL_MODULES = [
     "src.memory",
     "src.memory.gateway",
     "src.memory.brief_ingest",
+    # A→B 库的 AATF 迁移 CLI：一次性工具但仍是记忆子系统的一部分，
+    # 断了它的 import 就等于把迁移路径静默埋了（模块级 import 都在这）
+    "src.memory.migrate_aatf",
     "src.agents",
     "src.agents.indexing",
     "src.agents.answer",

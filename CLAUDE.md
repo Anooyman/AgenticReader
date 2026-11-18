@@ -53,7 +53,7 @@ uvicorn src.ui.backend.app:app --reload --port 8000
 ```
 
 注意两点与旧文档不同的事实：
-- `LOGGING_LEVEL` 环境变量现在**没有被任何代码读取**（README 里仍提及，属过时说明）。日志级别写死在 `src/core/llm/client.py:43` 的 `basicConfig(level=INFO)`，要调 DEBUG 需改这里或在入口自行配置。
+- `LOGGING_LEVEL` 环境变量现在**没有被任何代码读取**（README 里仍提及，属过时说明）。应用日志级别来自各入口的 `logging.basicConfig(level=INFO)`——全仓 5 处（`src/core/llm/client.py:45`、`src/core/vector_db/vector_db_client.py:16`、`src/core/document_management/{indexer,manager}.py:41/45`、`main.py:32`），Python 语义下只有第一个生效者算数，其余静默无效；uvicorn 的访问日志级别则读 `data/config/app_config.json` 的 `log_level` 键（`src/ui/run_server.py:resolve_log_level`，/config 页写入的就是它，无效值退 info）。
 - 前端**没有** localStorage 双存储架构——localStorage 仅用于主题偏好（`src/ui/templates/base.html:12` 的 `AgenticReader_theme`），会话数据一律服务端落盘。
 
 ### 测试
@@ -86,6 +86,8 @@ src/
 │   ├── search/               # SearchAgent（搜索引擎 + URL 分析，MCP 驱动）
 │   └── orchestrator/         # Orchestrator（UI chat 的入口，ReAct 编排）
 │       └── sub_agents/       # memory_search（→src.memory）、deep_dive（→AnswerAgent）
+│                             #   search_web（→SearchAgent；要会话开开关才进）
+│                             #   ALWAYS_ON_TOOLS = 前两个，恒开
 ├── config/
 │   ├── settings.py           # LLM_CONFIG / LLM_EMBEDDING_CONFIG / MCP_CONFIG / 路径
 │   ├── constants.py          # ProcessingLimits / RetrievalDedupConfig / PathConstants 等
@@ -98,6 +100,10 @@ src/
 │   ├── parallel/             # indexing.py(ChapterProcessor 等) / retrieval.py(ParallelRetrievalCoordinator)
 │   └── vector_db/            # vector_db_client.py(FAISS+轮次去重) / metadata_db.py
 ├── memory/                   # LanceDB 长期记忆（见 "Memory System"）
+│   ├── gateway.py            # 读写/浏览/删除/桥接的唯一出入口 + load_brief_date 驱动分派
+│   ├── brief_ingest.py      # /briefs"轻量入库"的实现体：解析卡片直写 AATF，零 LLM、chunk-hash 幂等
+│   │                        #   （一次性 A→B 库迁移另见 migrate_aatf.py，
+│   │                        #    python -m src.memory.migrate_aatf --dry-run）
 │   └── adapters/             # ai_research / webapp_chat / chunking / base
 ├── pipeline/                 # 每日简报批处理（briefs_parser / queue_store / common(队列处理骨架) / process_pdf_queue /
 │                             #   process_web_queue / sync_* / generate_qa_brief / render_report / paths）
@@ -205,7 +211,7 @@ CLI: main.py [i] → core/document_management/indexer.py index_pdf_document()
 
 ### 对话
 - **CLI**（`main.py`）：四种绑定模式最终都调 `AnswerAgent.query()` / graph.ainvoke——单文档、跨文档自动选档（DocumentSelector 按 registry 的 brief_summary 选）、跨文档手动选档、通用模式；网络搜索模式 [w] 直接调 `SearchAgent.search()`（provider 走 `settings.resolve_provider(None)`：app_config.json → env `PROVIDER` → openai）。
-- **UI**：`/ws/chat` 或 `/api/v1/chat/initialize` → `chat_service.chat()` → **Orchestrator.ask()**。Orchestrator 的 LLM 自主决定调用 `search_memory`（同进程直调 `src.memory.search.agentic_search`，namespace 缺省全部）和/或 `deep_dive_document`（调 AnswerAgent 深挖某 doc 原文）。会话消息经 SessionManager 存 `data/sessions/{id}.json`，消息带 `agents_used` 展示标签。
+- **UI**：`/ws/chat` 或 `/api/v1/chat/initialize` → `chat_service.chat()` → **Orchestrator.ask()**。Orchestrator 的 LLM 自主决定调用 `search_memory`（同进程直调 `src.memory.search.agentic_search`，缺省作用域是自库白名单 ai-research + webapp-chat，session 级 `memory_namespaces` 可放宽到 AATF）、`deep_dive_document`（调 AnswerAgent 深挖某 doc 原文）与第三个子 agent `search_web`（→ `src.agents.search.SearchAgent`：DuckDuckGo MCP 搜索 / URL 抓取；仅在会话开启网络搜索时才进工具集）。长会话历史由 `session_manager.history_for_llm_async` 做窗口化——最近 20 条原文 + 更早部分做增量摘要，`MAX_CONTEXT_CHARS` 从首轮请求就检查，摘要失败退化为纯截断。会话消息经 SessionManager 存 `data/sessions/{id}.json`，消息带 `agents_used` 展示标签与本轮 `memory_hits`（供 UI 渲染"提及论文"条目）。
 - **SearchAgent**（`src/agents/search/`）：双 use case——搜索引擎检索（DuckDuckGo MCP 搜索 → 选 URL → web_scraper MCP 爬取）或 URL 分析（直接爬取；内容超阈值自动调 IndexingAgent 索引后转文档对话式回答，策略字段 `index_then_chat`/`direct_chat`）。
 
 ### 每日简报管线（UI 后台驱动）
@@ -279,7 +285,7 @@ SearchAgent 用到 stdio 一种传输，薄封装就地维护即可）。
 
 ## REST API Quick Reference（当前全部实际路由）
 
-前缀均为 `/api/v1`，注册于 `app.py:89-103`。`/` 开头的是页面路由。
+前缀均为 `/api/v1`，注册于 `app.py:92-109`。`/` 开头的是页面路由。
 
 ```
 Pages:   GET /  /chat  /config  /data  /structure  /briefs  /memory→302 到 /briefs
@@ -288,19 +294,45 @@ Health:  GET /health                  # app.py 内联定义
 
 documents: GET /list /available-pdfs | POST /upload /index | DELETE /{doc_name}
 chat:      POST /initialize /clear    | GET  /load-more-messages
-sessions:  GET /list /{id} | DELETE /{id} | PATCH /{id}/rename
+sessions:  GET /list /{id} | DELETE /{id} | PATCH /{id}/rename /{id}/memory-scope
 pdf:       GET /view/{doc_name}                   # 页面图（专用 images/image 路由已删，走 view 降级）
 structure: GET|PUT /{doc_name} | POST /{doc_name}/rebuild
-config:    GET "" | POST /provider /system /reset       # 落 data/config/app_config.json
+config:    GET "" | GET /models | POST /provider /system /reset /models /models/test
+           # 落 data/config/app_config.json；/models 是每 provider 多模型的
+           # 注册表读写，/models/test 用它发一次最小对话验通。
+           # POST /models 若读到的是坏掉的 app_config.json 会拒绝写入并回
+           # 500 + warning——绝不以空 dict 起盘回写，那样会把 provider 等
+           # 其它键一起抹掉
 data:      GET /overview /documents /documents/{name}/summary /documents/pending
            /sessions/stats /tasks/{task_id}
            POST /documents/{name}/index  DELETE /pdfs /documents/{name}/parts /documents
            POST /cleanup/smart?days=N
-briefs:    GET /dates /cards /memory-status  | POST /load /sync-memory /light-load
+briefs:    GET /dates /cards /memory-status  | POST /load /sync-memory /light-load /fetch-pdf
            # 数据层 services/briefs_data.py；/light-load 是日期级轻量入库
            # （load_brief_date 任务，写 AATF）；/memory-status 返回各日期
            # 真实入库计数 {dates:{d:{aatf,heavy_done}}}——按 A 自库行+queue
            # 事实而非任务账本（bridge 时代 done ≠ A 自库有数据）
+           # /fetch-pdf 下载并索引论文 PDF，与 documents 共用同一条
+           # IndexingAgent 后台流。终态行为：
+           #   * 临时文件唯一名 `{name}.part.{pid}.{tid}.{uuid8}` +
+           #     os.replace 原子换名，清理只删自己那一份——路由虽是 async，
+           #     同一 doc 的并发请求会落在同一线程上，pid+tid 撞车概率不为零，
+           #     所以再加 uuid 熵。
+           #   * SSRF 加严：scheme 限 http(s)；主机解析后过黑名单，拦
+           #     127/8、::1、RFC1918、169.254/16（云元数据）、100.64/10、
+           #     ULA 与文档保留段，::ffff: 映射按 IPv4 判。**没有做白名单**，
+           #     arxiv 与公网照常可达；重定向由后端自己逐跳跟（httpx 的
+           #     follow_redirects 已关），每跳重过同一道校验。
+           #   * 已声明的信任边界：抓取面与 SearchAgent 同级；DNS 重绑定的
+           #     TOCTOU 窗口承认存在，不为此单造锁。
+           #   * exists 分支返回四态 indexed / not_indexed / indexed_elsewhere
+           #     / unknown 加 note；`force:true` 是重下入口，前端只在确认
+           #     "文件在但没索引"后才带 force 重试。indexed_elsewhere 的
+           #     语义定调为**不谎称已索引、不补排**——registry 里带版本号
+           #     的名字对应另一个文件，补排等于多花一份 LLM 成本并在
+           #     registry 里裂出条目，所以前端只展示真名。
+           #   * pdf_preset 取 /config 当前值（config.get_current_pdf_preset），
+           #     provider 走 resolve_provider 链——此前写死 preset 的问题已修。
 jobs:      GET "" | POST /{job_id}/retry /cancel        # 任务账本见 job_runner + webapp_jobs.json
 memory:    GET /overview /namespace/{ns} / POST /search
            DELETE /item/{id} /namespace/{ns}/source/{source_id} /namespace/{ns}
@@ -310,8 +342,8 @@ speech:    POST /transcribe /synthesize
 ## UI Features（现状速览）
 
 - FastAPI + Jinja2 + 原生 ES6 JS，无框架；WebSocket `/ws/chat` 实时对话，REST 做初始化/历史分页。
-- **UI 聊天走 Orchestrator 而非 AnswerAgent**：`enabled_tools`/`selected_docs` 只是透传给会话上下文的元数据，真正的工具决策在 Orchestrator 的 ReAct 循环里；`agents_used` 由子 agent name 映射成展示标签（MemorySearch/DeepDive）。
-- 会话存储：`data/sessions/{session_id}.json` 平铺（SessionManager 自动迁移旧 mode 子目录）；会话 API 为 list/get/delete/rename——**没有** import/export，原 current/info 端点因无消费者已删。
+- **UI 聊天走 Orchestrator 而非 AnswerAgent**：工具决策在 Orchestrator 的 ReAct 循环里，而 **`enabled_tools` 现在真的决定广告给模型的工具集**——`search_memory` 与 `deep_dive_document` 恒开，`search_web` 只有会话勾了"网络搜索"才进（`ALWAYS_ON_TOOLS | (enabled_tools ∩ _TOOL_SCHEMAS)`，`enabled_tools=None` 表示调用方不管工具这回事＝全开，保持老行为）；`selected_docs` 仍是会话上下文元数据并派生出 doc_name 供深挖用。`agents_used` 标签集合：MemorySearch / DeepDive / **WebSearch**（manage.js 暂无该图标，纯文本显示）。
+- 会话存储：`data/sessions/{session_id}.json` 平铺（SessionManager 自动迁移旧 mode 子目录）；会话 API 为 list/get/delete/rename 外加 `PATCH /{id}/memory-scope`（该会话检索哪些记忆 namespace，缺省 ai-research + webapp-chat，AATF 需显式勾选，校验集合见 sessions.py）——**没有** import/export，原 current/info 端点因无消费者已删。**DELETE `/sessions/{id}`** 现在还会按 source 回收这条会话写进 `webapp-chat` 的记忆行并清掉 chat_ingest 的水位线条目（顺序固定：先删文件→再清记忆→最后清水位线；后两步尽力而为，失败只打日志不把删除拖失败）。
 - 数据管理页 `/data`：总览、按文档列 JSON/向量库/图片/摘要四类产物、部分/批量删除（`/api/v1/data/documents/{name}/parts`）、smart cleanup、sessions stats，以及 Memory tab（缓存查看/清理、backup、危险的全量 reset 端点已删）。
 - PDF 查看：`/api/v1/pdf/view/{doc_name}`（页面图，图片降级内建于 view）。
 - 结构编辑器 `/structure`：编辑 structure.json 后走 rebuild 图重生成摘要/索引。
@@ -331,7 +363,10 @@ speech:    POST /transcribe /synthesize
   子类并注册进 `SUB_AGENTS` 字典 → 在 `tests/test_imports.py` 的模块清单里加一行。
 - **写新的共享状态 JSON**：一律用 `src/utils/json_io.py:write_json_atomic()`（`src.pipeline.paths` 亦有 re-export）+ 独立 `.lock` 文件
   的 flock 事务（参考 `registry.py:_transaction` 与 `queue_store.queue_transaction`），不要裸
-  open+json.dump 写状态文件。
+  open+json.dump 写状态文件。索引期产物落盘也已收进这一套，共五处：
+  `indexing/nodes.py` 的 data.json / 两处 structure.json / chunk json，
+  `indexing/tools.py` 的 image_content_list，以及 `structure.py` 保存结构的那一处——
+  注意它只防"写到一半崩溃"，读-改-写交错仍要靠锁。
 - **新数据目录**：路径常量加进 `src/config/constants.py:PathConstants`，需要自动创建的在入口
   `makedir()`（indexing 的 `_setup_pdf_config` 是现成示例）。
 - **UI 加 API 端点**：`api/v1/<module>.py` 加路由 → `app.py` include_router（若整个新模块）→ 前端

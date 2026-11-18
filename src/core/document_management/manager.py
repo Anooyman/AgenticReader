@@ -42,6 +42,8 @@ if not os.path.isabs(DATA_ROOT):
     DATA_ROOT = str(project_root / DATA_ROOT)
 
 # 配置日志
+# 与 core/llm/client.py 等处重复：basicConfig 只在 root 未配置时生效，
+# 谁先 import 谁说话。统一说明见 src/core/llm/client.py:45。
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s - %(message)s'

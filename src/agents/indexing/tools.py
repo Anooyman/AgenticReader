@@ -9,6 +9,9 @@ import logging
 import json
 import os
 import re
+from pathlib import Path
+
+from src.utils.json_io import write_json_atomic
 
 if TYPE_CHECKING:
     from .agent import IndexingAgent
@@ -214,11 +217,9 @@ class IndexingTools:
             # 保存提取结果到JSON文件
             if image_content_list:
                 try:
-                    # 确保目录存在
-                    os.makedirs(os.path.dirname(output_json_path), exist_ok=True)
-
-                    with open(output_json_path, 'w', encoding='utf-8') as file:
-                        json.dump(image_content_list, file, ensure_ascii=False, indent=2)
+                    # 原子落盘（tmp+replace，目录自动创建），与 indexing/nodes.py
+                    # 其余写点同一套范式——防止半写文件在崩溃后留下坏 data.json
+                    write_json_atomic(Path(output_json_path), image_content_list)
 
                     logger.info(f"数据已保存到: {output_json_path}")
                     logger.info(f"✅ [Tool:extract_pdf] 提取统计: 成功{len(image_content_list)}页")
