@@ -20,6 +20,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _cache_use_case(state: Dict) -> str:
+    """场景判定的统一口径：优先 detected_use_case，其次调用方显式给的 use_case。
+
+    原先三处按场景行事的判定都只读 `state['use_case']`——两处缓存读写
+    （extract_and_merge 写、format_answer 补答案），加上 evaluate_content_size
+    里决定要不要落盘 web_content_json 的那一段。而自动检测只往
+    `detected_use_case` 里写，调用方没有手动指定场景时前者始终是空的：
+    搜索结果一条缓存都不落，自动检测出的 url_analysis 也拿不到
+    web_content_json / generated_doc_name（agent.search() 回传结果用的
+    同样是 detected_use_case）。这里只统一读法，不改 use_case 的语义或
+    生命周期，免得扩成场景重构。
+    """
+    return state.get('detected_use_case') or state.get('use_case') or ''
+
+
 class SearchNodes:
     """SearchAgent Workflow 节点集合"""
 
@@ -363,8 +378,12 @@ class SearchNodes:
             state['strategy_reason'] = reason
 
             # Use Case 2: 保存 URL 内容到 JSON 文件
-            use_case = state.get('use_case', '')
-            if use_case == 'url_analysis' and scraped_results:
+            # 场景判定同样走 _cache_use_case 统一口径：自动检测只写
+            # detected_use_case，光读 state['use_case'] 会让这条分支在
+            # 自动检测出的 url_analysis 下整段跳过，web_content_json 和
+            # generated_doc_name 都不设，后面 call_indexing_agent 就没有
+            # 输入可用。
+            if _cache_use_case(state) == 'url_analysis' and scraped_results:
                 try:
                     # 获取第一个成功的结果（Use Case 2 通常只有一个 URL）
                     for result in scraped_results:
@@ -483,8 +502,8 @@ class SearchNodes:
             logger.info(f"✅ [ExtractMerge] 提取了 {len(extracted_content)} 个内容片段")
 
             # 对于 Use Case 1（搜索引擎检索），保存到缓存
-            use_case = state.get('use_case', '')
-            if use_case == 'search' and extracted_content:
+            # 场景判定走 _cache_use_case 统一口径：自动检测只写 detected_use_case
+            if _cache_use_case(state) == 'search' and extracted_content:
                 try:
                     query = state.get('query', '')
                     # 构建缓存数据格式
@@ -624,8 +643,8 @@ class SearchNodes:
             logger.info(f"   - 来源数: {len(sources)}")
 
             # 对于 Use Case 1，更新缓存添加答案
-            use_case = state.get('use_case', '')
-            if use_case == 'search' and extracted_content:
+            # 同上：场景判定走统一口径，别只看 state['use_case']
+            if _cache_use_case(state) == 'search' and extracted_content:
                 try:
                     # 构建完整的缓存数据
                     cache_sources = []
