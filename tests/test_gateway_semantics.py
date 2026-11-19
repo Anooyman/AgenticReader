@@ -1,8 +1,10 @@
 """src/memory/gateway.py 边界语义测试——本轮收敛审查后钉死的三处决策：
 
-  * load_brief_date 的 driver 显式白名单 {bridge, local}：缺省恒 local
+  * load_brief_date 的 driver 显式白名单 {local}：缺省恒 local
     （DA 裁决本地 brief 落 A 自库 AATF，brief_ingest 已实装）；非法值
-    warning 后按 local 跑；bridge 是需要 env 显式点名的兜底路。
+    warning 后按 local 跑——bridge 随 HTTP 桥退役成为非法值，env 点名
+    它只剩"warning→local"一种结局，出网路径整体注销
+    （结构级守卫见 tests/test_bridge_retired.py）。
   * delete_source / delete_namespace：缺 id 的行跳过并 warning，deleted 只
     计真删，不把幻影行算进返回值给 UI；
   * ingest 与 search 的 provider 归一对称：显式值也过 resolve_provider，
@@ -59,21 +61,23 @@ def test_driver_explicit_local_routes_to_brief_ingest(monkeypatch):
     assert seen == ["2026-11-14"]
 
 
-def test_driver_explicit_bridge_routes_to_brief_memory(monkeypatch):
-    """bridge 兜底路的调用形状：必须是 brief_memory.load_date(...) 的
-    模块属性访问——测试靠 patch 模块属性驱动这条链路。"""
+def test_driver_explicit_bridge_is_illegal_and_falls_back_to_local(monkeypatch, caplog):
+    """HTTP 桥退役后 "bridge" 从合法 driver 退化为非法值——env 点名它只剩
+    "warning→local" 一种结局，出网路径整体注销。结构级守卫（AST / 文本 /
+    hasattr / brief_memory 删除）见 tests/test_bridge_retired.py，这里只钉
+    行为：bridge 与任意非法值同路，绝不外联。
+
+    老桥的 URL 属性若还挂在 gateway 上就改指到本机必拒端口：这样若
+    bridge 分支还没退干净，测试失败在"没走 local"上，而不是真去连它。"""
     monkeypatch.setenv("MEMORY_BRIEF_DRIVER", "bridge")
-    import src.ui.backend.services.brief_memory as bm
-    seen = []
-
-    async def fake_load_date(date):
-        seen.append(date)
-        return {"loaded": False, "skipped": True, "errors": []}
-
-    monkeypatch.setattr(bm, "load_date", fake_load_date)
-    out = _run(gateway.load_brief_date("2026-11-15"))
-    assert seen == ["2026-11-15"]
-    assert out["skipped"] is True
+    monkeypatch.setattr(gateway, "LLM_MEMORY_" "URL", "http://127.0.0.1:1",
+                        raising=False)
+    seen = _patch_local_driver(monkeypatch)
+    with caplog.at_level("WARNING"):
+        out = _run(gateway.load_brief_date("2026-11-15"))
+    assert seen == ["2026-11-15"]              # 只能按 local 跑
+    assert out["loaded"] is True
+    assert "不在白名单" in caplog.text          # 与非法值同一句 warning
 
 
 def _run(coro):

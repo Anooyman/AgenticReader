@@ -11,9 +11,9 @@ namespace 隔离）。设计上刻意走"轻量"路线，与 /briefs 页的重�
 * **幂等**：按 (namespace, source_id=card item_id) 取已有行，chunk 内容
   hash 相同的跳过——重复点"加载"不会写重复行，与 ingest_source 的去重
   语义一致（那边靠 adapter.update_plan 比 chunk_hash，这边直接比）。
-* **失败隔离**：单卡失败记进 errors 继续跑下一张，返回形状对齐
-  brief_memory.load_date（{"loaded","skipped","errors"}），job_runner 的
-  load_brief_date 消费端不用分支。
+* **失败隔离**：单卡失败记进 errors 继续跑下一张，返回契约
+  {"loaded","skipped","errors"}，job_runner 的 load_brief_date 消费端
+  不用分支。
 
 record 字段与 ingest.ingest_source 逐一对齐（memory_type/abstract/detail/
 raw_source/keywords/importance/chunk_hash/occurred_at...），检索工具
@@ -122,10 +122,10 @@ async def load_brief_date_local(
 ) -> Dict[str, Any]:
     """把一天的简报卡片轻量写入 A 自库 AATF。
 
-    返回 {"loaded": bool, "skipped": bool, "errors": [str, ...]}，形状与
-    bridge 驱动（brief_memory.load_date）完全一致，job_runner / 前端不
-    区分两种 driver。解析不到任何卡片按 skipped 处理——日期目录空/HTML
-    缺失不算失败，别把"这天本来就没简报"报成错误。
+    返回 {"loaded": bool, "skipped": bool, "errors": [str, ...]}，这是
+    load_brief_date 的固定契约（原 bridge 驱动已退役，形状沿用不变），
+    job_runner / 前端不区分驱动来源。解析不到任何卡片按 skipped 处理
+    ——日期目录空/HTML 缺失不算失败，别把"这天本来就没简报"报成错误。
     """
     # 函数级 import：pipeline 与 memory 之间没有硬依赖顺序，这样放在模块级
     # 反而给 pipeline 的入口 import 链添堵；且只有本函数用得到解析器。

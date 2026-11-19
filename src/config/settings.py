@@ -9,6 +9,30 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+# ---- 上游 LLM-Memory 的连接层配置（env 的唯一读取点）----
+# LLM_MEMORY_REPO 取代了退役 webui 桥的旧地址常量：它不再是"一个 webui
+# 地址"而是上游 checkout 的路径，SDK 路（注入 <repo>/src 进 sys.path）与
+# MCP 路（子进程 PYTHONPATH=<repo>/src）共用这一个寻址点。默认空 = 上游
+# 门面整体 available:false + note，本地功能零影响。
+_LLM_MEMORY_REPO_ENV = "LLM_MEMORY_REPO"
+_LLM_MEMORY_MCP_ENV = "LLM_MEMORY_MCP_ENABLED"
+
+
+def get_llm_memory_repo() -> str:
+    """上游 checkout 路径（strip 后）。未设返回空串——调用方自行降级。"""
+    return os.environ.get(_LLM_MEMORY_REPO_ENV, "").strip()
+
+
+def is_llm_memory_mcp_enabled() -> bool:
+    """可选 MCP 决策面开关。缺省关；显式 1/true/yes/on 才开。"""
+    return os.environ.get(_LLM_MEMORY_MCP_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# import 期快照：与 DATA_ROOT 同风格，env 改动需重启才生效——消费方
+# （upstream.py 的决策面探测）不依赖这份快照，它是"配置面"的文档位。
+_LLM_MEMORY_SRC = (os.path.join(get_llm_memory_repo(), "src")
+                   if get_llm_memory_repo() else "")
+
 MCP_CONFIG = {
   # ===== SearchAgent MCP 服务（顶层配置）=====
   # DuckDuckGo 搜索引擎
@@ -24,6 +48,16 @@ MCP_CONFIG = {
     "command": sys.executable,
     "args": ["-m", "scraper.mcp_server.server"],
     "env": {"PYTHONPATH": "src/services"}
+  },
+  # 上游 LLM-Memory 决策面（stdio，默认关——由 src/memory/upstream.py 按
+  # LLM_MEMORY_MCP_ENABLED 门控调用；--tools 显式点名 why/pack 才
+  # served，官方挂载块的形状。Python 用本 venv：跨 venv import 已实测
+  # 可行，包体靠 PYTHONPATH=<repo>/src 寻址。）
+  "llm_memory": {
+    "type": "stdio",
+    "command": sys.executable,
+    "args": ["-m", "llm_memoryd.mcp", "--tools", "memory_why,memory_pack"],
+    "env": {"PYTHONPATH": _LLM_MEMORY_SRC}
   },
     #"fetch": {
     #  "command": "python",

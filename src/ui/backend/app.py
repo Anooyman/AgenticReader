@@ -53,6 +53,14 @@ async def lifespan(app: FastAPI):
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        # 上游门面收尾：清掉惰性 SDK client 缓存——别让上游 SDK 对象
+        # 带进解释器退出（sys.path 注入保持不动，幂等无害）。尽力而为，
+        # 这一步失败不许拖住上面两条车道的关闭。
+        try:
+            from src.memory import upstream  # 函数级：与整个 lifespan 同款
+            upstream.shutdown()
+        except Exception:  # noqa: BLE001
+            print("⚠️ upstream.shutdown() 失败（忽略）")
         print("✅ 应用关闭完成")
 
 

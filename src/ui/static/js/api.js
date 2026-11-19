@@ -130,8 +130,8 @@ const API = (function () {
         },
 
         // 注：原 llmmemory 域（/api/v1/llmmemory/*，/memory 页的桥接面）随
-        // 该页退役删除——外部桥若需要仍在 gateway/brief_memory 内部可达，
-        // 不再经 HTTP 层透传。
+        // 该页退役删除。外部 LLM-Memory 的 HTTP 桥此后也已彻底移除——前后端
+        // 已无任何路由出网访问它；上游经进程内只读门面接入，不经过前端。
 
         // 聊天
         chat: {

@@ -119,8 +119,9 @@ async def set_memory_scope(session_id: str, request: MemoryScopeRequest):
              + NAMESPACE_AATF（local driver 轻量入库写入自库）+ gateway.EXTERNAL_SEARCH_NAMESPACES（占位）。
     null / 缺键 → 恢复默认；[] → 400（空作用域无意义）；含未知项 → 400；
     重复项在端点层保序去重后落库。
-    注：AATF 已由本地 driver 实装写入（/briefs 页"轻量入库(全天)"，经
-    gateway.load_brief_date 的 local 分支落 A 自库）——某天没做过轻量
+    注：AATF 由本地 driver 实装写入（/briefs 页"轻量入库(全天)"，经
+    gateway.load_brief_date 的 local 路直落 A 自库——外部桥驱动已退役，
+    这已不是"分派分支"而是唯一一条路）——某天没做过轻量
     入库时选它检索为空属正常，与 sessions 页注释同源，前端浮层有对应
     提示。
     """

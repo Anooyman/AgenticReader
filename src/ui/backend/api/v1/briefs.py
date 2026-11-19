@@ -119,8 +119,8 @@ async def post_light_load(body: dict):
     与 /load 的分工（取代原 /memory 页的日期加载）：
       /load        重管线，条目级，产摘要 + 入 ai-research；
       /light-load  轻量级，日期级，卡片导读原文直接入 AATF。
-    驱动分派在 gateway.load_brief_date（缺省 local；env
-    MEMORY_BRIEF_DRIVER=bridge 时回到外部 LLM-Memory 桥，仅作兜底）。
+    驱动在 gateway.load_brief_date（恒 local 直写；外部桥 driver 已退役，
+    MEMORY_BRIEF_DRIVER 设旧值也只会 warning→local）。
 
     日期参数：{dates: [...]} 一次给多天（沿用原 /load-jobs 的批量语义），
     或 {coverage_date: "YYYY-MM-DD"} 单日兼容旧调用。逐日一个

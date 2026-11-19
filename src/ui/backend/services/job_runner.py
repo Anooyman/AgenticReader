@@ -57,9 +57,10 @@ TIMEOUTS = {
     "process_web": 15 * 60,
     "sync_memory": 30 * 60,
     "render_report": 5 * 60,
-    # 外部 LLM-Memory 那边一天的简报通常几分钟跑完；给 20 分钟，超了就是
-    # 卡在网络或对端，不是"慢"。
-    "load_brief_date": 20 * 60,
+    # 轻量入库直写 A 自库：解析 HTML + 串行 embedding，一天几分钟；
+    # 原 bridge 时代留的 20min 网络兜底余量随桥退役收紧——超 10min 基本
+    # 就是本机磁盘/网络 embedding 端点的问题，不是"慢"。
+    "load_brief_date": 10 * 60,
 }
 
 ACTIVE_STATUSES = ("queued", "running", "cancelling")
@@ -269,9 +270,9 @@ async def _run_job(job: dict) -> dict:
 
     if kind == "load_brief_date":
         # 把一天的简报灌进 A 自库 memory（namespace AATF）。
-        # target 就是一个 YYYY-MM-DD；gateway.load_brief_date 是 DA 分派槽位
-        # （MEMORY_BRIEF_DRIVER=local|bridge，缺省 local→brief_ingest 直写
-        #  自库，bridge 是 env 兜底走外部 webui）。
+        # target 就是一个 YYYY-MM-DD；gateway.load_brief_date 恒走
+        # local→brief_ingest 直写自库（外部桥 driver 已退役，白名单只剩
+        # local，env 旧值 warning→local）。
         from src.memory import gateway
 
         try:

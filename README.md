@@ -160,7 +160,7 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 | 配置中心 | `/config` | 切换 provider、每 provider 多模型的注册表（增删/设为当前/一键测试）、系统设置（落 `data/config/app_config.json`） |
 | 结构编辑器 | `/structure` | 编辑文档章节 structure.json 并重建摘要/索引，PDF 在线预览 |
 | 每日简报 | `/briefs` | 浏览 `BRIEFS_DIR` 简报条目，勾选加载进管线队列，"轻量入库(全天)"直写 AATF 记忆，卡片里的论文可一键下载入库（`POST /briefs/fetch-pdf` 落 `data/pdf` + 后台索引），查看后台任务 |
-| ~~简报记忆桥接~~ | `/memory` | 已退役——职责并入 `/briefs`（外部 LLM-Memory 桥仅剩 env 兜底路），老书签自动 302 |
+| ~~简报记忆桥接~~ | `/memory` | 已退役——职责并入 `/briefs`；外部 LLM-Memory 的 HTTP 桥也已退役，接入改走进程内 SDK / MCP 只读门面，老书签自动 302 |
 | API 文档 | `/docs` `/redoc` | FastAPI 自动生成 |
 | 健康检查 | `/health` | status / timestamp / version |
 
@@ -214,9 +214,15 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 | `PROVIDER` | CLI 等无 UI 配置时的 provider 回退 |
 | `RETRIEVAL_DEDUP_WINDOW` | 检索去重的轮次窗口，默认 5 |
 | `BRIEFS_DIR` | 简报 HTML 目录，默认 `~/Desktop/AATF-Intelligence-Briefs` |
-| `MEMORY_BRIEF_DRIVER` | 简报加载驱动：`local`（缺省，写 A 自库 AATF）或 `bridge`（兜底路，调外部 webui） |
-| `LLM_MEMORY_URL` | 外部 LLM-Memory webui 地址，默认 `http://127.0.0.1:8765`——只在 `MEMORY_BRIEF_DRIVER=bridge` 时被读取 |
+| `LLM_MEMORY_REPO` | 上游 LLM-Memory 的 checkout 路径——只读门面（SDK 进程内为主 / 可选 MCP stdio 决策面）的唯一寻址点；未设或路径无效时上游一律报 `available:false` + note，本地功能零影响 |
+| `LLM_MEMORY_MCP_ENABLED` | `=1` 时启用可选的 MCP stdio 决策面（`python -m llm_memoryd.mcp --tools memory_why,memory_pack`，why/pack 工具需显式开）；默认关闭——两个变量都不设，默认行为完全不受影响 |
 | `DEBUG` | WebSocket 调试输出开关（`true` 开启），默认关闭 |
+
+> 历史注记：旧的外部 LLM-Memory webui HTTP 桥（`MEMORY_BRIEF_DRIVER=bridge` + `LLM_MEMORY_URL`，
+> 默认 `http://127.0.0.1:8765`）**已彻底退役**——`load_brief_date` 的 driver 白名单收敛为 `local`
+> 一条路，显式设成 `bridge` 只会打 warning 后按 `local` 跑，仓内不再有任何出网调用。
+> 另：外部"加载某天简报"的桥路退役后**没有任何替身**，brief 入库只此 `local` 一条路——
+> 该能力缺位是裁决而非 regression，日后别找回来。
 
 **两个常见误解**
 - **没有 `LOGGING_LEVEL` 环境变量**：代码不读取它。应用日志级别写死在 `src/core/llm/client.py` 的 `logging.basicConfig(level=logging.INFO)`（全仓共 5 处同样的 basicConfig，只有第一个生效的算数），调 DEBUG 改这些行；uvicorn 自身的访问日志级别则读 `data/config/app_config.json` 的 `log_level` 键（`src/ui/run_server.py:resolve_log_level`，/config 页写入的就是这个键，无效值按 info 处理）。
@@ -243,7 +249,8 @@ AgenticReader/
 │   ├── llm/                    # client（LLMBase + 日志 + embeddings 缓存）/ providers / history
 │   ├── parallel/               # indexing.py（ChapterProcessor）/ retrieval.py（ParallelRetrievalCoordinator）
 │   └── vector_db/              # vector_db_client（FAISS + 轮次去重 + 索引缓存）/ metadata_db
-├── src/memory/                 # LanceDB 长期记忆（config / gateway / ingest / search / brief_ingest / migrate_aatf / vector_store / adapters）
+├── src/memory/                 # LanceDB 长期记忆（config / gateway / ingest / search / brief_ingest / migrate_aatf / upstream / vector_store / adapters）
+│                               #   upstream=外部 LLM-Memory 只读访问层（SDK 进程内 + 可选 MCP 决策面）
 │                               #   brief_ingest=「轻量入库(全天)」直写 AATF 的实现体；
 │                               #   migrate_aatf 是一次性 A→B 库迁移 CLI，
 │                               #   用前先 --dry-run 看清单再实跑
@@ -258,7 +265,7 @@ AgenticReader/
 │   │   │                       #   structure config sessions data·data_storage·data_ops·data_common
 │   │   │                       #   briefs jobs memory speech）
 │   │   └── services/           # chat_service（走 Orchestrator）、session_manager、chat_ingest、
-│   │                           #   job_runner、memory_browse、task_service、briefs_data、brief_memory
+│   │                           #   job_runner、memory_browse、task_service、briefs_data
 │   ├── templates/              # base dashboard chat config manage structure_editor briefs
 │   └── static/                 # css/（chat manage dashboard briefs …）js/（api chat
 │                               #   chat-enhancer manage config dashboard briefs …）
@@ -286,7 +293,7 @@ data/
 
 **索引数据流**：上传/选择 PDF → IndexingAgent 图（check_cache → parse → extract_structure → chunk → process_chapters → build_index → generate_brief_summary → register），出错短路直达 register 且不会标成 completed。
 
-**MCP 服务**（`settings.py` 的 `MCP_CONFIG`）：`duckduckgo`（`uvx duckduckgo-mcp-server`）与 `web_scraper`（本仓库自带 Playwright 抓取 MCP）。MCP 客户端是 `src/agents/search/utils.py` 的 `SimpleMCPClient`（stdio）。
+**MCP 服务**（`settings.py` 的 `MCP_CONFIG`）：`duckduckgo`（`uvx duckduckgo-mcp-server`）、`web_scraper`（本仓库自带 Playwright 抓取 MCP），以及默认关的 `llm_memory` 条目（`python -m llm_memoryd.mcp --tools memory_why,memory_pack`，由 `src/memory/upstream.py` 按 `LLM_MEMORY_MCP_ENABLED` 门控调用）。SearchAgent 的 MCP 客户端是 `src/agents/search/utils.py` 的 `SimpleMCPClient`（stdio）；`upstream.py` 的决策面客户端按同一 stdio 形状就地实现，不 import `src.agents`。
 
 ## REST API 速查
 
@@ -309,6 +316,12 @@ briefs     GET  /dates /cards /memory-status   POST /load /sync-memory /light-lo
 jobs       GET  ""                         POST /{job_id}/retry /cancel
 memory     GET  /overview /namespace/{ns}  POST /search
            DELETE /item/{id} /namespace/{ns}/source/{source_id} /namespace/{ns}
+           GET  /upstream                  POST /upstream/search
+                # 上游 LLM-Memory 只读门面：status 字段 available + namespaces/rows + version，
+                # 内嵌 decision:{enabled,available,note}；检索缺省作用域=全局（scoped=False），
+                # 显式 namespace 才收窄
+           POST /upstream/decision         # 上游决策面一跳：memory_why/memory_pack 白名单，
+                # 由 LLM_MEMORY_MCP_ENABLED 门控，未启用即折叠 unavailable+note
 speech     POST /transcribe /synthesize
 ```
 

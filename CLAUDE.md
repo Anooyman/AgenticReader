@@ -100,7 +100,9 @@ src/
 │   ├── parallel/             # indexing.py(ChapterProcessor 等) / retrieval.py(ParallelRetrievalCoordinator)
 │   └── vector_db/            # vector_db_client.py(FAISS+轮次去重) / metadata_db.py
 ├── memory/                   # LanceDB 长期记忆（见 "Memory System"）
-│   ├── gateway.py            # 读写/浏览/删除/桥接的唯一出入口 + load_brief_date 驱动分派
+│   ├── gateway.py            # 读写/浏览/删除的唯一出入口 + load_brief_date 驱动分派（只认 local）
+│   │                        #   + 上游 LLM-Memory 只读门面转发（namespace 收敛在这层做）
+│   ├── upstream.py           # 外部 LLM-Memory 只读访问层：SDK 进程内为主 + 可选 MCP stdio 决策面
 │   ├── brief_ingest.py      # /briefs"轻量入库"的实现体：解析卡片直写 AATF，零 LLM、chunk-hash 幂等
 │   │                        #   （一次性 A→B 库迁移另见 migrate_aatf.py，
 │   │                        #    python -m src.memory.migrate_aatf --dry-run）
@@ -120,7 +122,7 @@ src/
 │   │   │                     #   sessions data+data_storage+data_ops+data_common
 │   │   │                     #   briefs jobs memory speech（llmmemory 已随 /memory 页退役）
 │   │   └── services/         # session_manager chat_service chat_ingest job_runner
-│   │                         #   memory_browse task_service briefs_data brief_memory
+│   │                         #   memory_browse task_service briefs_data
 │   ├── templates/            # base dashboard chat config manage structure_editor briefs
 │   └── static/               # css/（base/components/variables/api/chat/chat-enhanced/
 │                             #   config/dashboard/manage/briefs 等）+ js/
@@ -241,7 +243,7 @@ BRIEFS_DIR 下 HTML（env BRIEFS_DIR，默认 ~/Desktop/AATF-Intelligence-Briefs
 - **浏览/管理 API**：`/api/v1/memory/*`（overview / namespace 列表 / search / 删除——含 item、
   namespace、按 source 三种 DELETE；单条 item 的 GET 读取端点已删），供 `/data` 页 Memory tab
   使用，实现是 `services/memory_browse.py` 同进程直调。
-- **LLM-Memory 桥**：外部 LLM-Memory webui（env `LLM_MEMORY_URL`）现在只剩一条路：`gateway.load_brief_date` 的 **bridge 兜底 driver**（env `MEMORY_BRIEF_DRIVER=bridge` 显式点名才走）。原 `/memory` 页与其透明 HTTP 代理 `/api/v1/llmmemory/*` 已退役——本地 driver 实装后不再需要第二套存储入口，页面职责并进了 `/briefs`（重管线 = `/load`，轻量入库 = `/light-load`；老书签 `/memory` 302 到 `/briefs`）。
+- **外部 LLM-Memory 上游门面**：上游 LLM-Memory 走**进程内 SDK 为主**（env `LLM_MEMORY_REPO` 指向上游 checkout，向 `sys.path` 注入 `<repo>/src` 后 `from llm_memoryd.api import MemoryClient`，未设/路径无效即一律降级为 `available:false` + note，不 raise 不出网）+ **可选 MCP stdio 决策面**（env `LLM_MEMORY_MCP_ENABLED=1`，子进程按 `settings.MCP_CONFIG["llm_memory"]` 单源构建并继承 `os.environ`，起 `python -m llm_memoryd.mcp --tools memory_why,memory_pack`——why/pack 要 `--tools` 显式开，默认关）。只读面三端点，全走 gateway 门面：`GET /api/v1/memory/upstream`（status 字段 available + namespaces/rows + version，内嵌 `decision:{enabled,available,note}` 开关位）、`POST /api/v1/memory/upstream/search`、`POST /api/v1/memory/upstream/decision`（memory_why/memory_pack 白名单一跳直通，remember/ingest 这类写工具不在面上）。**上游只读检索缺省作用域=全局**——不给 namespace 就跨 store 全量、返回 `scoped=False`，显式单 ns 或列表才收窄；**没有"默认按自库白名单搜上游"这回事**，文档/测试都别再钉那个错语义。版本显示口径：SDK 面报 `llm_memoryd.__version__`（实测量级 0.1.0），上游 stdio 面 serverInfo 报 1.0.0——上游自己的常量漂移，AR 侧只如实显示不作映射，排查时知道这两处数字不会一致即可。**旧 webui HTTP 桥已彻底退役**：`load_brief_date` driver 白名单收敛为 `local` 一条路，`MEMORY_BRIEF_DRIVER=bridge` 与 `LLM_MEMORY_URL` 双双退役（设了也 warning→local，仓内无任何对 8765 的调用）；外部"加载某天简报"这条能力退役后**没有任何替身**，brief 入库只此 local——缺位是裁决不是 regression，别找回；原 `/memory` 页与其透明 HTTP 代理 `/api/v1/llmmemory/*` 先一步退役，页面职责并进了 `/briefs`（重管线 = `/load`，轻量入库 = `/light-load`；老书签 `/memory` 302 到 `/briefs`）。
 - **Embedding 维度**：LanceDB 建表需要固定维度，`src/memory/config.py` 维护模型名→维度映射表；配置缺失只 warning 并按默认 1536 建表。改 embedding 模型名务必走 `settings.get_embedding_model_name()`。
 
 ## MCP Services
@@ -249,11 +251,14 @@ BRIEFS_DIR 下 HTML（env BRIEFS_DIR，默认 ~/Desktop/AATF-Intelligence-Briefs
 `MCP_CONFIG`（`src/config/settings.py`）当前启用的条目：
 - `"duckduckgo"`：`uvx duckduckgo-mcp-server`（SearchAgent 的 web_search 用它，需单独安装 uvx/该包）。
 - `"web_scraper"`：`sys.executable -m scraper.mcp_server.server`，env `PYTHONPATH=src/services`——即 `src/services/scraper/` 自带的 Playwright 抓取 MCP server。
+- `"llm_memory"`：`sys.executable -m llm_memoryd.mcp --tools memory_why,memory_pack`，env `PYTHONPATH=<LLM_MEMORY_REPO>/src`——上游 LLM-Memory 的可选决策面，**默认不启用**。本条目是子进程参数的**单源**：`upstream.py` 直接据此构建 StdioServerParameters 并继承 `os.environ`，不再自带副本；实际是否拉起由 `upstream.py` 按 `LLM_MEMORY_MCP_ENABLED` 门控，why/pack 工具要 `--tools` 显式点名才 served（上游 MCP 默认只暴露 search/ingest/list_* 四件）。
 - 历史的 `"ddg-search"` 本地脚本条目（`src/services/duckduckgo_mcp_server.py`）与 `mcp_server_fetch` 注释条目已随重构删除。
 
 MCP 客户端实现是 `src/agents/search/utils.py` 里的 `SimpleMCPClient`（stdio 传输，
 `mcp` 库的 ClientSession；历史上的 `src/services/mcp_client.py` 已删除——它只被
-SearchAgent 用到 stdio 一种传输，薄封装就地维护即可）。
+SearchAgent 用到 stdio 一种传输，薄封装就地维护即可）。上游 LLM-Memory 的决策面
+客户端在 `src/memory/upstream.py` 里按同一 stdio 形状就地实现
+（initialize/call_tool/硬超时），分层纪律决定它不 import `src.agents`。
 
 ## Environment Variables
 
@@ -269,8 +274,9 @@ SearchAgent 用到 stdio 一种传输，薄封装就地维护即可）。
 - `CORS_ORIGINS`：逗号分隔来源列表，默认只放行 localhost/127.0.0.1:8000；含 `*` 时自动关闭 `allow_credentials`
 - `RETRIEVAL_DEDUP_WINDOW`：检索去重轮次窗口（默认 5）
 - `BRIEFS_DIR`：简报 HTML 目录
-- `MEMORY_BRIEF_DRIVER`：brief 加载 driver 分派，`local`（缺省）| `bridge`
-- `LLM_MEMORY_URL`：外部 LLM-Memory webui 地址——只在 `MEMORY_BRIEF_DRIVER=bridge` 兜底路被读取
+- `LLM_MEMORY_REPO`：上游 LLM-Memory checkout 路径——上游只读门面（SDK / 可选 MCP）的唯一寻址点；未设或无效即全部上游入口报 `available:false` + note，本地功能零影响
+- `LLM_MEMORY_MCP_ENABLED`：`=1` 时启用可选 MCP stdio 决策面（`python -m llm_memoryd.mcp --tools memory_why,memory_pack`）；默认关闭，不设即默认行为不受影响
+- （历史注记：`MEMORY_BRIEF_DRIVER` 的 `bridge` 兜底路与 `LLM_MEMORY_URL` 已随 HTTP 桥退役——driver 白名单只剩 `local`，旧值 warning→local）
 
 **Provider 配置来源——CLI 与 UI 的差异**：
 - **唯一入口**：`settings.resolve_provider(provider)` / `get_default_provider()`
@@ -313,7 +319,7 @@ briefs:    GET /dates /cards /memory-status  | POST /load /sync-memory /light-lo
            # 数据层 services/briefs_data.py；/light-load 是日期级轻量入库
            # （load_brief_date 任务，写 AATF）；/memory-status 返回各日期
            # 真实入库计数 {dates:{d:{aatf,heavy_done}}}——按 A 自库行+queue
-           # 事实而非任务账本（bridge 时代 done ≠ A 自库有数据）
+           # 事实而非任务账本（旧 bridge 时代 done ≠ A 自库有数据——桥已退役，按事实计数仍保留）
            # /fetch-pdf 下载并索引论文 PDF，与 documents 共用同一条
            # IndexingAgent 后台流。终态行为：
            #   * 临时文件唯一名 `{name}.part.{pid}.{tid}.{uuid8}` +
@@ -338,6 +344,8 @@ briefs:    GET /dates /cards /memory-status  | POST /load /sync-memory /light-lo
 jobs:      GET "" | POST /{job_id}/retry /cancel        # 任务账本见 job_runner + webapp_jobs.json
 memory:    GET /overview /namespace/{ns} / POST /search
            DELETE /item/{id} /namespace/{ns}/source/{source_id} /namespace/{ns}
+           GET /upstream / POST /upstream/search   # 上游只读门面（status 内嵌 decision 开关位；
+           POST /upstream/decision                 #   检索缺省全局 scoped=False；why/pack 白名单一跳）
 speech:    POST /transcribe /synthesize
 ```
 

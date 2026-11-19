@@ -148,7 +148,7 @@ def test_date_memory_counts_survives_db_failure(tmp_path, monkeypatch):
 def _run_job(monkeypatch, outcome=None, boom=False):
     async def fake_load_date(date):
         if boom:
-            raise RuntimeError("外部服务不可达")
+            raise RuntimeError("轻量入库中途炸了")
         return outcome
     monkeypatch.setattr(gateway, "load_brief_date", fake_load_date)
     job = {"job_id": "j1", "kind": "load_brief_date", "target": "2026-11-13",
@@ -165,7 +165,7 @@ def test_run_job_load_skipped_only_is_ok(monkeypatch):
     """"该天早已入库 / 空日期"是正常结局——loaded False + skipped True + 无
     errors 不能折成失败，否则 /briefs 上重复点日期就刷一条误导性的错误行
     （新按钮不区分加载状态，这条路径用户天天踩）。文案里也不许再提
-    "外部服务"——缺省 driver 已是 local。"""
+    "外部服务"——HTTP 桥已退役，driver 白名单只剩 local，不存在外部服务。"""
     out = _run_job(monkeypatch, {"loaded": False, "skipped": True, "errors": []})
     assert out["ok"] is True
     assert "已是最新" in out["detail"]
@@ -187,6 +187,10 @@ def test_run_job_load_failure_reports_error(monkeypatch):
 
 
 def test_run_job_load_exception_maps_to_error(monkeypatch):
+    """异常透传的形状：job_runner 把 load_brief_date 抛出的任何异常折成
+    "加载简报 X 失败: {e}"——异常文本原样进 error 字段，不吞栈不吞消息。
+    注入什么消息都等价，这里用 local 时代的本地故障措辞（桥退役前这里
+    写的是外部服务的文案，纯属历史遗留）。"""
     out = _run_job(monkeypatch, boom=True)
     assert "失败" in out["error"]
-    assert "外部服务不可达" in out["error"]
+    assert "轻量入库中途炸了" in out["error"]

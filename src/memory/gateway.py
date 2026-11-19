@@ -1,15 +1,19 @@
-"""AgenticReader 接入 LLM-Memory 的唯一接口层（收敛层）。
+"""AgenticReader 记忆系统的唯一接口层（收敛层），两段职责：
 
-一切对本仓记忆内核（src/memory/{ingest,search,vector_store}）与外部
-LLM-Memory webui 桥的访问都从这里进出：
+一、本仓记忆内核（src/memory/{ingest,search,vector_store}）：
   * 读：search()            —— D-B 三态作用域解析的唯一实现处
   * 写：ingest()            —— 摘要/对话入库
   * 浏览/删：browse_* / delete_* —— /data Memory tab 的 rows 原语
-  * 桥：bridge_request()    —— 外部 webui 一跳到 gateway 收敛
-  * DA 槽位：load_brief_date() —— bridge|local 分派，local 已实装
-    （写 A 自库 AATF，见 brief_ingest）且为缺省，bridge 退为 env 兜底
-将来接 B 侧 SDK 时，替换的只是本文件函数体内的转发目标；公开签名、返回
-形状、namespace/作用域语义不变。
+  * DA 槽位：load_brief_date() —— 恒为 local（写 A 自库 AATF，见
+    brief_ingest）；外部桥 driver 已退役，白名单只剩 {"local"}。
+二、上游 LLM-Memory 只读门面（transport 住在 upstream.py）：
+  * upstream_status / upstream_namespaces / upstream_search /
+    upstream_available —— 本层做 namespace 收敛（复用
+    resolve_search_namespaces 语义），与 browse_*/delete_* 的
+    "policy 在本层 / 执行在别处"分工同构。只读，无写上游路径。
+
+替换实现时动的只是本文件函数体内的转发目标；公开签名、返回形状、
+namespace/作用域语义不变。
 
 本文件自身遵守两条线：
   * 不 import src.ui / src.agents 模块级（ui 侧 import 全在函数体内，与
@@ -20,9 +24,7 @@ LLM-Memory webui 桥的访问都从这里进出：
 """
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple, Union
-
-import httpx
+from typing import Any, Dict, List, Optional, Union
 
 from src.config.settings import resolve_provider
 from src.memory.config import (
@@ -47,7 +49,7 @@ logger = logging.getLogger(__name__)
 # ---- 常量别名（policy 定义仍在 config，消费方只认 gateway）----
 NAMESPACE_AI_RESEARCH: str = NAMESPACE_AI_RESEARCH    # "ai-research"
 NAMESPACE_WEBAPP_CHAT: str = NAMESPACE_WEBAPP_CHAT    # "webapp-chat"
-NAMESPACE_AATF: str = NAMESPACE_AATF                  # "AATF"（local driver 轻量入库写入；桥 load 的目标 ns）
+NAMESPACE_AATF: str = NAMESPACE_AATF                  # "AATF"（local driver 轻量入库写入自库）
 DEFAULT_SEARCH_NAMESPACES: List[str] = DEFAULT_SEARCH_NAMESPACES
 EXTERNAL_SEARCH_NAMESPACES: List[str] = EXTERNAL_SEARCH_NAMESPACES  # 现恒为 []
 
@@ -184,148 +186,30 @@ def _delete_rows(store: VectorStore, rows: List[Dict[str, Any]],
     return deleted
 
 
-# ---- 桥（外部 LLM-Memory webui 访问的唯一收敛点）----
-class BridgeError(Exception):
-    """一跳到外部 webui 的 transport 级失败：status_code 固定 502，detail
-    逐字保留旧 _lm 文案（"LLM-Memory webui 不可达（URL）：exc. 请确认已
-    运行: python scripts/webui/server.py --port 8765"）。HTTP 级失败不在
-    这里抛——由 bridge_request 原样返回 (status, body)，映射属调用端点层
-    的形状（api 层再转 HTTPException）。"""
-
-    def __init__(self, status_code: int, detail: Any) -> None:
-        super().__init__(detail)
-        self.status_code = status_code
-        self.detail = detail
-
-
-# 全仓唯一读取点；原 llmmemory.py 退役后，brief_memory.py 的旧常量收编为本别名。
-LLM_MEMORY_URL: str = os.environ.get("LLM_MEMORY_URL", "http://127.0.0.1:8765").rstrip("/")
-
-# 与旧桥 API 的 _TIMEOUT 同形状；brief_memory 有自己的 (15, read=30) 会显式传入。
-_DEFAULT_BRIDGE_TIMEOUT = httpx.Timeout(15.0, read=180.0)
-
-
-# 取舍注记：这里刻意用"每请求一个 AsyncClient"的单函数形态，而不是带
-# keepalive 的连接池会话——brief 轮询每 3s 一跳会新开连接，TCP 握手略多，
-# 换来的是"桥 = 单函数一跳"的收敛形状（SDK 替换时只动本函数体）。
-# 若 SDK 阶段要上连接复用，改动点同样只在这里，调用侧签名不动。
-async def bridge_request(
-    method: str, path: str, *, timeout: Optional[httpx.Timeout] = None, **kw,
-) -> Tuple[int, Any]:
-    """外部 webui 一跳：单发 httpx 请求，返回 (status_code, 解析后的 json
-    body)。body 解析失败时分两种：
-      * HTTP >= 400：退化为 {"detail": text[:300]}，由调用端点原状态码
-        透传（旧 _lm 逐字同构，≥400 退化路径由 shape 测试锁死）；
-      * 2xx：说明上游回了"成功状态 + 非法体"，静默当成功数据返回会把坏
-        形状喂给前端，这里 raise BridgeError(502)。这与旧 _lm 的 r.json()
-        直接抛 JSONDecodeError→500 同属"报错不吞"，映射码从 500 变 502
-        是收敛后刻意的形状决策（502 更准确：上游响应无效）。
-    连接失败等 transport 错误 raise BridgeError。本层绝不 import fastapi。"""
-    try:
-        async with httpx.AsyncClient(timeout=timeout or _DEFAULT_BRIDGE_TIMEOUT) as client:
-            resp = await client.request(method, f"{LLM_MEMORY_URL}{path}", **kw)
-    except httpx.HTTPError as exc:
-        raise BridgeError(
-            502,
-            f"LLM-Memory webui 不可达（{LLM_MEMORY_URL}）：{exc}. "
-            f"请确认已运行: python scripts/webui/server.py --port 8765",
-        ) from exc
-    try:
-        body = resp.json()
-    except ValueError:
-        if resp.status_code < 400:
-            raise BridgeError(
-                502,
-                f"LLM-Memory webui 返回了无法解析为 JSON 的成功响应"
-                f"（HTTP {resp.status_code}, {path}）：{resp.text[:300]}",
-            )
-        body = {"detail": resp.text[:300]}
-    return resp.status_code, body
-
-
-# ---- 桥服务面：外部 webui 各端点的具名一跳 ----
-# 外部路由的 URL 与请求体在这里逐字组装——service 层
-# （brief_memory.py）不再自己拼外部路径，只把 (status, body)
-# 映射成自己需要的形状（transport 错误统一 raise BridgeError）。
-# B 侧 SDK 化时，这批方法名就是 SDK 方法面的镜像，改动只落本文件。
-
-async def brief_dates(**kw) -> Tuple[int, Any]:
-    """GET /api/briefs/dates —— 日期列表及其加载状态。"""
-    return await bridge_request("GET", "/api/briefs/dates", **kw)
-
-
-async def brief_papers(dates: str = "", **kw) -> Tuple[int, Any]:
-    """GET /api/briefs/papers?dates=... —— 指定日期的论文清单。"""
-    return await bridge_request(
-        "GET", "/api/briefs/papers", params={"dates": dates}, **kw)
-
-
-async def brief_load(dates: List[str], **kw) -> Tuple[int, Any]:
-    """POST /api/briefs/load {dates:[...]} —— 请求外部服务加载简报。
-    （job_runner 驱动的逐日加载走 brief_memory.load_date，经本函数发这一跳；
-    路由 /load 的多日期一次请求也走这里。）"""
-    return await bridge_request("POST", "/api/briefs/load",
-                                json={"dates": dates}, **kw)
-
-
-async def brief_load_progress(job_id: str, **kw) -> Tuple[int, Any]:
-    """GET /api/briefs/load/progress/{job_id} —— 外部加载 job 的进度。"""
-    return await bridge_request("GET", f"/api/briefs/load/progress/{job_id}", **kw)
-
-
-async def brief_chat(message: str, history: List[dict],
-                     namespace: List[str], **kw) -> Tuple[int, Any]:
-    """POST /api/chat {message, history, namespace} —— 外部对话 job 注册。"""
-    return await bridge_request("POST", "/api/chat", json={
-        "message": message, "history": history, "namespace": namespace,
-    }, **kw)
-
-
-async def brief_chat_progress(job_id: str, **kw) -> Tuple[int, Any]:
-    """GET /api/chat/progress/{job_id} —— 外部对话 job 的进度。"""
-    return await bridge_request("GET", f"/api/chat/progress/{job_id}", **kw)
-
-
-async def brief_chat_stop(job_id: str, **kw) -> Tuple[int, Any]:
-    """POST /api/chat/stop/{job_id} —— flag 式取消：外部 job 在下一次检索
-    检查点自行收尾。A 侧只透传，不发明第二套取消语义。"""
-    return await bridge_request("POST", f"/api/chat/stop/{job_id}", **kw)
-
-
-# 注：deepread_download（旧 /memory 页"回复里下载论文"走的 B 侧端点）已删
-# ——论文下载入库改为本地路线：POST /api/v1/briefs/fetch-pdf 直接拉进
-# data/pdf/ 并触发 IndexingAgent 索引，不再依赖外部服务。
+# ---- 桥段已随 HTTP 桥退役整体删除 ----
+# （原"桥"段的 transport 异常类、地址常量、一跳函数与七个 brief_* 具名
+#  封装全部移除：外部 webui 的简报端点实测 500，这条路本就不通，删除不
+#  损失可用功能，仓内也不再有对它的任何调用点。）
 
 
 # ---- DA：brief 加载驱动槽位 ----
-BRIEF_DRIVER_ENV = "MEMORY_BRIEF_DRIVER"  # "local"（缺省）| "bridge"
+BRIEF_DRIVER_ENV = "MEMORY_BRIEF_DRIVER"  # 唯一合法取值 "local"（缺省即 local）
 
 
 async def load_brief_date(date: str) -> Dict[str, Any]:
-    """DA 分派：env MEMORY_BRIEF_DRIVER，显式白名单 {bridge, local}。
-    非法值 warning 后按 local 跑——DA 裁决本地 brief 落 A 自库，local
-    已实装，它就是缺省路；bridge 退为显式兜底（外部服务出问题时的逃生
-    口，env 设 bridge 即整条链路回到桥驱动）。
-    local → _local_brief_load(date)：写 A 自库 namespace AATF。
-    bridge → 懒 import brief_memory 模块，属性调用 brief_memory.load_date(date)。
-      ★必须是 brief_memory.load_date(...) 属性访问形式，不得写成
-      from-import 绑定函数对象——tests 靠 patch 模块属性驱动这条链路，
-      形状不能动。
+    """DA 分派：env MEMORY_BRIEF_DRIVER，显式白名单 {local}。
+    桥 driver 已退役——白名单只剩 local 一条路，任何其它取值（包括退役
+    前的旧值 "bridge"）都 warning 后按 local 跑，非法值兜底语义与桥时代
+    完全一致，只是"兜底"的另一侧没有了。
+    local → _local_brief_load(date)：写 A 自库 namespace AATF，实现在
+    brief_ingest（内核侧自给自足，不碰 src.ui）。
     返回契约恒为 {"loaded","skipped","errors"}（job_runner 的判定只认这三键）。
-
-    ★层界注记：bridge 分支对 brief_memory 的反向 import 仍是刻意保留的债
-    （上层 UI 服务被记忆内核函数级引用）；local 分支不碰 src.ui，内核
-    侧自给自足（brief_ingest 住在 src/memory/）。
     """
     driver = (os.environ.get(BRIEF_DRIVER_ENV) or "local").strip().lower()
-    if driver not in ("bridge", "local"):
-        logger.warning("%s 取值 %r 不在白名单 ['bridge','local']，按 local 运行",
+    if driver != "local":
+        logger.warning("%s 取值 %r 不在白名单 ['local']，按 local 运行",
                        BRIEF_DRIVER_ENV, driver)
-        driver = "local"
-    if driver == "local":
-        return await _local_brief_load(date)
-    from src.ui.backend.services import brief_memory  # 函数级，防 ui→memory→ui 环
-    return await brief_memory.load_date(date)
+    return await _local_brief_load(date)
 
 
 async def _local_brief_load(date: str) -> Dict[str, Any]:
@@ -339,5 +223,70 @@ async def _local_brief_load(date: str) -> Dict[str, Any]:
     """
     from src.memory.brief_ingest import load_brief_date_local
     return await load_brief_date_local(date)
+
+
+# ---- 上游 LLM-Memory 只读门面 ----
+# 分工与 browse_*/delete_* 同构：policy（namespace 收敛）住在 gateway，
+# transport 住在 src/memory/upstream.py——本文件不 import 上游细节，
+# upstream.py 也不 import 本层以外的东西。全段只读：AR 没有任何写上游的
+# 路径（上游 ingest 门面也拒 "brief" source_type），这里只是自库之外的
+# 一扇观察窗。
+from src.memory import upstream as _upstream  # 模块级安全：upstream 只有 stdlib 的模块级 import
+
+
+async def upstream_available() -> bool:
+    """上游 SDK 通道是否可达（env LLM_MEMORY_REPO 有效且 MemoryClient 可用）。"""
+    return await _upstream.upstream_available()
+
+
+async def upstream_status(namespace: Optional[Union[str, List[str]]] = None) -> Dict[str, Any]:
+    """上游 store 视图：{available, namespaces:[{name,rows}], total, ...}。
+    namespace 走 D-B 三态收敛——单元素列表升格为显式单 ns 视图，"*" 与其
+    余多元素列表都按"看整个 store"处理（status 本来就是 store 级）。"""
+    resolved = resolve_search_namespaces(namespace)
+    single = resolved[0] if isinstance(resolved, list) and len(resolved) == 1 else None
+    return await _upstream.upstream_status(single)
+
+
+async def upstream_namespaces() -> List[Dict[str, Any]]:
+    """上游 namespace 清单 [{name, rows}]；不可用返回 []（形状稳定优先）。"""
+    return await _upstream.upstream_namespaces()
+
+
+async def upstream_search(query: str,
+                          namespace: Optional[Union[str, List[str]]] = None) -> Dict[str, Any]:
+    """上游 agentic 检索。**缺省不传作用域**（全局搜，上游报 scoped=False
+    + "跨 store"自述）——上游实测 ns 全是 slug-<digest> 派生名，把自库
+    白名单喂过去必然 0 命中还谎报 scoped=True，所以 None 路绝不走
+    resolve_search_namespaces 的补值。显式作用域三态与本地 search 的解析
+    器共用同一实现（*不碰 resolve_search_namespaces 本体*）：
+      * "*" / 含 "*" 的列表 → 同样不传作用域（"全部"在上游就是全局）；
+      * 单元素列表 → namespace=str；
+      * 其余显式列表 → namespaces=list。
+    返回形状为 upstream 的折叠结果原样（不套 (status, body) 的 HTTP 形状
+    ——那是退役桥的遗产），失败映射成什么状态码归 api 层。
+    """
+    if not namespace:
+        return await _upstream.upstream_search(query)
+    resolved = resolve_search_namespaces(namespace)
+    if resolved == "*":
+        return await _upstream.upstream_search(query)
+    if isinstance(resolved, list) and len(resolved) == 1:
+        return await _upstream.upstream_search(query, namespace=resolved[0])
+    return await _upstream.upstream_search(query, namespaces=list(resolved))
+
+
+# 决策面转发（MCP 工具调用面在 upstream.py 的白名单闸内；gateway 这里只
+# 转发不复制——command/args/env 的单源也在 upstream.py 的 MCP_CONFIG 读取，
+# 两层各留一道白名单是纵深不是重复实现）。
+async def upstream_decision_status() -> Dict[str, Any]:
+    """决策面开关的诚实答案。未启用只回 gate（不起子进程）；启用才探测。"""
+    return await _upstream.upstream_decision_status()
+
+
+async def upstream_decision_call(tool: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """memory_why / memory_pack 的一跳直通。写工具进不来。"""
+    return await _upstream.upstream_decision_call(tool, arguments)
+
 
 

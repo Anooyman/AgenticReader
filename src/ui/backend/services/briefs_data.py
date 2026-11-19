@@ -31,9 +31,10 @@ def date_memory_counts() -> dict:
       轻量入库是否真的写过这个库，以行数据为准；
     - heavy_done：queue 里 pipeline_status=done 且 coverage_date 为该日
       期的条目数。
-    刻意**不看任务账本**：旧 bridge driver 时代的 load_brief_date done
-    全写在外部 B 侧，A 自库行数为 0——按任务显示会把 65 天全标成"已入库"
-    的假状态（审计实锤：23 个 done ↔ 0 行 AATF）。
+    刻意**不看任务账本**：旧 bridge driver（已退役）时代的
+    load_brief_date done 全写在外部 B 侧，A 自库行数为 0——按任务显示会
+    把 65 天全标成"已入库"的假状态（审计实锤：23 个 done ↔ 0 行 AATF，
+    教训随桥一起留下）。
     AATF 行读取失败只 warning + 跳过，不拖垮整个接口（heavy_done 仍要
     给出）。两处都是小表/字典扫描，不解析 HTML。
     """

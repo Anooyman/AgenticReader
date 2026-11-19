@@ -29,6 +29,9 @@ TOP_LEVEL_MODULES = [
     "src.core.parallel",
     "src.memory",
     "src.memory.gateway",
+    # 上游 LLM-Memory 只读门面层：模块级 import 必须保持轻（上游与 mcp
+    # 都是函数级惰性 import），它在任何 env 状态下都得能 import 成功
+    "src.memory.upstream",
     "src.memory.brief_ingest",
     # A→B 库的 AATF 迁移 CLI：一次性工具但仍是记忆子系统的一部分，
     # 断了它的 import 就等于把迁移路径静默埋了（模块级 import 都在这）
