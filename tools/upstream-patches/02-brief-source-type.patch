@@ -1,0 +1,203 @@
+diff --git a/README.md b/README.md
+index 2c47f03..276d5fe 100644
+--- a/README.md
++++ b/README.md
+@@ -179,6 +179,11 @@ client.pack(["src/api.py", "src/worker.py"], cwd="/path/to/repo", budget=2000)
+ | `ensure_ready` / `status` / `namespaces` / `topics` | 诊断三件套 |
+ | `chat` | 检索 + 生成，一次拿到底气充足的答案 |
+ 
++`ingest` 的 `source_type` 只能取自管线真的实现了的那份列表：
++`conversation`、`repo`、`ai_research`、`brief`、`openclaw`、`webapp_chat`。
++列表之外的值会在边界上被拒掉，而不是去猜一个 adapter——因为这些字符串本身就是
++下游按行寻址时用的 key。
++
+ `MemoryClient` 是唯一入口，内部一律走库而不是各自的脚本——这条是有测试兜着的：
+ MCP server 反过来只能调库，不许出现 MCP 导入库、库反过来导入 MCP 的情况。
+ 
+diff --git a/README_en.md b/README_en.md
+index af4e90d..7e8c09f 100644
+--- a/README_en.md
++++ b/README_en.md
+@@ -192,6 +192,11 @@ client.pack(["src/api.py", "src/worker.py"], cwd="/path/to/repo", budget=2000)
+ | `ensure_ready` / `status` / `namespaces` / `topics` | diagnostics |
+ | `chat` | retrieval + generation in one grounded reply |
+ 
++`ingest`'s `source_type` comes from the list the pipeline actually implements:
++`conversation`, `repo`, `ai_research`, `brief`, `openclaw`, `webapp_chat`. A
++value outside it is refused at the boundary rather than guessed at, because
++these same strings are what rows are keyed by downstream.
++
+ `MemoryClient` is the single entry point, and the dependency direction is guarded
+ by a test: the MCP server may call the library, never the reverse.
+ 
+diff --git a/scripts/tests/test_source_types_are_one_contract.py b/scripts/tests/test_source_types_are_one_contract.py
+new file mode 100644
+index 0000000..21f8988
+--- /dev/null
++++ b/scripts/tests/test_source_types_are_one_contract.py
+@@ -0,0 +1,139 @@
++# LLM-Memory/scripts/tests/test_source_types_are_one_contract.py
++"""`source_type` is one list, told in several places, and it must stay one list.
++
++A type name is not decoration: it is the key every row is written under, the
++filter `VectorStore._where()` matches rows with, and the value a caller has to
++get right for `delete_where(namespace, source_id=...)` to find anything. When
++the docs list six adapters and the enum implements five, the sixth is a promise
++a client can only discover by getting an error — which is exactly the bug this
++file now refuses to let the project re-ship.
++
++The shape is borrowed from `test_mcp_server.py`'s documented-surface block:
++the assertion is a LITERAL, not a comparison against `api.SOURCE_TYPES`.
++Comparing a constant to itself is self-justifying; it stays green when the
++constant drifts, which is precisely the drift worth catching. Everything else
++then checks that the other places — the advertised MCP schema, the adapter
++registry, the prose — agree with that literal.
++
++Deliberately NOT compared: the webui's ingest dropdown. That is a curated
++subset of types that need a path hint, not a mirror of the enum, and a test
++that reads it would either force the UI to advertise types its input box has
++no placeholder for, or force the enum to shrink.
++"""
++import pathlib
++import re
++
++from llm_memoryd import api
++from llm_memoryd import mcp
++from llm_memoryd.ingest_mid import adapters
++
++ROOT = pathlib.Path(__file__).resolve().parents[2]
++DOCS = [ROOT / name for name in ("README.md", "README_en.md", "SKILL.md")]
++
++# The membership, spelled out. Adding a type is a deliberate act: this line has
++# to change with it, and a new name nobody wrote down fails here.
++DOCUMENTED = ("conversation", "repo", "ai_research", "brief", "openclaw", "webapp_chat")
++
++
++def _advertised_enum():
++    tool = next(t for t in mcp.TOOLS if t["name"] == "memory_ingest")
++    return tool["inputSchema"]["properties"]["source_type"]["enum"]
++
++
++def _listed_in(text):
++    """Every type name in a proper enumeration of quoted snake_case names.
++
++    Two quoted tokens belong to the same list only when nothing but a
++    separator sits between them (`,`, `、`, `和`/`或`, a newline, a closing
++    paren) — that is what keeps the schema notes (`abstract`, `detail`,
++    `chunk_hash`, discussed on the same pages within a paragraph of the type
++    list) out of a list they were never part of, which a fixed character
++    window could not promise.
++
++    A run qualifies as *the* source-type listing when it names both ends of
++    the enum, so two accidental backtick-quoted words near each other cannot
++    pass as a claim about the surface.
++    """
++    runs, current, previous_end = [], [], 0
++    for match in re.finditer(r"`([a-z][a-z0-9_]{2,})`", text):
++        gap = text[previous_end:match.start()]
++        if current and not re.fullmatch(r"[\s、,和或及()（）]*(?:and[\s]*)?", gap):
++            runs.append(current)
++            current = []
++        current.append(match.group(1))
++        previous_end = match.end()
++    if current:
++        runs.append(current)
++    return {name for run in runs
++            if "conversation" in run and "webapp_chat" in run for name in run}
++
++
++def test_the_library_enum_is_the_documented_six():
++    assert set(api.SOURCE_TYPES) == set(DOCUMENTED), api.SOURCE_TYPES
++    # Order is not behaviour, but a reordered tuple makes diff noise in the
++    # error message a caller sees ("unsupported source_type" lists them), so
++    # the canonical order is worth pinning while it is cheap.
++    assert list(api.SOURCE_TYPES) == list(DOCUMENTED)
++
++
++def test_the_advertised_schema_does_not_invent_its_own_enum():
++    advertised = _advertised_enum()
++    assert set(advertised) == set(DOCUMENTED), advertised
++    assert list(advertised) == list(DOCUMENTED)
++
++
++def test_every_source_type_names_a_registered_adapter():
++    """The enum's promise is that the pipeline implements the type, so the two
++    must be equal — a registered adapter the enum refuses is dead code with a
++    docstring, and an enum value with no adapter is the ingest-time error this
++    file exists to prevent."""
++    registered = {cls.source_type for cls in adapters._REGISTRY.values()}
++    assert registered == set(DOCUMENTED), registered
++    for name in DOCUMENTED:
++        assert adapters.get_adapter(name).source_type == name
++
++
++def test_the_docs_that_advertise_the_surface_name_every_type():
++    """A document may list a subset (the rebuild docs name only the
++    snapshot-backed types), but an enumeration that claims the source-type
++    surface has to be exactly the enum — nothing missing, nothing invented."""
++    for path in DOCS:
++        if not path.exists():
++            continue
++        text = path.read_text(encoding="utf-8")
++        if "webapp_chat" not in text:
++            continue  # this document does not advertise the typed source list
++        listed = _listed_in(text)
++        assert listed, f"{path.name} names the surface but enumerates no type list"
++        assert listed == set(DOCUMENTED), (
++            f"{path.name} enumerates {sorted(listed)}, not the implemented set")
++
++
++def test_the_gate_and_the_enum_agree_on_every_type(tmp_path):
++    """Two halves of the same promise, on a client that owns no repository.
++
++    A name the enum admits must get *past* the gate — handing it a missing file
++    then fails on the next rule (path shape), not on the type. A name the enum
++    does not admit is refused by name. Both directions belong in one test
++    because the two failures look almost alike to a caller, and a silent
++    "unsupported source_type" for a type that works would be the drift this
++    file exists to catch.
++    """
++    client = api.MemoryClient(config={"embedding": {"dimensions": 8,
++                                                    "endpoint": "unused"}},
++                              store_dir=str(tmp_path / "store"))
++    absent = str(tmp_path / "absent.md")
++    for name in api.SOURCE_TYPES:
++        try:
++            client.ingest(absent, name, namespace="ns-test")
++        except ValueError as exc:
++            assert "unsupported source_type" not in str(exc), name
++        else:
++            raise AssertionError(f"{name!r} ran the pipeline on a missing file")
++    for bad in ("", "not-a-type", "Brief", "BRIEF", "briefs"):
++        try:
++            client.ingest(absent, bad, namespace="ns-test")
++        except ValueError as exc:
++            assert "source_type" in str(exc), (bad, exc)
++        else:
++            raise AssertionError(f"{bad!r} was accepted by the ingest gate")
+diff --git a/src/llm_memoryd/api.py b/src/llm_memoryd/api.py
+index 3932866..b5d0962 100644
+--- a/src/llm_memoryd/api.py
++++ b/src/llm_memoryd/api.py
+@@ -48,7 +48,7 @@ KNOWLEDGE_TYPES = ("decision", "failure", "constraint", "profile")
+ # The ingest source types the pipeline actually implements. An enum a client
+ # can guess at is a contract it will violate, so it is declared once here and
+ # checked here.
+-SOURCE_TYPES = ("conversation", "repo", "ai_research", "openclaw", "webapp_chat")
++SOURCE_TYPES = ("conversation", "repo", "ai_research", "brief", "openclaw", "webapp_chat")
+ 
+ # A path list beyond this is not a "few files", it is an accidental directory
+ # dump, and the row would be useless for retrieval.
+diff --git a/src/llm_memoryd/mcp.py b/src/llm_memoryd/mcp.py
+index a18118b..542db3b 100644
+--- a/src/llm_memoryd/mcp.py
++++ b/src/llm_memoryd/mcp.py
+@@ -71,7 +71,7 @@ MAX_MESSAGE_CHARS = 100_000
+ TOOLS = [
+     {"name": "memory_search", "description": "Search persistent Memory using agentic retrieval. Pass cwd to scope results to that repository's namespace. Without namespace, topic, or cwd the search spans all namespaces and says so in the result.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "namespace": {"type": "string"}, "topic": {"type": "string"}, "cwd": {"type": "string", "description": "current working directory or any path inside the repo; scopes the search to that repository's namespace when neither namespace nor topic is given"}}, "required": ["query"]}},
+     {"name": "memory_chat", "description": "Retrieve Memory context and generate a grounded chat reply.", "inputSchema": {"type": "object", "properties": {"message": {"type": "string"}, "namespace": {"type": "string"}, "topic": {"type": "string"}, "history": {"type": "array"}}, "required": ["message"]}},
+-    {"name": "memory_ingest", "description": "Ingest one supported source file into a namespace.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "source_type": {"type": "string", "enum": ["conversation", "repo", "ai_research", "openclaw", "webapp_chat"]}, "namespace": {"type": "string"}, "dry_run": {"type": "boolean"}}, "required": ["path", "source_type", "namespace"]}},
++    {"name": "memory_ingest", "description": "Ingest one supported source file into a namespace.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "source_type": {"type": "string", "enum": ["conversation", "repo", "ai_research", "brief", "openclaw", "webapp_chat"]}, "namespace": {"type": "string"}, "dry_run": {"type": "boolean"}}, "required": ["path", "source_type", "namespace"]}},
+     {"name": "memory_list_topics", "description": "List configured topic-to-namespace mappings.", "inputSchema": {"type": "object", "properties": {}}},
+     {"name": "memory_list_namespaces", "description": "List namespaces and row counts.", "inputSchema": {"type": "object", "properties": {}}},
+     # Decision memory (Phase 2a). Results are a HISTORICAL SNAPSHOT: code may

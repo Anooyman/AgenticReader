@@ -1,4 +1,4 @@
-"""外部 LLM-Memory 的只读访问层——gateway 上游门面段的实现体。
+"""外部 LLM-Memory 的访问层——gateway 上游门面段的实现体。
 
 两条通道，均按裁决落地：
   * SDK 主通道（缺省即开）：env LLM_MEMORY_REPO 指向上游 checkout，把
@@ -21,7 +21,9 @@
     store 根。
 
 纪律（写死在这里，别回头补）：
-  * 只读面。没有任何写上游的路径，remember/ingest 不碰。
+  * 读面 + 一条写路。"全段只读"的旧纪律因收敛裁决**有意反转**：ingest 也走
+    SDK 面（见 SDK 写面段）。remember 仍不碰；MCP 面继续只限 why/pack 两件
+    决策工具，写工具一个都不在面上（纵深：API 侧另有一道同名单）。
   * 不 import src.ui / src.agents / fastapi；上游与 mcp 的 import 全部
     函数级惰性——本模块在任何 env/安装状态下都必须可 import。
   * 上游 SDK 全同步，公开函数一律 asyncio.to_thread 包裹 + 宽 except 折叠
@@ -29,10 +31,13 @@
     **body 只装异常类型名 + 一句可读 note，完整异常文本（可能带主机绝对
     路径）只进 logger**——对齐上游 mcp.py 的 _client_error_message 口径：
     ValueError 是写给调用方的话可透传，其余一律"internal error: <类型>"。
+    写路同构，但"要不要回落本地"不在本层——那是 gateway 的 policy。
   * search 接取消：上游 agentic_search 的 cancel_check 在每轮开头轮询
     （agent_search.py 实测：置位即强制收尾返回 best-effort，status=
     "cancelled"，不抛异常）。外层 wait_for 超时即置位这个 flag，让线程
     在轮次边界自行收尾，消灭僵尸线程。deadline 与 cancel 双保险。
+    写路**没有**这个通道：ingest 签名里根本没有 cancel_check，超时只能
+    放弃等待，线程照旧跑完它自己的管线。
   * 寻址不写死任何默认绝对路径（教训同 migrate_aatf）。
 """
 import asyncio
@@ -294,6 +299,109 @@ async def upstream_search(query: str, *, namespace: Optional[str] = None,
         result = {"result": result}
     scoped = bool(namespace) or bool(namespaces)
     return {**result, "available": True, "scoped": scoped}
+
+
+# ------------------------------------------------------------- SDK 写面（收敛）
+
+# 写路硬 cap。上游 ingest 是完整 agentic 管线（解析→逐块抽取→摘要），单文件
+# 分钟级是常态，所以这里的数字比 search 宽一个量级；调用方（chat_ingest 的
+# wait_for、job_runner 的任务超时）通常比我们先到期，这里的 cap 只兜"上游
+# 根本不该再等下去"的漏网情况。
+_INGEST_HARD_CAP_S = 600.0
+
+# source_id 透传的探测结果缓存：None=还没探测，True/False=上游签名收不收。
+_ingest_accepts_source_id: Optional[bool] = None
+# "这条写路认不认我们给的 id"的 warning 只需说一次（结构性事实，不是每单事件）。
+_ingest_source_id_warned = False
+
+
+def _call_ingest(client: Any, path: str, source_type: str, namespace: Optional[str],
+                 source_id: Optional[str]) -> Any:
+    """同步调 client.ingest（在 to_thread 里跑）。
+
+    上游 SDK 面的 ingest 签名**今天**只有 (path, source_type, namespace,
+    dry_run/enable_rechunk/enable_quality_check/on_step)——没有 source_id，
+    行里的 source_id 由 adapter.source_id(path) 自己派生。这里用 inspect 探测
+    签名：上游若打了 source_id 透传补丁（Phase 2 的第一条）就自动带上，本文件
+    不必再动。探测不到而调用方递了 source_id 时打一条 warning，说清"ns 是显式
+    给的、id 是上游派生的"，绝不假装这条写路认我们给的 id。
+    """
+    global _ingest_accepts_source_id
+    if source_id and _ingest_accepts_source_id is None:
+        try:
+            import inspect  # 标准库，纯签名探测，不碰运行时行为
+            _ingest_accepts_source_id = (
+                "source_id" in inspect.signature(client.ingest).parameters)
+        except (TypeError, ValueError):  # 拿不准签名＝按不支持走，别瞎猜
+            _ingest_accepts_source_id = False
+    if source_id and not _ingest_accepts_source_id:
+        # 一次进程一条就够：这是签名层面的结构性事实，不是每次都不同的事件。
+        global _ingest_source_id_warned
+        if not _ingest_source_id_warned:
+            _ingest_source_id_warned = True
+            logger.warning("上游 ingest 不接受 source_id 参数，本进程里写上游的 "
+                           "source_id 一律由上游 adapter 按 path 派生（调用方给的 id "
+                           "只进日志，例如 ns=%s id=%s）——跨系统按 id 联查时以库里"
+                           "的实际值为准，上游打了透传补丁后这条自动消失",
+                           namespace, source_id)
+    if source_id and _ingest_accepts_source_id:
+        return client.ingest(path, source_type, namespace=namespace,
+                             source_id=source_id)
+    return client.ingest(path, source_type, namespace=namespace)
+
+
+async def upstream_ingest(path: str, source_type: str, namespace: str,
+                          source_id: Optional[str] = None) -> Dict[str, Any]:
+    """上游 ingest 直通——写路也走本层，"全段只读"的旧纪律按收敛裁决有意反转。
+
+    三条写死的口径：
+      * **幂等整个交给上游**自带的 hash-dedup：AR 侧不再算 chunk-hash，也不做
+        任何本地补算。"重复递同一文件应返回 0 新增"是要被测试钉死的上游契约
+        （不是本层能自证的承诺），这里只如实转达上游报的计数。
+      * 失败折叠形状与只读路同构：{"available": False, "error", "note"}，不
+        raise、不上浮到 UI。**要不要回落本地属 gateway 的 policy**，本层只管
+        "写上游成了没有"，绝不偷偷再写一份本地（没有双写这回事）。
+      * 上游 ingest 没有 cancel_check 这个参数（search 才有），所以写路只有
+        等待侧硬 cap：wait_for 到点我们只能放弃等待，后台线程仍会把剩下的
+        管线跑完——这条不是取消通道，别当它用。
+    返回形状 {**result, "available": True}：门面位放最后，上游 result 里撞出
+    同名键也压不倒 available。
+    """
+    client, failure = await _client_for()
+    if failure is not None:
+        return failure
+    if client is None:
+        return _unavailable()
+    # namespace 空值先在这儿挡掉：上游拿不到显式 ns 会退到"按 path 派生"的
+    # slug-<digest>，那是一次**静默**写到别的 ns 里——比失败更难查。AR 这边
+    # 三个名字都是调用点显式给的，永远不该走到那条派生路。
+    if not (namespace or "").strip():
+        return {"available": False, "error": "ValueError",
+                "note": "namespace 为空：上游会退化成按 path 派生 slug 名，"
+                        "这是静默写错库而不是失败，已拒绝"}
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(_call_ingest, client, str(path), str(source_type),
+                              str(namespace) if namespace else None, source_id),
+            timeout=_INGEST_HARD_CAP_S)
+    except asyncio.TimeoutError:
+        logger.warning("上游 ingest 超过 %ss 硬上限放弃等待（写路无 cancel 通道，"
+                       "后台线程仍在跑完自己的管线）：%s", _INGEST_HARD_CAP_S, path)
+        return {"available": False, "error": "TimeoutError",
+                "note": (f"上游 ingest 超 {int(_INGEST_HARD_CAP_S)}s 未回——写路没有"
+                         f"取消通道，已停止等待但上游侧可能仍在写，重试前先确认"
+                         f"上游有没有落行")}
+    except Exception as exc:  # noqa: BLE001
+        folded = _fail("ingest", exc)
+        # 构造期已知的诊断信息：为什么这单文件写不进去（too large / blocked /
+        # unsupported source_type 都是 ValueError 原文可透传），补一条"是哪个
+        # 文件"的可定位线索，路径本身进 note 是安全的（我们自己的路径，不是
+        # 远端主机的异常文本）。
+        folded["note"] = f"{folded['note']}（source_type={source_type} ns={namespace}）"
+        return folded
+    if not isinstance(result, dict):
+        result = {"result": result}
+    return {**result, "available": True}
 
 
 # ----------------------------------------------------- MCP 决策面（可选，默认关）

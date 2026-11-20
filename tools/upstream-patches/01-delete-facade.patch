@@ -1,0 +1,369 @@
+diff --git a/scripts/tests/api/test_memory_client.py b/scripts/tests/api/test_memory_client.py
+index a83e010..a3f0474 100644
+--- a/scripts/tests/api/test_memory_client.py
++++ b/scripts/tests/api/test_memory_client.py
+@@ -307,3 +307,207 @@ def test_namespaces_and_topics_come_from_the_library(client, monkeypatch):
+ 
+     monkeypatch.setattr(topics, "load_topics", lambda: {"work": ["a-ns", "b-ns"]})
+     assert client.topics() == [{"name": "work", "namespaces": ["a-ns", "b-ns"]}]
++
++
++# ---------------------------------------------------------------------------
++# delete side
++#
++# The point of these cases is not that LanceDB can delete a row — test_vector.py
++# owns that. What is owned here is the boundary's behaviour: the id is checked
++# before anything is touched, a namespace the caller names is enforced rather
++# than ignored, and the store lock that ingest commits under is held.
++# ---------------------------------------------------------------------------
++
++def _row(mem_id, namespace="ns-a", source_id="src-1", source_type="conversation"):
++    """A row shaped like the store's own, so a delete path under test is not
++    talking to a schema the pipeline never writes."""
++    from datetime import datetime, timezone
++
++    now = datetime.now(timezone.utc).isoformat()
++    return {
++        "id": mem_id, "vector": [0.1] * 8, "namespace": namespace, "tier": "mid",
++        "memory_type": "semantic", "abstract": "abstract", "detail": "detail",
++        "abstracts_chain": "[]", "keywords": '["k"]', "importance": 0.5,
++        "access_count": 0, "last_accessed_at": "", "created_at": now,
++        "tier_updated_at": now, "source": "test", "session_id": "",
++        "occurred_at": "", "source_id": source_id, "source_type": source_type,
++    }
++
++
++def _store(client):
++    pytest.importorskip("lancedb")
++    from llm_memoryd.common.vector import VectorStore
++
++    return VectorStore(client.store_dir, CONFIG)
++
++
++def _spied_store(monkeypatch, sink, rows=None, reported=2):
++    """A VectorStore that records what the facade asked it to do.
++
++    Patched where the library resolves it, for the same reason the search
++    recorder is: one place left to stub, so the fake cannot disagree with the
++    real call graph.
++    """
++    import contextlib
++
++    import llm_memoryd.common.vector as vector
++    import llm_memoryd.api as memory_api
++
++    class _Spy:
++        def __init__(self, *args, **kwargs):
++            sink.append("store")
++
++        def get_by_ids(self, ids):
++            sink.append(("get_by_ids", tuple(ids)))
++            return {i: r for i, r in (rows or {}).items() for r in [rows[i]]}
++
++        def delete(self, memory_id):
++            sink.append(("delete", memory_id))
++
++        def delete_where(self, namespace, **filters):
++            sink.append(("delete_where", namespace, filters))
++            return reported
++
++        def count_rows(self, namespace, **filters):
++            sink.append(("count_rows", namespace, filters))
++            return reported
++
++    @contextlib.contextmanager
++    def _lock(*args, **kwargs):
++        sink.append("lock")
++        try:
++            yield
++        finally:
++            sink.append("unlock")
++
++    monkeypatch.setattr(vector, "VectorStore", _Spy)
++    monkeypatch.setattr(memory_api, "store_lock", _lock)
++    return sink
++
++
++def _order(sink, names):
++    """True when every name in `names` appears in `sink` in that order."""
++    index = 0
++    for entry in sink:
++        key = entry[0] if isinstance(entry, tuple) else entry
++        if key == names[index]:
++            index += 1
++            if index == len(names):
++                return True
++    return False
++
++
++def test_delete_removes_exactly_the_named_row(client):
++    pytest.importorskip("lancedb")
++    store = _store(client)
++    store.add(_row("keep-me"))
++    store.add(_row("drop-me"))
++
++    out = client.delete("drop-me", namespace="ns-a")
++    assert out["deleted"] is True
++    assert sorted(r["id"] for r in store.all_rows("ns-a")) == ["keep-me"]
++
++
++def test_delete_says_so_when_the_id_is_not_in_the_store(client):
++    """A caller with a stale id list did nothing wrong, so it is not told it
++    failed — "there was nothing at this id" is a result, not an exception."""
++    pytest.importorskip("lancedb")
++    _store(client).add(_row("only-row"))
++    out = client.delete("never-existed", namespace="ns-a")
++    assert out["deleted"] is False
++    assert "reason" in out
++    assert [r["id"] for r in _store(client).all_rows("ns-a")] == ["only-row"]
++
++
++def test_a_named_namespace_is_an_assertion_not_a_filter(client):
++    """The row lives in ns-a; naming ns-b is a wrong claim about the store, and
++    the answer is a refusal that leaves the row alone."""
++    pytest.importorskip("lancedb")
++    store = _store(client)
++    store.add(_row("ns-a-row"))
++    try:
++        client.delete("ns-a-row", namespace="ns-b")
++    except ValueError as exc:
++        assert "namespace" in str(exc)
++    else:
++        raise AssertionError("a cross-namespace delete was allowed through")
++    assert [r["id"] for r in store.all_rows("ns-a")] == ["ns-a-row"]
++
++
++def test_delete_rejects_an_id_the_store_could_not_filter_on(client):
++    pytest.importorskip("lancedb")
++    _store(client).add(_row("well-formed-id"))
++    for bad in ("", "   ", "two words", "../escape", "quote'here", "x" * 200):
++        try:
++            client.delete(bad, namespace="ns-a")
++        except ValueError:
++            continue
++        raise AssertionError(f"{bad!r} reached the store as an id")
++    assert [r["id"] for r in _store(client).all_rows("ns-a")] == ["well-formed-id"]
++
++
++def test_delete_where_refuses_every_unscoped_shape(client):
++    pytest.importorskip("lancedb")
++    store = _store(client)
++    store.add(_row("row-1"))
++    for kwargs in ({}, {"namespace": "*"}, {"namespace": ""}, {"namespace": "   "},
++                   {"namespace": ["*"]}, {"source_id": "src-1", "namespace": "*"}):
++        try:
++            client.delete_where(**kwargs)
++        except ValueError as exc:
++            assert "namespace" in str(exc), (kwargs, exc)
++        else:
++            raise AssertionError(f"unscoped delete accepted: {kwargs}")
++    assert [r["id"] for r in store.all_rows("ns-a")] == ["row-1"]
++
++
++def test_delete_where_deletes_only_the_named_source_and_reports_the_count(client):
++    pytest.importorskip("lancedb")
++    store = _store(client)
++    store.add(_row("a-1", source_id="src-1"))
++    store.add(_row("a-2", source_id="src-1"))
++    store.add(_row("a-3", source_id="src-2"))
++    store.add(_row("b-1", namespace="ns-b", source_id="src-1"))
++
++    out = client.delete_where(namespace="ns-a", source_id="src-1")
++    assert out["deleted"] == 2
++    assert out["namespace"] == "ns-a" and out["source_id"] == "src-1"
++    assert sorted(r["id"] for r in store.all_rows("ns-a")) == ["a-3"]
++    assert [r["id"] for r in store.all_rows("ns-b")] == ["b-1"]
++
++
++def test_the_delete_side_is_locked_the_way_the_write_side_is(client, monkeypatch):
++    """Same lock ingest commits under, taken before the read that decides what
++    to delete and not released until after the commit. A lock that arrives
++    after the read is a race the audit trail will not be able to explain.
++    """
++    sink = _spied_store(monkeypatch, [], rows={"id-1": _row("id-1")})
++    client.delete("id-1", namespace="ns-a")
++    assert _order(sink, ["lock", "get_by_ids", "delete", "unlock"]), sink
++
++    sink = _spied_store(monkeypatch, [])
++    client.delete_where(namespace="ns-a", source_id="src-1")
++    assert _order(sink, ["lock", "delete_where", "unlock"]), sink
++    call = [entry for entry in sink if isinstance(entry, tuple) and entry[0] == "delete_where"][0]
++    assert call[1] == "ns-a", "the namespace must arrive positionally-explicit, never as '*'"
++
++
++def test_dry_run_previews_the_exact_scope_it_would_delete(client, monkeypatch):
++    """`dry_run` counts against the same filter as the commit — but it still
++    takes the lock, because a count that moves under you is not a preview."""
++    sink = _spied_store(monkeypatch, [], reported=3)
++    out = client.delete_where(namespace="ns-a", source_id="src-1", dry_run=True)
++    assert out["dry_run"] is True and out["deleted"] == 3
++    assert not [entry for entry in sink if isinstance(entry, tuple)
++                and entry[0] == "delete_where"], sink
++    assert _order(sink, ["lock", "count_rows", "unlock"]), sink
++
++
++def test_delete_where_narrows_by_a_type_it_recognises(client, monkeypatch):
++    sink = _spied_store(monkeypatch, [], reported=1)
++    client.delete_where(namespace="ns-a", source_type="conversation")
++    filters = [entry for entry in sink if isinstance(entry, tuple)
++               and entry[0] == "delete_where"][0][2]
++    assert filters["source_type"] == "conversation"
++    with pytest.raises(ValueError):
++        client.delete_where(namespace="ns-a", source_type="not-a-type")
+diff --git a/src/llm_memoryd/api.py b/src/llm_memoryd/api.py
+index ae84d14..3932866 100644
+--- a/src/llm_memoryd/api.py
++++ b/src/llm_memoryd/api.py
+@@ -36,6 +36,10 @@ from llm_memoryd.common import git
+ from llm_memoryd.common import paths as locations
+ from llm_memoryd.common.config import load_config
+ from llm_memoryd.common.ingest_guard import check_ingest_target
++# The same store-level write lock ingest's commit stage and knowledge/write.py
++# take. It is imported rather than re-implemented here for the obvious reason:
++# a delete that skips it is a delete that races with an ingest.
++from llm_memoryd.common.store_lock import store_lock
+ 
+ # The knowledge types a `remember` may declare. Mirrored from write.py's own
+ # vocabulary so the boundary rejects what the drainer would reject.
+@@ -58,6 +62,38 @@ def _now_iso() -> str:
+     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+ 
+ 
++def _checked_id(vs, value: Any, label: str) -> str:
++    """The store's id grammar, applied at the boundary instead of at the filter.
++
++    Read off `vector.ID_RE` rather than re-declared here so the rule the delete
++    paths use cannot drift from the one every other write path already obeys.
++    A caller handing over an id it scraped from a URL, a JSON blob or a search
++    result is the normal case, and this is where a value that would otherwise
++    reach a quoted SQL clause is stopped.
++    """
++    text = str(value or "")
++    if not text.strip():
++        raise ValueError(f"{label} must be a non-empty string")
++    pattern = getattr(vs, "ID_RE", None)
++    if pattern is not None and not pattern.match(text):
++        raise ValueError(f"invalid {label}: {text[:80]!r}")
++    return text
++
++
++def _checked_namespace(namespace: Any) -> str:
++    """One concrete namespace name, or a refusal that explains itself.
++
++    `*` is the store's own "no namespace clause" marker and the empty string
++    arrives there by accident just as easily; for a SELECT either is a
++    convenience, for a DELETE both are the whole table. Same refusal text the
++    UI handlers give, so a caller pattern-matching on it keeps working.
++    """
++    text = str(namespace or "").strip()
++    if not text or text == "*":
++        raise ValueError("refusing to delete '*'/empty: pass one exact namespace name")
++    return text
++
++
+ def _resolve(module: str):
+     """The one place the library resolves one of its own submodules.
+ 
+@@ -579,6 +615,102 @@ class MemoryClient:
+                                       self._config, synthesis=retrieval.get("synthesis"))
+         return {"reply": reply, "retrieval": retrieval}
+ 
++    # ------------------------------------------------------------------
++    # delete side
++    # ------------------------------------------------------------------
++    def delete(self, memory_id: str, *, namespace: Optional[str] = None) -> Dict[str, Any]:
++        """Forget one row, by id.
++
++        Why the library owns this rather than leaving it to the caller: every
++        other write and read a consuming repository does goes through this
++        class, and a delete is the one mutation where skipping the layer costs
++        the most — below it live the id grammar that keeps a string out of a
++        SQL filter, and the store lock that keeps a delete from interleaving
++        with an ingest. Handing out `VectorStore` to callers is how a second,
++        ungarded delete path appears in a downstream repo.
++
++        * `memory_id` is checked against the store's own grammar here, before a
++          lock is acquired, so a caller with a bad id list gets the same error
++          whether or not anything was found to delete.
++        * `namespace=`, when given, is an assertion about the row rather than a
++          filter: a row that turns out to live somewhere else is a refusal, not
++          a silent success. A stale id list is the realistic way to hit this,
++          and "deleted nothing because you named the wrong scope" is the answer
++          that can be trusted.
++        * Nothing is derived from `cwd`. Derivation is the read side's
++          convenience; on this side a guess is a scope change.
++        """
++        vs = _resolve("common.vector")
++        if vs is None:
++            raise ValueError("llm_memoryd.common.vector is not available")
++        ident = _checked_id(vs, memory_id, "memory id")
++        named = _checked_namespace(namespace) if namespace is not None else None
++        store = vs.VectorStore(self._store_dir, self._config)
++        with store_lock():
++            row = store.get_by_ids([ident]).get(ident)
++            if row is None:
++                # Not an error: the caller asked for a state, and the store
++                # already satisfies it. Reporting it beats raising, because the
++                # common cause (an id that was already dropped by a re-ingest)
++                # is not something the caller did wrong.
++                return {"deleted": False, "memory_id": ident, "namespace": named,
++                        "reason": "no row with this id"}
++            if named is not None and (row.get("namespace") or "") != named:
++                raise ValueError(
++                    f"refusing to delete: memory id {ident!r} is in namespace "
++                    f"{(row.get('namespace') or '')!r}, not {named!r}")
++            store.delete(ident)
++        return {"deleted": True, "memory_id": ident, "namespace": named}
++
++    def delete_where(self, *, namespace: Optional[str] = None,
++                     source_id: Optional[str] = None,
++                     source_type: Optional[str] = None,
++                     tier: Optional[str] = None,
++                     dry_run: bool = False) -> Dict[str, Any]:
++        """Delete one explicit scope in a single commit, reporting the count.
++
++        The store already refuses an unscoped delete, so this method's job is
++        to be the stricter of the two — `VectorStore.delete_where()` accepts
++        *either* a concrete namespace or a concrete `source_id`, and that is
++        right for a SELECT-shaped helper but too loose for a library entry
++        point: a source id is a per-project string, so `source_id="main"` with
++        no namespace would match rows from every project on the machine. Here
++        the namespace is required and concrete, exactly as the UI's own
++        namespace/source handlers demand it.
++
++        One commit, not one per row (the P1-15 property the store was built
++        for): a namespace-sized delete costs the same whether it has ten rows
++        or ten thousand, which also means the delete is not visible halfway
++        through to a concurrent search.
++
++        `dry_run` reports `count_rows` against the *same* filter expression the
++        commit would use, so it is a preview of this call rather than a
++        different query. Nothing is deleted under it, but the lock is still
++        taken: a count that changes under you is not a preview.
++        """
++        vs = _resolve("common.vector")
++        if vs is None:
++            raise ValueError("llm_memoryd.common.vector is not available")
++        named = _checked_namespace(namespace)
++        src = str(source_id or "").strip()
++        if src == "*":
++            raise ValueError("refusing to delete source_id='*': pass one exact source_id")
++        if src:
++            _checked_id(vs, src, "source id")
++        if source_type is not None and str(source_type) not in SOURCE_TYPES:
++            raise ValueError("unsupported source_type")
++        store = vs.VectorStore(self._store_dir, self._config)
++        with store_lock():
++            if dry_run:
++                removed = store.count_rows(named, tier=tier, source_type=source_type,
++                                           source_id=src or None)
++            else:
++                removed = store.delete_where(named, tier=tier, source_type=source_type,
++                                             source_id=src or None)
++        return {"namespace": named, "source_id": src or None,
++                "source_type": source_type, "tier": tier, "dry_run": bool(dry_run),
++                "deleted": int(removed or 0)}
++
+     # ------------------------------------------------------------------
+     # helpers
+     # ------------------------------------------------------------------

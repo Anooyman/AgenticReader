@@ -100,9 +100,12 @@ src/
 │   ├── parallel/             # indexing.py(ChapterProcessor 等) / retrieval.py(ParallelRetrievalCoordinator)
 │   └── vector_db/            # vector_db_client.py(FAISS+轮次去重) / metadata_db.py
 ├── memory/                   # LanceDB 长期记忆（见 "Memory System"）
-│   ├── gateway.py            # 读写/浏览/删除的唯一出入口 + load_brief_date 驱动分派（只认 local）
-│   │                        #   + 上游 LLM-Memory 只读门面转发（namespace 收敛在这层做）
-│   ├── upstream.py           # 外部 LLM-Memory 只读访问层：SDK 进程内为主 + 可选 MCP stdio 决策面
+│   ├── gateway.py            # 读写/浏览/删除的唯一出入口 + 上游/本地选路的唯一决策点
+│   │                        #   （search/ingest 的 auto 路由；browse/delete 暂留 local）
+│   │                        #   + load_brief_date 驱动分派（只认 local）
+│   │                        #   + 上游 LLM-Memory 门面转发（namespace 收敛在这层做）
+│   ├── upstream.py           # 外部 LLM-Memory 访问层：SDK 进程内为主 + 可选 MCP stdio 决策面
+│   │                        #   （写路也在此层，"只读"纪律因收敛有意反转——见 Memory System）
 │   ├── brief_ingest.py      # /briefs"轻量入库"的实现体：解析卡片直写 AATF，零 LLM、chunk-hash 幂等
 │   │                        #   （一次性 A→B 库迁移另见 migrate_aatf.py，
 │   │                        #    python -m src.memory.migrate_aatf --dry-run）
@@ -156,6 +159,7 @@ src/
 | `src/config/settings.py:134-162` | embedding provider/模型名/环境变量的**唯一**读取入口 `get_embedding_provider()/get_embedding_model_name()` |
 | `src/config/model_overrides.py` | 各 Agent 单独换模型的调优入口（按 AgentBase 的 name 查表） |
 | `src/utils/path_guard.py:43` | `safe_path()`：所有按 doc_name 拼数据目录的 API 都要过它（documents/pdf/structure/data 等模块已在用） |
+| `src/memory/gateway.py` | 记忆的唯一出入口 **+ 上游/本地选路的唯一决策点**：`search()`/`ingest()` 内含 auto 路由（上游可用→转 `upstream.py`，否则本地旧路 + warning），`MEMORY_STORE_MODE=local` 是强制旧路的 kill switch；上游 33 列行→14 列形状也在这层的映射层摊平。调用方（chat_ingest / pipeline×2 / sync_memory_ingest）签名不动 |
 
 ## Key Data Structures
 
@@ -246,6 +250,22 @@ BRIEFS_DIR 下 HTML（env BRIEFS_DIR，默认 ~/Desktop/AATF-Intelligence-Briefs
 - **外部 LLM-Memory 上游门面**：上游 LLM-Memory 走**进程内 SDK 为主**（env `LLM_MEMORY_REPO` 指向上游 checkout，向 `sys.path` 注入 `<repo>/src` 后 `from llm_memoryd.api import MemoryClient`，未设/路径无效即一律降级为 `available:false` + note，不 raise 不出网）+ **可选 MCP stdio 决策面**（env `LLM_MEMORY_MCP_ENABLED=1`，子进程按 `settings.MCP_CONFIG["llm_memory"]` 单源构建并继承 `os.environ`，起 `python -m llm_memoryd.mcp --tools memory_why,memory_pack`——why/pack 要 `--tools` 显式开，默认关）。只读面三端点，全走 gateway 门面：`GET /api/v1/memory/upstream`（status 字段 available + namespaces/rows + version，内嵌 `decision:{enabled,available,note}` 开关位）、`POST /api/v1/memory/upstream/search`、`POST /api/v1/memory/upstream/decision`（memory_why/memory_pack 白名单一跳直通，remember/ingest 这类写工具不在面上）。**上游只读检索缺省作用域=全局**——不给 namespace 就跨 store 全量、返回 `scoped=False`，显式单 ns 或列表才收窄；**没有"默认按自库白名单搜上游"这回事**，文档/测试都别再钉那个错语义。版本显示口径：SDK 面报 `llm_memoryd.__version__`（实测量级 0.1.0），上游 stdio 面 serverInfo 报 1.0.0——上游自己的常量漂移，AR 侧只如实显示不作映射，排查时知道这两处数字不会一致即可。**旧 webui HTTP 桥已彻底退役**：`load_brief_date` driver 白名单收敛为 `local` 一条路，`MEMORY_BRIEF_DRIVER=bridge` 与 `LLM_MEMORY_URL` 双双退役（设了也 warning→local，仓内无任何对 8765 的调用）；外部"加载某天简报"这条能力退役后**没有任何替身**，brief 入库只此 local——缺位是裁决不是 regression，别找回；原 `/memory` 页与其透明 HTTP 代理 `/api/v1/llmmemory/*` 先一步退役，页面职责并进了 `/briefs`（重管线 = `/load`，轻量入库 = `/light-load`；老书签 `/memory` 302 到 `/briefs`）。
 - **Embedding 维度**：LanceDB 建表需要固定维度，`src/memory/config.py` 维护模型名→维度映射表；配置缺失只 warning 并按默认 1536 建表。改 embedding 模型名务必走 `settings.get_embedding_model_name()`。
 
+### 记忆收敛（Phase 1 · 写/读路由到上游）
+
+存储层仍由本层（`src/memory/`）维护，外部 LLM-Memory 只是被寻址的上游；**新增的唯一决策点是 gateway 的 auto 路由**——`search()` / `ingest()` 内部选路（上游可用→转 `upstream.py`，否则本地旧路 + warning），四个调用方（chat_ingest / `process_pdf_queue` / `process_web_queue` / `sync_memory_ingest`）**签名零改动**。
+
+- **写路也在 `upstream.py`**：`upstream_ingest(path, source_type, namespace, source_id)` → `to_thread(client.ingest, ...)`。该层"全段只读"的旧纪律**有意反转**——写也走它，统一 to_thread + 失败折叠（这层返回 `{available:false, error, note}` 形状，不 raise、不上浮）。
+- **读写唯一的语义差别：写不回落**。`_route_is_upstream()` 只回答"上游这条路开不开"，回落与否由调用侧自己定：`search()` 上游不可用/这次没成可以回落本地，`ingest()` **绝不**——上游可用但写失败时 gateway 把折叠结果 `raise RuntimeError` 出去（返回 dict 会被三个调用方当成功，`common.py` 直接置 `memory_ingested=True`），让 chat_ingest 的水位线与 job_runner 的任务账本照常记一笔失败，不"顺手写一份本地"（那是双写：同一份内容两处落库、水位线还照推，补灌时说不清该怪谁）。要整体退回本地只有重试或 unset `LLM_MEMORY_REPO`／`MEMORY_STORE_MODE=local`。
+- **通道现状**：路由只发生在 `gateway.search()` / `gateway.ingest()` **两处**，`browse_*` / `delete_*` 与 `load_brief_date` 的驱动分派都没看这把开关；mode 取值单一来源在 `src/memory/config.py` 的 `get_memory_store_mode()`（非法取值按白名单 warning→`auto`，消费方只有 gateway 一处）。管线（`ai-research`）与 chat_ingest（`webapp-chat`）两条已接 auto 路由；**轻量入库 `AATF` 仍是 local 直写**（`src/memory/brief_ingest.py` 不经路由，Phase 2 才换成"卡片 JSON + 上游 ingest"，届时不再是零 LLM，"是否已入库"的 id 空间也换轨 `aatf-<date>-<kind>`——先双读兼容再切）。
+- **PDF 对话侧不住这层，也不是"另一个记忆库"**：文档索引/对话的持久化是 `data/vector_db/{doc}_data_index/` 的 per-doc FAISS 加 `data/sessions/{id}.json` 会话落盘，本次收敛一个字节都没碰——"PDF 对话 memory 保持独立"这条约束落在**架构分层**（两套东西）上，别在文档里另开一段去找一个不存在的第三库。
+- **读路映射层**：上游 33 列的行在 gateway 摊平成子 agent 现在吃的 14 列形状（本地形状 = 12 text + vector + importance；`occurred_at/source_id/abstract/detail/keywords/raw_source/memory_type/source_type` 全留，多出的 tier/abstracts_chain/session_id 之类列**整列丢掉**——"不多给任何一个键"是这层的验收线，"顺手多给一列"算越界）。`chunk_hash` 的口径要说准：**上游 schema 里有这列**（summary 行取 `""`），只是它自己的 `shape_result_row` 裁过输出、不把这列交给结果行——所以映射层是**保真优先**：`row` 里带了 `chunk_hash` 就直接用真值，交不出来时才动用"keywords 空 + detail 偏长（≥2000 字）→ 像是整篇摘要行"的启发式，猜不准填 `"unknown"`；启发式是**模拟不是保真**，别把它当上游语义。summary 判据在本地是 `chunk_hash==""`，这层只是把同一判据换个来源喂进去，猜错只影响 `is_summary_row` 的展示位、不影响检索命中。`occurred_at` 为空时回退 `created_at`（与 `src/memory/search.py:168` 与本地 `vector_store.shape_result_row` 那条 fallback 同构），`/briefs` 的按日聚合照旧可用。
+- **幂等归上游**：走上游时 AR 侧不再自己算 chunk-hash，去重交给上游 ingest 的 hash-dedup（同一文件再递一次应返回 0 新增，这条要由测试钉死；豁免旧禁令 #3 的对价就是这个新契约）。回落本地旧路时，原来的内容 hash 幂等依旧成立——上面"三条写入通道"里写的 chunk-hash 说法对 local 路仍然正确。
+- **browse_* / delete_* 暂留本地**：三种 DELETE（item / namespace / source）与 `/data` Memory tab 的浏览仍走本地库，`DELETE /sessions/{id}` 的记忆回收段同理；上游 delete facade 属 Phase 2（`api.py` 包 `delete`/`delete_where` + gateway 转发），落地前保持 local 现状并明确标注，不造假。
+- **存量不迁移**："删了重灌"——`data/sessions/`、`data/pipeline/summaries/{pdf,web}/`、`BRIEFS_DIR` 本身就是可重建的事实源；`data/memory_db` 在收敛生效后转**只读兜底**，Phase 3 由 `python -m src.memory.converge --dry-run|--apply` 重建，回退＝把路径改回来，无数据损失。
+- **已知代价（文档级事实，不是 bug）**：① 记忆侧 LLM/嵌入配置归**上游 config** 管，AR 的 `/config` 页与 `resolve_provider` 链都管不到记忆侧——选路只决定"写哪读哪"，provider 解析链不改这一点；上游嵌入端点当前是局域网地址，机器不在该网段则**路由层面就判不可用**、整条记忆读写落本地旧库（写侧这类"没开起来"是落本地的，"开起来了但写失败"才 raise，见上）。② AR 递"已摘要文件"，上游 ingest 会再抽一遍，同一份内容过两轮 LLM（`qa`/`qa_brief` 字段可显式传下去当现成摘要省掉二次抽取，ai_research adapter 直接吃这字段）。③ 上游全同步、写路也全程 `to_thread`，写超时**没有** cancel 通道，只有等待侧硬 cap。
+- **验收锚点**：`LLM_MEMORY_REPO` 未设 → 全量测试与行为逐字节同今天；设了 → `namespaces()` 里 ai-research / webapp-chat 行数在涨、`search_memory` 命中上游行、旧库只读兜底可关；重复 ingest 同一会话文件不产生重复行。
+- **与历史裁决的冲突注记**：本小节依据的收敛裁决**取代** HANDOFF §0 三禁令里的 #1 与 #3——#1 作废（走 re-ingest + 旧库退役，不是把整库塞进上游），#3 豁免（写路径接上游 ingest 正是收敛本身）；#2 不是被推翻而是改写为"一切经 SDK 面，AR 进程不读不写 `~/.llm-memory`"。历史冲突文本不做抹除，每条裁决的原文、理由与改判条件都记在 [PLAN-MEMORY-CONVERGENCE.md](PLAN-MEMORY-CONVERGENCE.md) 的"裁决记录"段（改判需用户点名）。另：上游写面与只读检索面的 namespace 是两套——SDK 面传三个显式名字，decision 面（why/pack/remember）走上游路径派生 ns，这个分家是已知且接受的格局，别去"统一"。
+
 ## MCP Services
 
 `MCP_CONFIG`（`src/config/settings.py`）当前启用的条目：
@@ -276,6 +296,7 @@ SearchAgent 用到 stdio 一种传输，薄封装就地维护即可）。上游 
 - `BRIEFS_DIR`：简报 HTML 目录
 - `LLM_MEMORY_REPO`：上游 LLM-Memory checkout 路径——上游只读门面（SDK / 可选 MCP）的唯一寻址点；未设或无效即全部上游入口报 `available:false` + note，本地功能零影响
 - `LLM_MEMORY_MCP_ENABLED`：`=1` 时启用可选 MCP stdio 决策面（`python -m llm_memoryd.mcp --tools memory_why,memory_pack`）；默认关闭，不设即默认行为不受影响
+- `MEMORY_STORE_MODE`：记忆读写路由的 kill switch，**默认 `auto`**（gateway 一处决策点：`LLM_MEMORY_REPO` 可用走上游、否则本地旧路 + warning）；设 `local` 即强制本地旧路，上游可用也不写上游。它和 `LLM_MEMORY_REPO` 都不设＝全走旧路，dev/CI 行为零变化。只作用于写/读路由，管不到 `LLM_MEMORY_MCP_ENABLED` 那条只读决策面
 - （历史注记：`MEMORY_BRIEF_DRIVER` 的 `bridge` 兜底路与 `LLM_MEMORY_URL` 已随 HTTP 桥退役——driver 白名单只剩 `local`，旧值 warning→local）
 
 **Provider 配置来源——CLI 与 UI 的差异**：
@@ -344,6 +365,9 @@ briefs:    GET /dates /cards /memory-status  | POST /load /sync-memory /light-lo
 jobs:      GET "" | POST /{job_id}/retry /cancel        # 任务账本见 job_runner + webapp_jobs.json
 memory:    GET /overview /namespace/{ns} / POST /search
            DELETE /item/{id} /namespace/{ns}/source/{source_id} /namespace/{ns}
+           # 收敛注记：三种 DELETE 连同 browse 原语至今仍是**本地路**——写/读
+           # 已按 gateway 的 auto 路由选上游，删除面还没接（Phase 2 才接上游
+           # delete facade）；DELETE /sessions/{id} 的记忆回收段同指本地。
            GET /upstream / POST /upstream/search   # 上游只读门面（status 内嵌 decision 开关位；
            POST /upstream/decision                 #   检索缺省全局 scoped=False；why/pack 白名单一跳）
 speech:    POST /transcribe /synthesize

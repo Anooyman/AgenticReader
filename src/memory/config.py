@@ -46,6 +46,39 @@ DEFAULT_SEARCH_NAMESPACES: List[str] = [NAMESPACE_AI_RESEARCH, NAMESPACE_WEBAPP_
 # 记忆源时在这里登记，gateway 与 sessions PATCH 端点共用同一来源）。
 EXTERNAL_SEARCH_NAMESPACES: List[str] = []
 
+# ---- 记忆读写路由开关（收敛 Phase 1）----
+# policy 只在这里定义，选路动作在 gateway（policy 在本层 / 执行在别处，与
+# browse/delete 的分工同构）。这里刻意**不含**任何 namespace 知识：三个显式
+# 名字（ai-research / webapp-chat / AATF）还是上面的常量，路由只决定"走哪条
+# 路"，不决定"写哪个 ns"。
+MEMORY_STORE_MODE_ENV = "MEMORY_STORE_MODE"
+MEMORY_MODE_AUTO = "auto"    # 缺省：上游可用走上游，否则本地旧路
+MEMORY_MODE_LOCAL = "local"  # kill switch：即使上游可用也强制本地旧路
+MEMORY_MODES = (MEMORY_MODE_AUTO, MEMORY_MODE_LOCAL)
+
+# 非法取值只 warning 一次，别每次 search/ingest 都刷屏（同 _DIMENSION_CHECK_LOGGED 的口径）。
+_BAD_MODE_LOGGED: set = set()
+
+
+def get_memory_store_mode() -> str:
+    """读 MEMORY_STORE_MODE，返回 "auto" 或 "local"。
+
+    未设 / 空 / 取值不在白名单 → "auto"（缺省行为＝上游可用就走上游）。这是
+    纯 env 读取，不碰 settings 也不碰上游——路由决策链上唯一允许在 gateway
+    之外读的 env 开关，其它上游可用性判断一律走 upstream.upstream_available()。
+    """
+    raw = (os.environ.get(MEMORY_STORE_MODE_ENV) or "").strip().lower()
+    if not raw:
+        return MEMORY_MODE_AUTO
+    if raw not in MEMORY_MODES:
+        if raw not in _BAD_MODE_LOGGED:
+            _BAD_MODE_LOGGED.add(raw)
+            logger.warning("%s 取值 %r 不在白名单 %s，按 %s 处理",
+                           MEMORY_STORE_MODE_ENV, raw, list(MEMORY_MODES), MEMORY_MODE_AUTO)
+        return MEMORY_MODE_AUTO
+    return raw
+
+
 # 已知 embedding 模型 -> 向量维度。新增模型时在这里补一条即可。
 _KNOWN_DIMENSIONS = {
     "text-embedding-ada-002": 1536,

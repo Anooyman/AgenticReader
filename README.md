@@ -44,6 +44,19 @@ AgenticReader 是基于大语言模型（LLM）的智能文档分析与问答工
 - **agentic_search**：semantic / keyword / keywords-pool / list-by-source 四工具的 ReAct 检索循环（上限 4 轮），供 Orchestrator 调用；缺省范围是 ai-research + webapp-chat，`AATF` 需在 `/chat` 的记忆范围里勾选
 - `/data` 页 Memory tab 提供概览、检索、删除（单条 / 按来源 / 整个 namespace）
 
+### 🧠 记忆收敛 Phase 1（写/读路由到上游 LLM-Memory）
+
+本仓库的存储本身仍由 `src/memory/` 这层维护，外部 LLM-Memory 只是被寻址的上游；**在哪儿写、从哪儿读的决定点只有一个**——`src/memory/gateway.py` 的 **auto 路由**：`LLM_MEMORY_REPO` 有效且可达就走上游，否则回落原来的本地旧路并打 warning，调用方签名一律不动。看这把开关的只有 `gateway.search()` 与 `gateway.ingest()` 两处（mode 的取值也只在 `src/memory/config.py` 一处解析，非法值 warning→`auto`），浏览/删除与"轻量入库"的驱动分派都不碰它。Phase 1 的具体口径：
+
+- **两条写通道自动接上游**：管线 `ingest_source()`（`ai-research`）与 chat_ingest 车道（`webapp-chat`）的新行直接递上游 `ingest(path, source_type, namespace)`。**写路不回落**：`LLM_MEMORY_REPO` 没设/无效（路由判定为不可用）时照旧写本地 `data/memory_db`，但上游可用却写失败时 gateway 直接把失败抛给调用方（chat_ingest 的水位线、job_runner 的任务账本照常记一笔），绝不顺手再写一份本地——那是双写，同一份内容两处落库而水位线照推。要把路由整体退回本地只有两条正经办法：重试，或者 unset `LLM_MEMORY_REPO`／设 `MEMORY_STORE_MODE=local`。除这以外，`LLM_MEMORY_REPO` 与路由开关都不设时行为与今天逐字节一致，dev/CI 零变化、切换可逆。
+- **检索通道可回落**：gateway 的 `search()` 上游可用即转上游（多 namespace 直接透传），上游不可用或这次检索没成则走本地 `agentic_search`——这是读写唯一的差别；上游返回的宽表行由映射层摊平成子 agent 一直在吃的形状，`occurred_at` 日期字段保留，`/briefs` 的按日聚合口径不变。形状层**保真优先**：上游 schema 里本就有的列（含 `chunk_hash`，summary 行取空串）给了就直接用真值，只有结果行没把某列交出来时才退回启发式，不多塞任何一个键。
+- **存量不迁移，"删了重灌"**：`data/sessions/`、`data/pipeline/summaries/`、`BRIEFS_DIR` 本身就是可重建的事实源；`data/memory_db` 在收敛生效后只作为**只读兜底**存在，不是第二份真相。
+- **重复 ingest 的幂等归上游**：走上游时 AR 侧不再自己算 chunk-hash，去重交给上游 ingest 自带的 hash-dedup（同一文件再递一次应返回 0 新增，这条由测试钉着）；回落本地旧路时仍按原来的内容 hash 幂等。论文"下载即入库"的 `POST /briefs/fetch-pdf` 与文档对话能力都不受影响。
+- **本轮还没接的两处**（上游补丁落地前保持本地现状、不造假）：`/briefs` 的"轻量入库(全天)"仍走本地零 LLM 直写 `AATF`；`/data` Memory tab 的浏览与删除仍是本地路（Phase 2 才接上游 delete facade）。
+- **两条已知代价**（写明白，不算 bug）：① 记忆侧的 LLM/嵌入配置**归上游 config 管，`/config` 页管不到**，`/config` 的 provider 选择也不改变这一点——上游嵌入端点当前是局域网地址，机器不在该网段时上游路整体不可用，全靠上面的 auto 回落兜住；② AR 递过去的是"已摘要文件"，上游 ingest 会再抽一遍，同一份内容过两轮 LLM（`qa`/`qa_brief` 字段可显式传下去当现成摘要，省掉二次抽取）。
+
+要绕开上游按旧路跑，用 `MEMORY_STORE_MODE=local` 这个 kill switch（默认 `auto`）；它和 `LLM_MEMORY_REPO` 都不设，就是全部走旧路。完整的阶段划分与裁决记录见 [PLAN-MEMORY-CONVERGENCE.md](PLAN-MEMORY-CONVERGENCE.md)。
+
 ### 📰 每日简报管线（src/pipeline/）
 - `BRIEFS_DIR` 下的简报 HTML 解析入队（`data/pipeline/pipeline_queue.json`）
 - job_runner 后台车道串行处理：下载/爬取 → IndexingAgent + AnswerAgent（+ SearchAgent）多维 QA → `generate_qa_brief` 提炼摘要
@@ -216,6 +229,7 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 | `BRIEFS_DIR` | 简报 HTML 目录，默认 `~/Desktop/AATF-Intelligence-Briefs` |
 | `LLM_MEMORY_REPO` | 上游 LLM-Memory 的 checkout 路径——只读门面（SDK 进程内为主 / 可选 MCP stdio 决策面）的唯一寻址点；未设或路径无效时上游一律报 `available:false` + note，本地功能零影响 |
 | `LLM_MEMORY_MCP_ENABLED` | `=1` 时启用可选的 MCP stdio 决策面（`python -m llm_memoryd.mcp --tools memory_why,memory_pack`，why/pack 工具需显式开）；默认关闭——两个变量都不设，默认行为完全不受影响 |
+| `MEMORY_STORE_MODE` | 记忆存储的路由开关：`auto`（**默认**）＝ gateway 一处决策点自动选路，`LLM_MEMORY_REPO` 可用走上游、否则回落本地旧路；`local` ＝ 强制本地旧路（排障/对照用的 kill switch，上游可用也不写上游）。它与 `LLM_MEMORY_REPO` 都不设＝全部走旧路，dev/CI 零变化。只影响写/读路由，**不**影响 `LLM_MEMORY_MCP_ENABLED` 那条只读决策面 |
 | `DEBUG` | WebSocket 调试输出开关（`true` 开启），默认关闭 |
 
 > 历史注记：旧的外部 LLM-Memory webui HTTP 桥（`MEMORY_BRIEF_DRIVER=bridge` + `LLM_MEMORY_URL`，
@@ -316,6 +330,8 @@ briefs     GET  /dates /cards /memory-status   POST /load /sync-memory /light-lo
 jobs       GET  ""                         POST /{job_id}/retry /cancel
 memory     GET  /overview /namespace/{ns}  POST /search
            DELETE /item/{id} /namespace/{ns}/source/{source_id} /namespace/{ns}
+                 # 收敛注记：写/读已按 gateway 的 auto 路由选上游，三种 DELETE
+                 # 连同浏览仍是本地路（Phase 2 才接上游 delete facade）
            GET  /upstream                  POST /upstream/search
                 # 上游 LLM-Memory 只读门面：status 字段 available + namespaces/rows + version，
                 # 内嵌 decision:{enabled,available,note}；检索缺省作用域=全局（scoped=False），
