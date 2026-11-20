@@ -44,7 +44,7 @@ AgenticReader 是基于大语言模型（LLM）的智能文档分析与问答工
 - **agentic_search**：semantic / keyword / keywords-pool / list-by-source 四工具的 ReAct 检索循环（上限 4 轮），供 Orchestrator 调用；缺省范围是 ai-research + webapp-chat，`AATF` 需在 `/chat` 的记忆范围里勾选
 - `/data` 页 Memory tab 提供概览、检索、删除（单条 / 按来源 / 整个 namespace）
 
-### 🧠 记忆收敛 Phase 1（写/读路由到上游 LLM-Memory）
+### 🧠 记忆收敛 Phase 1–2（写/读/删路由到上游 LLM-Memory）
 
 本仓库的存储本身仍由 `src/memory/` 这层维护，外部 LLM-Memory 只是被寻址的上游；**在哪儿写、从哪儿读的决定点只有一个**——`src/memory/gateway.py` 的 **auto 路由**：`LLM_MEMORY_REPO` 有效且可达就走上游，否则回落原来的本地旧路并打 warning，调用方签名一律不动。看这把开关的是 `gateway.search()` / `gateway.ingest()` 加上一组 `gateway.delete_*`（mode 的取值也只在 `src/memory/config.py` 一处解析，非法值 warning→`auto`），`browse_*` 浏览原语仍是本地库的原语。Phase 1/2 的具体口径：
 
@@ -58,7 +58,23 @@ AgenticReader 是基于大语言模型（LLM）的智能文档分析与问答工
 
 要绕开上游按旧路跑，用 `MEMORY_STORE_MODE=local` 这个 kill switch（默认 `auto`）；它和 `LLM_MEMORY_REPO` 都不设，就是全部走旧路。
 
-上游那侧需要三个改动（delete facade、`source_type=brief` 枚举、`ingest` 的 `source_id` 透传），**补丁已备好在 `tools/upstream-patches/` 并且验证过**：三个补丁各自 `git apply --check` 干净通过，打全 01+02+03 后上游全量套件 2114 passed / 4 skipped 全绿，pyflakes 门与"不广告破坏性工具"那条 MCP 纪律都没被碰坏。**状态是"未 commit 进上游 main"**——是不是在你的上游工作树里真打上了、以及什么时候提交推送，都是留给你的决定，文档不替它背书，别当成已经在主干上。顺序按 01 → 02 → 03 打最省事（03 的测试块接着 01 的位置写）。怎么打、验到了什么、没验到什么，都记在 [tools/upstream-patches/README.md](tools/upstream-patches/README.md)；阶段划分与裁决记录在 [PLAN-MEMORY-CONVERGENCE.md](PLAN-MEMORY-CONVERGENCE.md)。
+上游那侧需要的三个改动（delete facade、`source_type=brief` 枚举、`ingest` 的 `source_id` 透传）**现在都已在上游 main 里**：用户侧自己把它们提交了（`888f966` 把三件全部纳入、`f181999` 补 docs，已推 github/main，HEAD `f181999`；AR 侧探针对着新 HEAD 跑也是 15/15 过）。**这是用户侧的提交动作，不是本仓的**——本仓一条都没往上游合。`tools/upstream-patches/` 里那三片保留下来作**历史参照**：当初的路径是"先在 `/tmp` 干净克隆里叠 01 → 02 → 03 验一遍"（各自 `git apply --check` 干净通过、叠满后上游全量套件 2114 passed / 4 skipped 全绿，pyflakes 门与"不广告破坏性工具"那条 MCP 纪律都没被碰坏），验证完才由用户落进 main，所以现在没有"还得自己打补丁"这回事，也别把这三片当成待办清单。此前那句"三片还停在主干之外、要不要打上由用户自己定"的旧口径一并作废。怎么验的、验到了什么、没验到什么，仍记在 [tools/upstream-patches/README.md](tools/upstream-patches/README.md)；阶段划分与裁决记录在 [PLAN-MEMORY-CONVERGENCE.md](PLAN-MEMORY-CONVERGENCE.md)。
+
+### ♻️ 存量重灌（Phase 3 · `python -m src.memory.converge`）
+
+存量**不迁移**——三个事实源本身就躺在本地，所以这里做的是"重灌"而不是"搬家"：`src/memory/converge.py` 是单文件 CLI，`data/memory_db` 的一行都不读、也不搬，收敛生效后它只是只读兜底。映射与三条常驻写通道**逐字对齐**，不另立 id 空间：`data/pipeline/summaries/{pdf,web}/ → ai_research / ai-research`、`data/sessions/*.json → webapp_chat / webapp-chat`、`BRIEFS_DIR/<date>/*.html` 卡片 `→ brief / AATF`，`source_id` 分别是 item_id / session_id / 卡片 item_id。
+
+```bash
+python -m src.memory.converge                              # 缺省＝dry-run：只枚举，零写入
+python -m src.memory.converge --apply                      # 真递上游
+python -m src.memory.converge --only briefs --limit 50     # 只推一路、每源各截前 N 条
+python -m src.memory.converge --apply --retire-old-db      # 末位是占位：只打印，不执行
+```
+
+- **dry-run 一个字节都不写**：连 `MemoryClient` 都不构造——构造它看着无害，其实会让上游按自己的规矩把 store 目录撑开（`~/.llm-memory/` 下多出 `ingest_state` 之类的空脚手架，mtime 跟着动）。所以 dry-run 那道门只做**配置面**检查（env 有没有配、`<repo>/src` 在不在），打印的是"配置面就绪，未连接上游确认"——**通不等于已连上**，"上游可达"留给 `--apply` 那道门去判。
+- **只写上游，不回退本地**：`LLM_MEMORY_REPO` 无效或 `MEMORY_STORE_MODE=local` 时直接退 1 并把拒跑理由一条条打出来（"这一条都不会递出去"），不做静默降级——半批进上游、半批进旧库是最难收场的局面。这也解释了它为什么调 `upstream.upstream_ingest()` 而不是 `gateway.ingest()`：gateway 的选路按调用点现探，跑到一半上游掉线时会按契约给那一条写本地，跟"整批只进上游"的批处理契约正相反。
+- **计数形状**：每条印 `+N 新增 / M 已存在`，末尾汇总"调用次数 → 新增 / 幂等命中 / 失败"；单条失败记一笔继续往下跑，有失败退 1。幂等交给上游 hash-dedup，**没有断点账本，也不需要**——Ctrl-C 落在源边界，再跑一次自动续上（中断退 130，全绿退 0，`--dry-run` 与 `--apply` 同时给退 2）。
+- **成本要写实**：`--since/--until` 是**闭区间**日期过滤，`--limit N` 对每个源分别截断，`--only {summaries,sessions,briefs}` 单独走一路。这层节流不是装饰——本机 `BRIEFS_DIR` 按 69 天存量算就是几千次 agentic 抽取（一天几十张卡片就是一轮一轮的 LLM 调用），想少花钱就先 dry-run 看规模、再按日期分片推。日期形状写错（不是 `YYYY-MM-DD`）直接报错，而不是"当作没有这天"静默滤掉——后者等于悄悄少灌一批。
 
 ### 📰 每日简报管线（src/pipeline/）
 - `BRIEFS_DIR` 下的简报 HTML 解析入队（`data/pipeline/pipeline_queue.json`）
