@@ -1,0 +1,721 @@
+diff --git a/README.md b/README.md
+index 2c47f03..276d5fe 100644
+--- a/README.md
++++ b/README.md
+@@ -179,6 +179,11 @@ client.pack(["src/api.py", "src/worker.py"], cwd="/path/to/repo", budget=2000)
+ | `ensure_ready` / `status` / `namespaces` / `topics` | 诊断三件套 |
+ | `chat` | 检索 + 生成，一次拿到底气充足的答案 |
+ 
++`ingest` 的 `source_type` 只能取自管线真的实现了的那份列表：
++`conversation`、`repo`、`ai_research`、`brief`、`openclaw`、`webapp_chat`。
++列表之外的值会在边界上被拒掉，而不是去猜一个 adapter——因为这些字符串本身就是
++下游按行寻址时用的 key。
++
+ `MemoryClient` 是唯一入口，内部一律走库而不是各自的脚本——这条是有测试兜着的：
+ MCP server 反过来只能调库，不许出现 MCP 导入库、库反过来导入 MCP 的情况。
+ 
+diff --git a/README_en.md b/README_en.md
+index af4e90d..7e8c09f 100644
+--- a/README_en.md
++++ b/README_en.md
+@@ -192,6 +192,11 @@ client.pack(["src/api.py", "src/worker.py"], cwd="/path/to/repo", budget=2000)
+ | `ensure_ready` / `status` / `namespaces` / `topics` | diagnostics |
+ | `chat` | retrieval + generation in one grounded reply |
+ 
++`ingest`'s `source_type` comes from the list the pipeline actually implements:
++`conversation`, `repo`, `ai_research`, `brief`, `openclaw`, `webapp_chat`. A
++value outside it is refused at the boundary rather than guessed at, because
++these same strings are what rows are keyed by downstream.
++
+ `MemoryClient` is the single entry point, and the dependency direction is guarded
+ by a test: the MCP server may call the library, never the reverse.
+ 
+diff --git a/scripts/tests/api/test_memory_client.py b/scripts/tests/api/test_memory_client.py
+index a83e010..f6d2eb0 100644
+--- a/scripts/tests/api/test_memory_client.py
++++ b/scripts/tests/api/test_memory_client.py
+@@ -307,3 +307,279 @@ def test_namespaces_and_topics_come_from_the_library(client, monkeypatch):
+ 
+     monkeypatch.setattr(topics, "load_topics", lambda: {"work": ["a-ns", "b-ns"]})
+     assert client.topics() == [{"name": "work", "namespaces": ["a-ns", "b-ns"]}]
++
++
++# ---------------------------------------------------------------------------
++# delete side
++#
++# The point of these cases is not that LanceDB can delete a row — test_vector.py
++# owns that. What is owned here is the boundary's behaviour: the id is checked
++# before anything is touched, a namespace the caller names is enforced rather
++# than ignored, and the store lock that ingest commits under is held.
++# ---------------------------------------------------------------------------
++
++def _row(mem_id, namespace="ns-a", source_id="src-1", source_type="conversation"):
++    """A row shaped like the store's own, so a delete path under test is not
++    talking to a schema the pipeline never writes."""
++    from datetime import datetime, timezone
++
++    now = datetime.now(timezone.utc).isoformat()
++    return {
++        "id": mem_id, "vector": [0.1] * 8, "namespace": namespace, "tier": "mid",
++        "memory_type": "semantic", "abstract": "abstract", "detail": "detail",
++        "abstracts_chain": "[]", "keywords": '["k"]', "importance": 0.5,
++        "access_count": 0, "last_accessed_at": "", "created_at": now,
++        "tier_updated_at": now, "source": "test", "session_id": "",
++        "occurred_at": "", "source_id": source_id, "source_type": source_type,
++    }
++
++
++def _store(client):
++    pytest.importorskip("lancedb")
++    from llm_memoryd.common.vector import VectorStore
++
++    return VectorStore(client.store_dir, CONFIG)
++
++
++def _spied_store(monkeypatch, sink, rows=None, reported=2):
++    """A VectorStore that records what the facade asked it to do.
++
++    Patched where the library resolves it, for the same reason the search
++    recorder is: one place left to stub, so the fake cannot disagree with the
++    real call graph.
++    """
++    import contextlib
++
++    import llm_memoryd.common.vector as vector
++    import llm_memoryd.api as memory_api
++
++    class _Spy:
++        def __init__(self, *args, **kwargs):
++            sink.append("store")
++
++        def get_by_ids(self, ids):
++            sink.append(("get_by_ids", tuple(ids)))
++            return {i: r for i, r in (rows or {}).items() for r in [rows[i]]}
++
++        def delete(self, memory_id):
++            sink.append(("delete", memory_id))
++
++        def delete_where(self, namespace, **filters):
++            sink.append(("delete_where", namespace, filters))
++            return reported
++
++        def count_rows(self, namespace, **filters):
++            sink.append(("count_rows", namespace, filters))
++            return reported
++
++    @contextlib.contextmanager
++    def _lock(*args, **kwargs):
++        sink.append("lock")
++        try:
++            yield
++        finally:
++            sink.append("unlock")
++
++    monkeypatch.setattr(vector, "VectorStore", _Spy)
++    monkeypatch.setattr(memory_api, "store_lock", _lock)
++    return sink
++
++
++def _order(sink, names):
++    """True when every name in `names` appears in `sink` in that order."""
++    index = 0
++    for entry in sink:
++        key = entry[0] if isinstance(entry, tuple) else entry
++        if key == names[index]:
++            index += 1
++            if index == len(names):
++                return True
++    return False
++
++
++def test_delete_removes_exactly_the_named_row(client):
++    pytest.importorskip("lancedb")
++    store = _store(client)
++    store.add(_row("keep-me"))
++    store.add(_row("drop-me"))
++
++    out = client.delete("drop-me", namespace="ns-a")
++    assert out["deleted"] is True
++    assert sorted(r["id"] for r in store.all_rows("ns-a")) == ["keep-me"]
++
++
++def test_delete_says_so_when_the_id_is_not_in_the_store(client):
++    """A caller with a stale id list did nothing wrong, so it is not told it
++    failed — "there was nothing at this id" is a result, not an exception."""
++    pytest.importorskip("lancedb")
++    _store(client).add(_row("only-row"))
++    out = client.delete("never-existed", namespace="ns-a")
++    assert out["deleted"] is False
++    assert "reason" in out
++    assert [r["id"] for r in _store(client).all_rows("ns-a")] == ["only-row"]
++
++
++def test_a_named_namespace_is_an_assertion_not_a_filter(client):
++    """The row lives in ns-a; naming ns-b is a wrong claim about the store, and
++    the answer is a refusal that leaves the row alone."""
++    pytest.importorskip("lancedb")
++    store = _store(client)
++    store.add(_row("ns-a-row"))
++    try:
++        client.delete("ns-a-row", namespace="ns-b")
++    except ValueError as exc:
++        assert "namespace" in str(exc)
++    else:
++        raise AssertionError("a cross-namespace delete was allowed through")
++    assert [r["id"] for r in store.all_rows("ns-a")] == ["ns-a-row"]
++
++
++def test_delete_rejects_an_id_the_store_could_not_filter_on(client):
++    pytest.importorskip("lancedb")
++    _store(client).add(_row("well-formed-id"))
++    for bad in ("", "   ", "two words", "../escape", "quote'here", "x" * 200):
++        try:
++            client.delete(bad, namespace="ns-a")
++        except ValueError:
++            continue
++        raise AssertionError(f"{bad!r} reached the store as an id")
++    assert [r["id"] for r in _store(client).all_rows("ns-a")] == ["well-formed-id"]
++
++
++def test_delete_where_refuses_every_unscoped_shape(client):
++    pytest.importorskip("lancedb")
++    store = _store(client)
++    store.add(_row("row-1"))
++    for kwargs in ({}, {"namespace": "*"}, {"namespace": ""}, {"namespace": "   "},
++                   {"namespace": ["*"]}, {"source_id": "src-1", "namespace": "*"}):
++        try:
++            client.delete_where(**kwargs)
++        except ValueError as exc:
++            assert "namespace" in str(exc), (kwargs, exc)
++        else:
++            raise AssertionError(f"unscoped delete accepted: {kwargs}")
++    assert [r["id"] for r in store.all_rows("ns-a")] == ["row-1"]
++
++
++def test_delete_where_deletes_only_the_named_source_and_reports_the_count(client):
++    pytest.importorskip("lancedb")
++    store = _store(client)
++    store.add(_row("a-1", source_id="src-1"))
++    store.add(_row("a-2", source_id="src-1"))
++    store.add(_row("a-3", source_id="src-2"))
++    store.add(_row("b-1", namespace="ns-b", source_id="src-1"))
++
++    out = client.delete_where(namespace="ns-a", source_id="src-1")
++    assert out["deleted"] == 2
++    assert out["namespace"] == "ns-a" and out["source_id"] == "src-1"
++    assert sorted(r["id"] for r in store.all_rows("ns-a")) == ["a-3"]
++    assert [r["id"] for r in store.all_rows("ns-b")] == ["b-1"]
++
++
++def test_the_delete_side_is_locked_the_way_the_write_side_is(client, monkeypatch):
++    """Same lock ingest commits under, taken before the read that decides what
++    to delete and not released until after the commit. A lock that arrives
++    after the read is a race the audit trail will not be able to explain.
++    """
++    sink = _spied_store(monkeypatch, [], rows={"id-1": _row("id-1")})
++    client.delete("id-1", namespace="ns-a")
++    assert _order(sink, ["lock", "get_by_ids", "delete", "unlock"]), sink
++
++    sink = _spied_store(monkeypatch, [])
++    client.delete_where(namespace="ns-a", source_id="src-1")
++    assert _order(sink, ["lock", "delete_where", "unlock"]), sink
++    call = [entry for entry in sink if isinstance(entry, tuple) and entry[0] == "delete_where"][0]
++    assert call[1] == "ns-a", "the namespace must arrive positionally-explicit, never as '*'"
++
++
++def test_dry_run_previews_the_exact_scope_it_would_delete(client, monkeypatch):
++    """`dry_run` counts against the same filter as the commit — but it still
++    takes the lock, because a count that moves under you is not a preview."""
++    sink = _spied_store(monkeypatch, [], reported=3)
++    out = client.delete_where(namespace="ns-a", source_id="src-1", dry_run=True)
++    assert out["dry_run"] is True and out["deleted"] == 3
++    assert not [entry for entry in sink if isinstance(entry, tuple)
++                and entry[0] == "delete_where"], sink
++    assert _order(sink, ["lock", "count_rows", "unlock"]), sink
++
++
++def test_delete_where_narrows_by_a_type_it_recognises(client, monkeypatch):
++    sink = _spied_store(monkeypatch, [], reported=1)
++    client.delete_where(namespace="ns-a", source_type="conversation")
++    filters = [entry for entry in sink if isinstance(entry, tuple)
++               and entry[0] == "delete_where"][0][2]
++    assert filters["source_type"] == "conversation"
++    with pytest.raises(ValueError):
++        client.delete_where(namespace="ns-a", source_type="not-a-type")
++
++
++# ---------------------------------------------------------------------------
++# ingest: the source_id the pipeline was already taking
++# ---------------------------------------------------------------------------
++
++def _capture_ingest(monkeypatch, report=None, derived="derived-from-content"):
++    import llm_memoryd.ingest_mid.ingest as ingest
++
++    seen = {}
++
++    def _fake(**kwargs):
++        seen.update(kwargs)
++        # The real pipeline always reports the id it used — the override if it
++        # got one, otherwise whatever the adapter derived.
++        body = {"source_id": kwargs.get("source_id") or derived}
++        body.update(report or {})
++        return body
++
++    monkeypatch.setattr(ingest, "ingest_source_agentic", _fake)
++    return seen
++
++
++def test_ingest_forwards_an_explicit_source_id(client, tmp_path, monkeypatch):
++    """`ingest_source_agentic` has taken a source_id all along; the facade could
++    not say "use this id" to it. A caller that keys its own registry by some id
++    needs the rows keyed by the same id or it cannot address them later."""
++    source = tmp_path / "card.json"
++    source.write_text('{"item_id": "inner-id"}\n', encoding="utf-8")
++    seen = _capture_ingest(monkeypatch)
++    out = client.ingest(str(source), "ai_research", namespace="ns-test",
++                        source_id="2401.01234v2")
++    assert seen["source_id"] == "2401.01234v2"
++    assert out["source_id"] == "2401.01234v2"
++    assert out["source_type"] == "ai_research"
++
++
++def test_ingest_without_an_override_leaves_the_derivation_alone(client, tmp_path, monkeypatch):
++    source = tmp_path / "card.json"
++    source.write_text('{"item_id": "inner-id"}\n', encoding="utf-8")
++    seen = _capture_ingest(monkeypatch)
++    out = client.ingest(str(source), "ai_research", namespace="ns-test")
++    assert seen["source_id"] is None, "omitting it must not invent a value"
++    assert out["source_id"] == "derived-from-content", \
++        "the answer is the id the rows landed under, not a guess about it"
++
++
++def test_the_facade_falls_back_to_the_id_it_asked_for(client, tmp_path, monkeypatch):
++    """A pipeline report that does not carry the id (an older report shape)
++    must not cost the caller the answer they already supplied.
++    """
++    source = tmp_path / "card.json"
++    source.write_text("{}\n", encoding="utf-8")
++    _capture_ingest(monkeypatch, report={"source_id": None})
++    out = client.ingest(str(source), "ai_research", namespace="ns-test",
++                        source_id="2401.01234v2")
++    assert out["source_id"] == "2401.01234v2"
++
++
++def test_ingest_refuses_a_source_id_nothing_could_address(client, tmp_path, monkeypatch):
++    """A source_id is only worth having if the read/delete side can filter on
++    it, and that filter goes through the store's id grammar. Accepting it here
++    would write rows whose only failure mode is 'deleted 0' two weeks later."""
++    source = tmp_path / "card.json"
++    source.write_text("{}\n", encoding="utf-8")
++    _capture_ingest(monkeypatch)
++    for bad in ("two words", "quote'x", "", "   ", "x" * 200):
++        try:
++            client.ingest(str(source), "ai_research", namespace="ns-test", source_id=bad)
++        except ValueError:
++            continue
++        raise AssertionError(f"{bad!r} was accepted as a source id")
+diff --git a/scripts/tests/test_source_types_are_one_contract.py b/scripts/tests/test_source_types_are_one_contract.py
+new file mode 100644
+index 0000000..21f8988
+--- /dev/null
++++ b/scripts/tests/test_source_types_are_one_contract.py
+@@ -0,0 +1,139 @@
++# LLM-Memory/scripts/tests/test_source_types_are_one_contract.py
++"""`source_type` is one list, told in several places, and it must stay one list.
++
++A type name is not decoration: it is the key every row is written under, the
++filter `VectorStore._where()` matches rows with, and the value a caller has to
++get right for `delete_where(namespace, source_id=...)` to find anything. When
++the docs list six adapters and the enum implements five, the sixth is a promise
++a client can only discover by getting an error — which is exactly the bug this
++file now refuses to let the project re-ship.
++
++The shape is borrowed from `test_mcp_server.py`'s documented-surface block:
++the assertion is a LITERAL, not a comparison against `api.SOURCE_TYPES`.
++Comparing a constant to itself is self-justifying; it stays green when the
++constant drifts, which is precisely the drift worth catching. Everything else
++then checks that the other places — the advertised MCP schema, the adapter
++registry, the prose — agree with that literal.
++
++Deliberately NOT compared: the webui's ingest dropdown. That is a curated
++subset of types that need a path hint, not a mirror of the enum, and a test
++that reads it would either force the UI to advertise types its input box has
++no placeholder for, or force the enum to shrink.
++"""
++import pathlib
++import re
++
++from llm_memoryd import api
++from llm_memoryd import mcp
++from llm_memoryd.ingest_mid import adapters
++
++ROOT = pathlib.Path(__file__).resolve().parents[2]
++DOCS = [ROOT / name for name in ("README.md", "README_en.md", "SKILL.md")]
++
++# The membership, spelled out. Adding a type is a deliberate act: this line has
++# to change with it, and a new name nobody wrote down fails here.
++DOCUMENTED = ("conversation", "repo", "ai_research", "brief", "openclaw", "webapp_chat")
++
++
++def _advertised_enum():
++    tool = next(t for t in mcp.TOOLS if t["name"] == "memory_ingest")
++    return tool["inputSchema"]["properties"]["source_type"]["enum"]
++
++
++def _listed_in(text):
++    """Every type name in a proper enumeration of quoted snake_case names.
++
++    Two quoted tokens belong to the same list only when nothing but a
++    separator sits between them (`,`, `、`, `和`/`或`, a newline, a closing
++    paren) — that is what keeps the schema notes (`abstract`, `detail`,
++    `chunk_hash`, discussed on the same pages within a paragraph of the type
++    list) out of a list they were never part of, which a fixed character
++    window could not promise.
++
++    A run qualifies as *the* source-type listing when it names both ends of
++    the enum, so two accidental backtick-quoted words near each other cannot
++    pass as a claim about the surface.
++    """
++    runs, current, previous_end = [], [], 0
++    for match in re.finditer(r"`([a-z][a-z0-9_]{2,})`", text):
++        gap = text[previous_end:match.start()]
++        if current and not re.fullmatch(r"[\s、,和或及()（）]*(?:and[\s]*)?", gap):
++            runs.append(current)
++            current = []
++        current.append(match.group(1))
++        previous_end = match.end()
++    if current:
++        runs.append(current)
++    return {name for run in runs
++            if "conversation" in run and "webapp_chat" in run for name in run}
++
++
++def test_the_library_enum_is_the_documented_six():
++    assert set(api.SOURCE_TYPES) == set(DOCUMENTED), api.SOURCE_TYPES
++    # Order is not behaviour, but a reordered tuple makes diff noise in the
++    # error message a caller sees ("unsupported source_type" lists them), so
++    # the canonical order is worth pinning while it is cheap.
++    assert list(api.SOURCE_TYPES) == list(DOCUMENTED)
++
++
++def test_the_advertised_schema_does_not_invent_its_own_enum():
++    advertised = _advertised_enum()
++    assert set(advertised) == set(DOCUMENTED), advertised
++    assert list(advertised) == list(DOCUMENTED)
++
++
++def test_every_source_type_names_a_registered_adapter():
++    """The enum's promise is that the pipeline implements the type, so the two
++    must be equal — a registered adapter the enum refuses is dead code with a
++    docstring, and an enum value with no adapter is the ingest-time error this
++    file exists to prevent."""
++    registered = {cls.source_type for cls in adapters._REGISTRY.values()}
++    assert registered == set(DOCUMENTED), registered
++    for name in DOCUMENTED:
++        assert adapters.get_adapter(name).source_type == name
++
++
++def test_the_docs_that_advertise_the_surface_name_every_type():
++    """A document may list a subset (the rebuild docs name only the
++    snapshot-backed types), but an enumeration that claims the source-type
++    surface has to be exactly the enum — nothing missing, nothing invented."""
++    for path in DOCS:
++        if not path.exists():
++            continue
++        text = path.read_text(encoding="utf-8")
++        if "webapp_chat" not in text:
++            continue  # this document does not advertise the typed source list
++        listed = _listed_in(text)
++        assert listed, f"{path.name} names the surface but enumerates no type list"
++        assert listed == set(DOCUMENTED), (
++            f"{path.name} enumerates {sorted(listed)}, not the implemented set")
++
++
++def test_the_gate_and_the_enum_agree_on_every_type(tmp_path):
++    """Two halves of the same promise, on a client that owns no repository.
++
++    A name the enum admits must get *past* the gate — handing it a missing file
++    then fails on the next rule (path shape), not on the type. A name the enum
++    does not admit is refused by name. Both directions belong in one test
++    because the two failures look almost alike to a caller, and a silent
++    "unsupported source_type" for a type that works would be the drift this
++    file exists to catch.
++    """
++    client = api.MemoryClient(config={"embedding": {"dimensions": 8,
++                                                    "endpoint": "unused"}},
++                              store_dir=str(tmp_path / "store"))
++    absent = str(tmp_path / "absent.md")
++    for name in api.SOURCE_TYPES:
++        try:
++            client.ingest(absent, name, namespace="ns-test")
++        except ValueError as exc:
++            assert "unsupported source_type" not in str(exc), name
++        else:
++            raise AssertionError(f"{name!r} ran the pipeline on a missing file")
++    for bad in ("", "not-a-type", "Brief", "BRIEF", "briefs"):
++        try:
++            client.ingest(absent, bad, namespace="ns-test")
++        except ValueError as exc:
++            assert "source_type" in str(exc), (bad, exc)
++        else:
++            raise AssertionError(f"{bad!r} was accepted by the ingest gate")
+diff --git a/src/llm_memoryd/api.py b/src/llm_memoryd/api.py
+index ae84d14..4c83547 100644
+--- a/src/llm_memoryd/api.py
++++ b/src/llm_memoryd/api.py
+@@ -36,6 +36,10 @@ from llm_memoryd.common import git
+ from llm_memoryd.common import paths as locations
+ from llm_memoryd.common.config import load_config
+ from llm_memoryd.common.ingest_guard import check_ingest_target
++# The same store-level write lock ingest's commit stage and knowledge/write.py
++# take. It is imported rather than re-implemented here for the obvious reason:
++# a delete that skips it is a delete that races with an ingest.
++from llm_memoryd.common.store_lock import store_lock
+ 
+ # The knowledge types a `remember` may declare. Mirrored from write.py's own
+ # vocabulary so the boundary rejects what the drainer would reject.
+@@ -44,7 +48,7 @@ KNOWLEDGE_TYPES = ("decision", "failure", "constraint", "profile")
+ # The ingest source types the pipeline actually implements. An enum a client
+ # can guess at is a contract it will violate, so it is declared once here and
+ # checked here.
+-SOURCE_TYPES = ("conversation", "repo", "ai_research", "openclaw", "webapp_chat")
++SOURCE_TYPES = ("conversation", "repo", "ai_research", "brief", "openclaw", "webapp_chat")
+ 
+ # A path list beyond this is not a "few files", it is an accidental directory
+ # dump, and the row would be useless for retrieval.
+@@ -58,6 +62,38 @@ def _now_iso() -> str:
+     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+ 
+ 
++def _checked_id(vs, value: Any, label: str) -> str:
++    """The store's id grammar, applied at the boundary instead of at the filter.
++
++    Read off `vector.ID_RE` rather than re-declared here so the rule the delete
++    paths use cannot drift from the one every other write path already obeys.
++    A caller handing over an id it scraped from a URL, a JSON blob or a search
++    result is the normal case, and this is where a value that would otherwise
++    reach a quoted SQL clause is stopped.
++    """
++    text = str(value or "")
++    if not text.strip():
++        raise ValueError(f"{label} must be a non-empty string")
++    pattern = getattr(vs, "ID_RE", None)
++    if pattern is not None and not pattern.match(text):
++        raise ValueError(f"invalid {label}: {text[:80]!r}")
++    return text
++
++
++def _checked_namespace(namespace: Any) -> str:
++    """One concrete namespace name, or a refusal that explains itself.
++
++    `*` is the store's own "no namespace clause" marker and the empty string
++    arrives there by accident just as easily; for a SELECT either is a
++    convenience, for a DELETE both are the whole table. Same refusal text the
++    UI handlers give, so a caller pattern-matching on it keeps working.
++    """
++    text = str(namespace or "").strip()
++    if not text or text == "*":
++        raise ValueError("refusing to delete '*'/empty: pass one exact namespace name")
++    return text
++
++
+ def _resolve(module: str):
+     """The one place the library resolves one of its own submodules.
+ 
+@@ -276,6 +312,7 @@ class MemoryClient:
+                 "entity": entity, "slug": slug, "paths": rel_paths}
+ 
+     def ingest(self, path: str, source_type: str, *, namespace: Optional[str] = None,
++               source_id: Optional[str] = None,
+                dry_run: bool = False, enable_rechunk: bool = False,
+                enable_quality_check: bool = False,
+                on_step=None) -> Dict[str, Any]:
+@@ -293,6 +330,20 @@ class MemoryClient:
+           tool's own memory contents and is being told what to hand over: without
+           the allow/deny check it could ingest ~/.ssh or an .env and pull it back
+           out through a later search.
++        * `source_id` overrides what the adapter would have derived — a session
++          uuid, an `item_id`, the repo root's namespace slug — and the override is
++          the point: a caller that already addresses this source by some id of its
++          own (the id in its registry, the id a queue keyed it under) needs the
++          rows keyed by that id, not by "whatever the file's name happens to be".
++          Omitted, this is exactly the old behaviour: `ingest_source_agentic`'s
++          `source_id or adapter.source_id(path)`.
++
++          An explicit id is checked against the store's id grammar before the
++          pipeline runs, and the reason is a silent one: every source_id filter
++          on the read side goes through `VectorStore._where()` -> `_validate_id`,
++          so an id below that grammar is writable but not addressable. The
++          failure then arrives as "deleted 0 rows" from a later delete, or as a
++          search that finds nothing, which is the worst shape of a key mistake.
+         """
+         module = _resolve("ingest_mid.ingest")
+         if module is None:
+@@ -319,12 +370,32 @@ class MemoryClient:
+         chosen = namespace or derived or self._namespace
+         if not chosen:
+             raise ValueError("namespace could not be derived; pass namespace=")
++        sid = None
++        if source_id is not None:
++            vs = _resolve("common.vector")
++            if vs is not None:
++                sid = _checked_id(vs, source_id, "source id")
++            else:
++                # No lancedb, no store, no grammar to enforce. Checked here
++                # rather than never, so a partial install still gets the
++                # shape errors (type, path) it can be given an answer to.
++                sid = str(source_id or "").strip()
++                if not sid:
++                    raise ValueError("source id must be a non-empty string")
+         result = module.ingest_source_agentic(
+             path=target, source_type=kind, namespace=chosen, store_dir=self._store_dir,
+             config=self._config, dry_run=dry_run, on_step=on_step,
++            source_id=sid,
+             enable_rechunk=enable_rechunk, enable_quality_check=enable_quality_check)
++        report = result if isinstance(result, dict) else {"result": result}
+         return {"source_type": kind, "namespace": chosen,
+-                "report": result if isinstance(result, dict) else {"result": result}}
++                # The id the rows actually landed under. The pipeline reports it
++                # — and echoing it back is the point of letting a caller name
++                # the id at all: "is this source already in?" is answered by the
++                # stored key, not by the caller's guess about what it thinks it
++                # wrote. When no override was given this is the adapter's answer.
++                "source_id": report.get("source_id") or sid,
++                "report": report}
+ 
+     # ------------------------------------------------------------------
+     # read side
+@@ -579,6 +650,102 @@ class MemoryClient:
+                                       self._config, synthesis=retrieval.get("synthesis"))
+         return {"reply": reply, "retrieval": retrieval}
+ 
++    # ------------------------------------------------------------------
++    # delete side
++    # ------------------------------------------------------------------
++    def delete(self, memory_id: str, *, namespace: Optional[str] = None) -> Dict[str, Any]:
++        """Forget one row, by id.
++
++        Why the library owns this rather than leaving it to the caller: every
++        other write and read a consuming repository does goes through this
++        class, and a delete is the one mutation where skipping the layer costs
++        the most — below it live the id grammar that keeps a string out of a
++        SQL filter, and the store lock that keeps a delete from interleaving
++        with an ingest. Handing out `VectorStore` to callers is how a second,
++        ungarded delete path appears in a downstream repo.
++
++        * `memory_id` is checked against the store's own grammar here, before a
++          lock is acquired, so a caller with a bad id list gets the same error
++          whether or not anything was found to delete.
++        * `namespace=`, when given, is an assertion about the row rather than a
++          filter: a row that turns out to live somewhere else is a refusal, not
++          a silent success. A stale id list is the realistic way to hit this,
++          and "deleted nothing because you named the wrong scope" is the answer
++          that can be trusted.
++        * Nothing is derived from `cwd`. Derivation is the read side's
++          convenience; on this side a guess is a scope change.
++        """
++        vs = _resolve("common.vector")
++        if vs is None:
++            raise ValueError("llm_memoryd.common.vector is not available")
++        ident = _checked_id(vs, memory_id, "memory id")
++        named = _checked_namespace(namespace) if namespace is not None else None
++        store = vs.VectorStore(self._store_dir, self._config)
++        with store_lock():
++            row = store.get_by_ids([ident]).get(ident)
++            if row is None:
++                # Not an error: the caller asked for a state, and the store
++                # already satisfies it. Reporting it beats raising, because the
++                # common cause (an id that was already dropped by a re-ingest)
++                # is not something the caller did wrong.
++                return {"deleted": False, "memory_id": ident, "namespace": named,
++                        "reason": "no row with this id"}
++            if named is not None and (row.get("namespace") or "") != named:
++                raise ValueError(
++                    f"refusing to delete: memory id {ident!r} is in namespace "
++                    f"{(row.get('namespace') or '')!r}, not {named!r}")
++            store.delete(ident)
++        return {"deleted": True, "memory_id": ident, "namespace": named}
++
++    def delete_where(self, *, namespace: Optional[str] = None,
++                     source_id: Optional[str] = None,
++                     source_type: Optional[str] = None,
++                     tier: Optional[str] = None,
++                     dry_run: bool = False) -> Dict[str, Any]:
++        """Delete one explicit scope in a single commit, reporting the count.
++
++        The store already refuses an unscoped delete, so this method's job is
++        to be the stricter of the two — `VectorStore.delete_where()` accepts
++        *either* a concrete namespace or a concrete `source_id`, and that is
++        right for a SELECT-shaped helper but too loose for a library entry
++        point: a source id is a per-project string, so `source_id="main"` with
++        no namespace would match rows from every project on the machine. Here
++        the namespace is required and concrete, exactly as the UI's own
++        namespace/source handlers demand it.
++
++        One commit, not one per row (the P1-15 property the store was built
++        for): a namespace-sized delete costs the same whether it has ten rows
++        or ten thousand, which also means the delete is not visible halfway
++        through to a concurrent search.
++
++        `dry_run` reports `count_rows` against the *same* filter expression the
++        commit would use, so it is a preview of this call rather than a
++        different query. Nothing is deleted under it, but the lock is still
++        taken: a count that changes under you is not a preview.
++        """
++        vs = _resolve("common.vector")
++        if vs is None:
++            raise ValueError("llm_memoryd.common.vector is not available")
++        named = _checked_namespace(namespace)
++        src = str(source_id or "").strip()
++        if src == "*":
++            raise ValueError("refusing to delete source_id='*': pass one exact source_id")
++        if src:
++            _checked_id(vs, src, "source id")
++        if source_type is not None and str(source_type) not in SOURCE_TYPES:
++            raise ValueError("unsupported source_type")
++        store = vs.VectorStore(self._store_dir, self._config)
++        with store_lock():
++            if dry_run:
++                removed = store.count_rows(named, tier=tier, source_type=source_type,
++                                           source_id=src or None)
++            else:
++                removed = store.delete_where(named, tier=tier, source_type=source_type,
++                                             source_id=src or None)
++        return {"namespace": named, "source_id": src or None,
++                "source_type": source_type, "tier": tier, "dry_run": bool(dry_run),
++                "deleted": int(removed or 0)}
++
+     # ------------------------------------------------------------------
+     # helpers
+     # ------------------------------------------------------------------
+diff --git a/src/llm_memoryd/mcp.py b/src/llm_memoryd/mcp.py
+index a18118b..aa1cadd 100644
+--- a/src/llm_memoryd/mcp.py
++++ b/src/llm_memoryd/mcp.py
+@@ -71,7 +71,7 @@ MAX_MESSAGE_CHARS = 100_000
+ TOOLS = [
+     {"name": "memory_search", "description": "Search persistent Memory using agentic retrieval. Pass cwd to scope results to that repository's namespace. Without namespace, topic, or cwd the search spans all namespaces and says so in the result.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "namespace": {"type": "string"}, "topic": {"type": "string"}, "cwd": {"type": "string", "description": "current working directory or any path inside the repo; scopes the search to that repository's namespace when neither namespace nor topic is given"}}, "required": ["query"]}},
+     {"name": "memory_chat", "description": "Retrieve Memory context and generate a grounded chat reply.", "inputSchema": {"type": "object", "properties": {"message": {"type": "string"}, "namespace": {"type": "string"}, "topic": {"type": "string"}, "history": {"type": "array"}}, "required": ["message"]}},
+-    {"name": "memory_ingest", "description": "Ingest one supported source file into a namespace.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "source_type": {"type": "string", "enum": ["conversation", "repo", "ai_research", "openclaw", "webapp_chat"]}, "namespace": {"type": "string"}, "dry_run": {"type": "boolean"}}, "required": ["path", "source_type", "namespace"]}},
++    {"name": "memory_ingest", "description": "Ingest one supported source file into a namespace.", "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "source_type": {"type": "string", "enum": ["conversation", "repo", "ai_research", "brief", "openclaw", "webapp_chat"]}, "namespace": {"type": "string"}, "dry_run": {"type": "boolean"}}, "required": ["path", "source_type", "namespace"]}},
+     {"name": "memory_list_topics", "description": "List configured topic-to-namespace mappings.", "inputSchema": {"type": "object", "properties": {}}},
+     {"name": "memory_list_namespaces", "description": "List namespaces and row counts.", "inputSchema": {"type": "object", "properties": {}}},
+     # Decision memory (Phase 2a). Results are a HISTORICAL SNAPSHOT: code may
+@@ -593,7 +593,16 @@ def _call_memory_list_namespaces(args, config):
+ 
+ def _call_memory_ingest(args, config):
+     """memory_ingest: every ingest rule (enum, dir/file, size, guard) is the
+-    library's; this only checks the argument shapes this transport promises."""
++    library's; this only checks the argument shapes this transport promises.
++
++    `source_id` is deliberately NOT advertised here, even though the library
++    now accepts it. It is a storage key, not a document field: the CLI exposes
++    `--source-id` because a human is naming a source they can point at, while a
++    tool call here is made by a model that has no way to know which id a later
++    delete or search-by-source will address the rows by. The derived answer is
++    also the answer every other entry point gives, which is what a
++    namespace-scoped tool is supposed to agree with.
++    """
+     path = _text(args.get("path"), "path", 4096)
+     source_type = _text(args.get("source_type"), "source_type", 50)
+     namespace = args.get("namespace")
