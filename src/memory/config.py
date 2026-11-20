@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 
 MEMORY_DB_DIR = os.path.join(DATA_ROOT, "memory_db")
 
+# 上游路上"卡片 → 摘要 JSON"的落地处。上游的 ingest 只读**一个文件**
+# （isfile + size guard + allow/deny 检查都冲着文件去），所以轻量入库那条
+# 上游路必须先把卡片写成一份结构上像 ai_research 摘要的 JSON 再递过去——
+# 这个目录就是那份中转，不是第二个库：内容随时可以从 BRIEFS_DIR 重算，
+# 删了也不掉任何事实。落盘一律走 write_json_atomic 那套惯例。
+MEMORY_STAGING_DIR = os.path.join(DATA_ROOT, "memory_staging", "brief")
+
 # 每篇论文/文章一个 source_id（=doc_name），namespace 用来把"论文/文章摘要"
 # 和"webapp 对话历史"分开检索（两者语义不同，混在一起会互相污染 top-k）。
 NAMESPACE_AI_RESEARCH = "ai-research"

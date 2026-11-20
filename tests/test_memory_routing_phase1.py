@@ -65,6 +65,8 @@ class _RoutingClient:
     def __init__(self, rows=None):
         self.search_calls = []
         self.ingest_calls = []
+        self.delete_calls = []
+        self.delete_where_calls = []
         self._seen = {}
         self.rows = rows if rows is not None else [
             _up33_row(),
@@ -91,6 +93,18 @@ class _RoutingClient:
                                   "namespace": namespace})
         return {"source_type": source_type, "namespace": namespace,
                 "report": {"chunks_added": added, "chunks_skipped": 3 - added}}
+
+    def delete(self, memory_id):
+        # Phase 2 起 gateway.delete_* 转上游——假 client 补上这条面，
+        # Phase 1 的本文件用例按最终裁决跟踪，见 test_aatf/delete 两处改写。
+        self.delete_calls.append(memory_id)
+        return {"deleted": 1}
+
+    def delete_where(self, namespace=None, source_id=None, **kw):
+        if not namespace and not source_id:
+            raise ValueError("delete_where refuses an unscoped delete")
+        self.delete_where_calls.append({"namespace": namespace, "source_id": source_id})
+        return {"deleted": 1}
 
     def scope_of(self):
         c = self.search_calls[-1]
@@ -331,27 +345,45 @@ def test_store_mode_local_is_the_kill_switch(monkeypatch, tmp_path):
         "MEMORY_STORE_MODE=local 仍写了/读了上游"
 
 
-def test_aatf_brief_channel_stays_local(upstream_on, monkeypatch):
-    """计划裁决：Phase 1 只收 pipeline 与 chat_ingest 两条写通道，
-    轻量入库 AATF 仍走本地直写（brief_ingest），不许被 auto 路由
-    "顺手"捎带进上游——那是 Phase 2 的 id 空间换轨才动的事。"""
-    seen = []
+def test_aatf_brief_channel_follows_route(upstream_on, monkeypatch, tmp_path):
+    """Phase 2 裁决改写本用例：AATF 不再豁免——上游可用时 load_brief_date
+    走"卡片 JSON → 上游 ingest(source_type=brief, namespace=AATF)"，
+    source_id=item_id 原样透传由 test_memory_routing_phase2 钉死；这里守
+    两件事：上游 ingest 真的被递了、本地直写没被"顺手"捎带执行（双写）。
+    unset 时的 local 回落底线见 phase2 同名回归用例。
+    原 Phase 1 语义"仍 local"已被裁决取代，不是删用例而是换断言。"""
+    import src.memory.brief_ingest as bi
+    import src.pipeline.briefs_parser as bp
 
-    async def fake_local(date, provider=None, **kw):
-        seen.append(date)
+    monkeypatch.setattr(bp, "parse_briefs_dir", lambda d, day: {
+        "pdf": [{"item_id": "c1", "title": "导读一", "coverage_date": day,
+                 "summary": "内容", "cn": {"要点": "一条"}}],
+        "web": []})
+    monkeypatch.setattr(bi, "MEMORY_STAGING_DIR", str(tmp_path / "staging"))
+    local_calls = []
+
+    async def spy_local(date, provider=None, **kw):
+        local_calls.append(date)
         return {"loaded": True, "skipped": False, "errors": []}
 
-    import src.memory.brief_ingest as bi
-    monkeypatch.setattr(bi, "load_brief_date_local", fake_local)
+    monkeypatch.setattr(bi, "load_brief_date_local", spy_local)
     monkeypatch.delenv("MEMORY_BRIEF_DRIVER", raising=False)
-    _run(gateway.load_brief_date("2026-11-19"))
-    assert seen == ["2026-11-19"]
-    assert not upstream_on.ingest_calls, "AATF 通道被 auto 路由误伤了"
+    out = _run(gateway.load_brief_date("2026-11-19"))
+    assert isinstance(out, dict) and {"loaded", "skipped", "errors"} <= set(out)
+    assert upstream_on.ingest_calls, \
+        "AATF 上游可用时没递上游 ingest——Phase 2 通道没接上"
+    assert all(c["namespace"] == "AATF" and c["source_type"] == "brief"
+               for c in upstream_on.ingest_calls)
+    assert not local_calls, "上游路还顺手跑了本地直写——那是双写"
 
 
-def test_browse_and_delete_stay_local_with_upstream_on(upstream_on, monkeypatch):
-    """浏览/删除面 Phase 1 明确留本地：即便上游全绿，browse_* / delete_*
-    只许碰本地 _store，一次上游调用都不该有（delete facade 是 Phase 2）。"""
+def test_browse_stays_local_delete_follows_route(upstream_on, monkeypatch):
+    """Phase 2 裁决改写本用例：browse_* 不在三条路线里，仍走本地
+    （这半边从 Phase 1 原样保留）；delete_* 已接上游——这里守的是
+    "browse 没被顺手捎进上游、delete 没再静默落本地"，完整 scope
+    守卫与失败语义由 test_memory_routing_phase2 钉死。"""
+    deleted_locally = []
+
     class _S:
         def rows_for_source(self, ns, sid):
             return [{"id": "x1", "chunk_hash": "h"}]
@@ -360,14 +392,17 @@ def test_browse_and_delete_stay_local_with_upstream_on(upstream_on, monkeypatch)
             return [{"id": "x1", "chunk_hash": "h"}]
 
         def delete(self, row_id):
-            pass
+            deleted_locally.append(row_id)
 
     monkeypatch.setattr(gateway, "_store", lambda provider=None: _S())
+    # browse：纯本地，一次不许碰上游
     assert len(gateway.browse_all_rows("ai-research")) == 1
+    assert not upstream_on.ingest_calls and not upstream_on.search_calls
+    # delete：Phase 2 起转上游，本地库不该再被动
     assert gateway.delete_source("ai-research", "doc-x") == 1
-    assert gateway.delete_namespace("webapp-chat") == 1
-    assert not upstream_on.ingest_calls and not upstream_on.search_calls, \
-        "browse/delete 漏走上游了——Phase 1 它们是本地路"
+    assert not deleted_locally, "delete_source 还静默留在本地路——Phase 2 没接上"
+    assert upstream_on.delete_where_calls or upstream_on.delete_calls, \
+        "delete_* 没走 upstream delete facade"
 
 
 # ---------------------------------------------------------------- ⑥ 回归底线

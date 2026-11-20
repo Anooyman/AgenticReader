@@ -222,11 +222,9 @@ def _map_upstream_ingest_report(payload: Dict[str, Any],
     # 其余（含 summary_id 与非 list 的怪形状）原样带上，留给日志与将来。
     for key, value in inner.items():
         report.setdefault(key, value)
-    if source_id and requested_source_id and str(source_id) != str(requested_source_id):
-        logger.warning("上游 ingest 落库的 source_id=%r 与调用方请求的 %r 不同"
-                       "（SDK 面不带 source_id，由上游 adapter 按 path 派生）——"
-                       "按 source 检索/联查时以库里的为准",
-                       source_id, requested_source_id)
+    # source_id 的一致性断言不住在这层：`upstream_ingest` 拿到 echo 就会比
+    # （transport 层看得见 echo，映射层看不见增量信息），这里再打一条只会
+    # 让同一件事刷两遍日志。
     return report
 
 
@@ -386,22 +384,103 @@ def browse_rows_for_source(namespace: Union[str, List[str]], source_id: str) -> 
     return _store().rows_for_source(namespace, source_id)
 
 
+# ---- 同步侧的选路 ----
+# delete_* 三个原语是 sync 函数，不能 await 一个 async 决策点，所以这里放一份
+# 只读的同步版本：同样的 mode 判定，同样的"上游开不开"答案，只是 availability
+# 探测走 _upstream.upstream_available_sync（线程安全、无事件循环依赖）。
+# 两套实现共享同一条规则，规则改了必须两边一起改——见下面的成对注释。
+def _route_is_upstream_sync(where: str) -> bool:
+    mode = get_memory_store_mode()
+    if mode != MEMORY_MODE_AUTO:
+        _note_once(f"mode:{mode}",
+                   f"记忆读写按 {MEMORY_STORE_MODE_ENV}={mode} 走本地旧路，"
+                   f"上游即使可用也不走（kill switch）")
+        return False
+    if _upstream_available_sync():
+        return True
+    _note_once("unavailable",
+               "上游 LLM-Memory 不可用（LLM_MEMORY_REPO 未设置/无效，或 MemoryClient "
+               "构造失败），本次记忆读写走本地旧库 data/memory_db；"
+               "想强制本地还有 MEMORY_STORE_MODE=local 这把 kill switch")
+    return False
+
+
+def _upstream_available_sync() -> bool:
+    """转发位：与 `_upstream_available()` 成对，测试同样可以只 patch 这里。"""
+    return _upstream.upstream_available_sync()
+
+
+# 删除面共用的护栏。上游的 delete/delete_where 自己就拒 unscoped 与跨 ns 的
+# id，但那两道闸是**上游**给的；这里在选路之前先把空/`*` 的 namespace 挡下来，
+# 于是"上游开不开"都会得到同一句拒绝——否则同一个请求会因为路由不同而
+# 一次报错一次删穿全库，那是最难查的那种不一致。
+def _guard_scoped_namespace(namespace: str, what: str) -> str:
+    name = str(namespace or "").strip()
+    if not name or name == "*":
+        # 措辞对齐上游 _checked_namespace 与 memory_browse 的期待，UI 侧
+        # pattern-match 不用认两套话。
+        raise ValueError(f"refusing to delete {what} with namespace={namespace!r}: "
+                         "pass one exact namespace name")
+    return name
+
+
+# ---- 删除原语（写语义：不回落）----
+# 三个都保持 sync：调用方一是 memory_browse 的 asyncio.to_thread 包装，
+# 二是 chat_service.delete_session 那种本来就是同步方法的会话回收，
+# 把它们 async 化等于去动两个不在本轮 scope 里的调用点。上游调用由
+# upstream.py 的线程池硬封顶，不阻塞事件循环这件事由调用层保证。
 def delete_item(memory_id: str) -> None:
-    """单条删除；表不存在时静默返回（=VectorStore.delete 现行为）。"""
+    """单条删除。表不存在时静默返回（=VectorStore.delete 现行为）。
+
+    走上游时这是一次**写**：失败就 raise，不回落本地。上游把"这行本来
+    就没有"报成 {deleted: False, reason: ...}——那是状态已满足，不是错误，
+    照本地语义当成功收下，只打一条 info 让运维看得见。
+    """
+    if _route_is_upstream_sync("delete_item"):
+        payload = _upstream.upstream_delete(memory_id)
+        if not payload.get("available"):
+            raise RuntimeError(f"上游 delete 失败（id={memory_id}）："
+                               f"{payload.get('note') or payload.get('error') or '无 note'}")
+        if not payload.get("deleted"):
+            logger.info("上游 delete：%s 无此行，视为已删除（reason=%s）",
+                        memory_id, payload.get("reason") or "未给出")
+        return
     _store().delete(memory_id)
 
 
 def delete_source(namespace: str, source_id: str) -> int:
-    """按 (namespace, source_id) 取行逐删，返回删除条数。取行+逐删的策略
-    住在这里——SDK 替换时此函数一处改成 delete_where（自带 unscoped
-    护栏），service 层形状不动。"""
+    """按 (namespace, source_id) 删一片，返回删除条数。
+
+    本地路：取行 + 逐删（策略住这里，SDK 替换只改本函数一处）。
+    上游路：交给 delete_where 的一次提交，并把 namespace 先过护栏——
+    上游的 namespace 是**必填且必须具体**的，空串或 "*" 直接被拒。
+    """
+    if _route_is_upstream_sync("delete_source"):
+        name = _guard_scoped_namespace(namespace, "source")
+        payload = _upstream.upstream_delete_where(namespace=name, source_id=source_id)
+        if not payload.get("available"):
+            raise RuntimeError(f"上游 delete_where 失败（ns={name} source_id={source_id}）："
+                               f"{payload.get('note') or payload.get('error') or '无 note'}")
+        return int(payload.get("deleted") or 0)
     store = _store()
     rows = store.rows_for_source(namespace, source_id)
     return _delete_rows(store, rows, "delete_source")
 
 
 def delete_namespace(namespace: str) -> int:
-    """清空 namespace，取行+逐删策略同 delete_source。"""
+    """清空一个 namespace。
+
+    上游路上这是**整个 ns 级别**的删除，护栏先挡住空串与 "*"（挡住的是
+    "顺手清空全库"，本地那条取行逐删的路今天也不该拿 "*" 当输入跑）；
+    剩下的语义与本地一致：删掉多少行报多少，失败就 raise 不回落。
+    """
+    if _route_is_upstream_sync("delete_namespace"):
+        name = _guard_scoped_namespace(namespace, "namespace")
+        payload = _upstream.upstream_delete_where(namespace=name)
+        if not payload.get("available"):
+            raise RuntimeError(f"上游 delete_where 失败（ns={name}）："
+                               f"{payload.get('note') or payload.get('error') or '无 note'}")
+        return int(payload.get("deleted") or 0)
     store = _store()
     return _delete_rows(store, store.all_rows(namespace), "delete_namespace")
 
@@ -435,19 +514,34 @@ BRIEF_DRIVER_ENV = "MEMORY_BRIEF_DRIVER"  # 唯一合法取值 "local"（缺省�
 
 
 async def load_brief_date(date: str) -> Dict[str, Any]:
-    """DA 分派：env MEMORY_BRIEF_DRIVER，显式白名单 {local}。
-    桥 driver 已退役——白名单只剩 local 一条路，任何其它取值（包括退役
-    前的旧值 "bridge"）都 warning 后按 local 跑，非法值兜底语义与桥时代
-    完全一致，只是"兜底"的另一侧没有了。
-    local → _local_brief_load(date)：写 A 自库 namespace AATF，实现在
-    brief_ingest（内核侧自给自足，不碰 src.ui）。
+    """DA 分派：先按 auto 路由定"这天的卡片往哪儿写"，再看
+    env MEMORY_BRIEF_DRIVER 的显式驱动白名单 {local}。
+
+    两条正交的东西别混：driver 决定"由谁去加载"（外部桥已退役，白名单
+    只剩 local 一条路，非法值 warning 后照跑），路由决定"写进哪个库"
+    （上游可用 → 卡片 JSON 递上游 ingest(source_type=brief)；否则本地
+    直写 AATF）。非法 driver 值不影响选路——它兜底的还是同一条 local。
+
     返回契约恒为 {"loaded","skipped","errors"}（job_runner 的判定只认这三键）。
     """
     driver = (os.environ.get(BRIEF_DRIVER_ENV) or "local").strip().lower()
     if driver != "local":
         logger.warning("%s 取值 %r 不在白名单 ['local']，按 local 运行",
                        BRIEF_DRIVER_ENV, driver)
+    if await _route_is_upstream("load_brief_date"):
+        return await _upstream_brief_load(date)
     return await _local_brief_load(date)
+
+
+async def _upstream_brief_load(date: str) -> Dict[str, Any]:
+    """上游实现位：解析卡片 → 中转摘要 JSON → upstream ingest。
+
+    与本地版的两处既定差别：不再零 LLM（上游是 agentic 抽取），"这卡进没
+    进"看上游报的 chunks_added 而不是自算 chunk-hash。失败不回落——
+    brief_ingest 里写清楚了为什么这里也不许写一份本地。
+    """
+    from src.memory.brief_ingest import load_brief_date_upstream
+    return await load_brief_date_upstream(date)
 
 
 async def _local_brief_load(date: str) -> Dict[str, Any]:
@@ -461,6 +555,14 @@ async def _local_brief_load(date: str) -> Dict[str, Any]:
     """
     from src.memory.brief_ingest import load_brief_date_local
     return await load_brief_date_local(date)
+
+
+
+# ---- 计数层的接缝在哪儿 ----
+# 计数层不在这里另起一个函数：memory_browse.fetch_overview 直接调本模块已有的
+# `upstream_namespaces()` 只读枚举（失败折叠成空列表），把两边计数并列出来。
+# 在这里再包一层"合并好的列表"看着方便，其实是多一个没人养的公开函数——
+# 只有 /data 那一个消费者，形不形式上都在 memory_browse 那侧收口更诚实。
 
 
 # ---- 上游 LLM-Memory 门面 ----

@@ -185,6 +185,13 @@ async def upstream_available() -> bool:
     return client is not None
 
 
+def upstream_available_sync() -> bool:
+    """`upstream_available()` 的同步版本，判定规则完全同一条，只是不碰事件
+    循环——gateway 那三个 delete_* 原语是 sync 函数，选路时没法 await。"""
+    client, _failure = _client_sync()
+    return client is not None
+
+
 async def upstream_status(namespace: Optional[str] = None) -> Dict[str, Any]:
     """上游 store 视图。单 ns 过滤且 0 行时，**必须**与"空库"分得开——
     做法：再拿 store 级视图交叉一次（先实读上游 common/stats.py：
@@ -309,45 +316,51 @@ async def upstream_search(query: str, *, namespace: Optional[str] = None,
 # 根本不该再等下去"的漏网情况。
 _INGEST_HARD_CAP_S = 600.0
 
-# source_id 透传的探测结果缓存：None=还没探测，True/False=上游签名收不收。
-_ingest_accepts_source_id: Optional[bool] = None
-# "这条写路认不认我们给的 id"的 warning 只需说一次（结构性事实，不是每单事件）。
-_ingest_source_id_warned = False
+def _ingest_accepts_source_id(client: Any) -> bool:
+    """这个 client 的 ingest 签名收不收 source_id——**按实例**记，不落全局。
+
+    原先是一个模块级 `_ingest_accepts_source_id` 全局缓存，那是个错：缓存的
+    key 应该是"哪一个 client"，不是"这个进程里曾经有过任何一个 client"。
+    实测这条会在两种情况下说谎：同一进程里换过 client（测试夹具在两个路由
+    阶段之间换假 SDK、运维把 repo 指到另一个 checkout），以及 shutdown 之后
+    重建。误判的结局是**静默的**：明明能把 id 递下去却不递，行里的 id 交给
+    adapter 派生，跨系统按 id 联查看到的和递下去的不是一回事。
+    """
+    cached = getattr(client, "_ar_accepts_source_id", None)
+    if cached is not None:
+        return bool(cached)
+    verdict = False
+    try:
+        import inspect  # 标准库：只探签名，不碰任何运行时行为
+        verdict = "source_id" in inspect.signature(client.ingest).parameters
+    except (TypeError, ValueError):
+        verdict = False
+    try:
+        client._ar_accepts_source_id = verdict
+    except Exception:  # noqa: BLE001 —— 挂不上就每探一次，不拿这个当功能开关
+        pass
+    if not verdict:
+        logger.info("这个上游 build 的 ingest 不接 source_id 参数：行里的 id 由上游 "
+                    "adapter 按 path 派生，我们递下去的 id 只对得上有透传的 build")
+    return verdict
 
 
 def _call_ingest(client: Any, path: str, source_type: str, namespace: Optional[str],
                  source_id: Optional[str]) -> Any:
     """同步调 client.ingest（在 to_thread 里跑）。
 
-    上游 SDK 面的 ingest 签名**今天**只有 (path, source_type, namespace,
-    dry_run/enable_rechunk/enable_quality_check/on_step)——没有 source_id，
-    行里的 source_id 由 adapter.source_id(path) 自己派生。这里用 inspect 探测
-    签名：上游若打了 source_id 透传补丁（Phase 2 的第一条）就自动带上，本文件
-    不必再动。探测不到而调用方递了 source_id 时打一条 warning，说清"ns 是显式
-    给的、id 是上游派生的"，绝不假装这条写路认我们给的 id。
+    source_id 透传是"上游有没有这个能力"的问题，不是"我们要不要递"的问题：
+    签名里有就递（补丁打过之后本来就该递，id 是我们的地址），没有就不递
+    （这种 build 里 id 由 adapter 按 path 自己派生）。探测按实例走，见
+    `_ingest_accepts_source_id`——不递的这条只在日志里留一次 info，真正的
+    校验在结果侧：`upstream_ingest` 拿 report 里 echo 回来的 id 跟我们递的
+    比，对不上才 warning。
     """
-    global _ingest_accepts_source_id
-    if source_id and _ingest_accepts_source_id is None:
-        try:
-            import inspect  # 标准库，纯签名探测，不碰运行时行为
-            _ingest_accepts_source_id = (
-                "source_id" in inspect.signature(client.ingest).parameters)
-        except (TypeError, ValueError):  # 拿不准签名＝按不支持走，别瞎猜
-            _ingest_accepts_source_id = False
-    if source_id and not _ingest_accepts_source_id:
-        # 一次进程一条就够：这是签名层面的结构性事实，不是每次都不同的事件。
-        global _ingest_source_id_warned
-        if not _ingest_source_id_warned:
-            _ingest_source_id_warned = True
-            logger.warning("上游 ingest 不接受 source_id 参数，本进程里写上游的 "
-                           "source_id 一律由上游 adapter 按 path 派生（调用方给的 id "
-                           "只进日志，例如 ns=%s id=%s）——跨系统按 id 联查时以库里"
-                           "的实际值为准，上游打了透传补丁后这条自动消失",
-                           namespace, source_id)
-    if source_id and _ingest_accepts_source_id:
+    if source_id and _ingest_accepts_source_id(client):
         return client.ingest(path, source_type, namespace=namespace,
                              source_id=source_id)
     return client.ingest(path, source_type, namespace=namespace)
+
 
 
 async def upstream_ingest(path: str, source_type: str, namespace: str,
@@ -401,7 +414,163 @@ async def upstream_ingest(path: str, source_type: str, namespace: str,
         return folded
     if not isinstance(result, dict):
         result = {"result": result}
+    _assert_source_id_echo(result, source_id)
     return {**result, "available": True}
+
+
+def _assert_source_id_echo(result: Dict[str, Any], requested: Optional[str]) -> None:
+    """Phase 2 的降级收尾：递下去的 source_id 与上游 echo 回来的应该**相等**。
+
+    原来那条 warning 说的是"我递不了 id"（SDK 签名没这个参数），03 号补丁
+    打上之后那句话就过期了——现在真正要盯的是另一种失败：id 递出去了，
+    上游回给你别的 id。字段名不确定就 present-only 地翻两处（外层与 report
+    里各放一份都常见），翻不到就不下断言——"上游没报 id"和"上游报了个不同
+    的 id"是两件事，别把前者写成后者。
+    """
+    if not requested:
+        return
+    inner = result.get("report") if isinstance(result.get("report"), dict) else {}
+    echoed = inner.get("source_id") or result.get("source_id")
+    if echoed and str(echoed) != str(requested):
+        logger.warning("上游 ingest echo 回来的 source_id=%r 与递下去的 %r 不一致——"
+                       "这单写进去的行不是按我们的 id 寻址的，按 source 检索/联查"
+                       "前请先确认上游那边的 id 语义", echoed, requested)
+
+
+
+# ------------------------------------------------------------- SDK 删除面
+
+# 删除是**单次提交**的存储动作（delete_where 一个 commit 落定，不像 ingest
+# 要走完整条 agentic 管线），30s 足够封顶，留硬 cap 只为兜"上游卡死"。
+_DELETE_HARD_CAP_S = 30.0
+
+
+def _client_sync() -> tuple:
+    """同步版 (client, failure)——给 gateway 那三个 **sync** 删除原语用。
+    它们今天就是这样被调用的：memory_browse 把整个 `_delete_*` 包进
+    asyncio.to_thread，chat_service 的会话删除段本来就在同步方法里；把
+    gateway.delete_* 改成 async 才是去动三个不在我 scope 里的调用点。
+    锁与惰性构造都复用 _build_client，行为与 _client_for 完全一致，只是
+    不经过事件循环。"""
+    try:
+        return _build_client(), None
+    except Exception as exc:  # noqa: BLE001
+        return None, _client_fail(exc)
+
+
+def _require_method(client: Any, name: str) -> Any:
+    """取上游 SDK 上的一个方法，没有就折成可读失败——补丁没应用/upstream
+    checkout 太旧时，调用方看到的是一条"这个 SDK 不带 delete 面"的话，
+    不是 AttributeError。"""
+    fn = getattr(client, name, None)
+    if not callable(fn):
+        # ValueError 而不是 AttributeError：_fail_note 的口径是"ValueError 是
+        # 写给调用方的话"，这条恰恰就是——补丁没上/checkout 太旧，运维需要
+        # 一眼看懂这句话，不该退化成"internal error: AttributeError"。
+        raise ValueError(
+            f"上游 MemoryClient 没有 {name}()——这个 LLM_MEMORY_REPO 的 SDK 面"
+            f"还没有该能力（需要 delete facade 补丁）")
+    return fn
+
+
+def _call_with_cap(fn: Any, kwargs: Dict[str, Any], tag: str) -> Dict[str, Any]:
+    """同步调一次上游 SDK，套硬 cap，异常原样带回来（折叠归调用方）。
+
+    cap 只封顶**等待**：到点拿不到结果就返回超时折叠，工作线程不会被取消
+    （上游 SDK 没有 cancel 通道，与写路同一条事实，别在这里假装能取消）。
+    线程池用完即 `shutdown(wait=False)`——用默认的那句隐含 `wait=True`
+    等于白设 cap：`with` 退出会一直等到任务真跑完，事件循环该被拖还是被拖。
+    """
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"mem-{tag}")
+    try:
+        future = pool.submit(fn, **kwargs)
+        try:
+            return {"_value": future.result(timeout=_DELETE_HARD_CAP_S)}
+        except FutureTimeout:
+            logger.warning("上游 %s 超过 %ss 硬上限放弃等待（无取消通道，"
+                           "后台线程仍可能把这单执行完）", tag, _DELETE_HARD_CAP_S)
+            return {"_timeout": True}
+        except Exception as exc:  # noqa: BLE001 —— 线程里的异常在这里现身
+            return {"_error": exc}
+    finally:
+        pool.shutdown(wait=False)
+
+
+def _fold_call(tag: str, folded: Dict[str, Any]) -> Dict[str, Any]:
+    """把 _call_with_cap 的三种结局收敛成门面形状。"""
+    if folded.get("_timeout"):
+        return {"available": False, "error": "TimeoutError",
+                "note": (f"上游 {tag} 超 {int(_DELETE_HARD_CAP_S)}s 未回，已停止等待"
+                         f"（无取消通道，上游侧可能仍在执行，重试前先确认状态）")}
+    if "_error" in folded:
+        return _fail(tag, folded["_error"])
+    result = folded.get("_value")
+    if not isinstance(result, dict):
+        result = {"result": result}
+    return {**result, "available": True}
+
+
+def upstream_delete(memory_id: str, namespace: Optional[str] = None) -> Dict[str, Any]:
+    """按 id 删一行（同步入口，理由见 `_client_sync`）。
+
+    折叠形状与读路/写路同构：{"available": False, "error", "note"}，本层
+    不 raise——raise 与否归 gateway。上游的"这行本来就没有"**不是错误**：
+    它回 {"deleted": False, "reason": "no row with this id"}，语义上是
+    "你要的状态已经满足了"，所以这里原样带出 available=True + deleted=False，
+    留给调用方自己决定要不要在 UI 上喊一声。namespace= 在上游是一条**断言**
+    而非过滤器：行在别的 ns 里会 raise ValueError（拒绝，不是静默成功）。
+    """
+    client, failure = _client_sync()
+    if failure is not None:
+        return failure
+    if client is None:
+        return _unavailable()
+    kwargs: Dict[str, Any] = {"memory_id": str(memory_id)}
+    if namespace:
+        kwargs["namespace"] = str(namespace)
+    try:
+        fn = _require_method(client, "delete")
+    except Exception as exc:  # noqa: BLE001
+        return _fail("delete", exc)
+    return _fold_call("delete", _call_with_cap(fn, kwargs, "delete"))
+
+
+def upstream_delete_where(namespace: Optional[str] = None, source_id: Optional[str] = None,
+                          source_type: Optional[str] = None, tier: Optional[str] = None,
+                          dry_run: bool = False) -> Dict[str, Any]:
+    """按 (namespace, source_id|source_type|tier) 整片删，一次提交，返回
+    删掉的行数（`deleted`）。同步入口，折叠形状同上。
+
+    上游在这里比它的存储层更严：**namespace 必填且必须具体**——空串与 "*"
+    一律 ValueError("refusing to delete '*'/empty: pass one exact namespace
+    name")，`source_id="*"` 同样拒。这不是啰嗦：source_id 是个项目内字符串
+    （"main" 之类的都可能撞上），不带 ns 就等于跨机器全库删。探针
+    (tools/upstream-patches/verify_ar_faces.py) 测的就是这四种坏输入都要
+    被拒，措辞归上游，我们原样转达，别自己另写一套拒绝话。
+    """
+    client, failure = _client_sync()
+    if failure is not None:
+        return failure
+    if client is None:
+        return _unavailable()
+    kwargs = {}
+    if namespace is not None:
+        kwargs["namespace"] = str(namespace)
+    if source_id is not None:
+        kwargs["source_id"] = str(source_id)
+    if source_type is not None:
+        kwargs["source_type"] = str(source_type)
+    if tier is not None:
+        kwargs["tier"] = str(tier)
+    if dry_run:
+        kwargs["dry_run"] = True
+    try:
+        fn = _require_method(client, "delete_where")
+    except Exception as exc:  # noqa: BLE001
+        return _fail("delete_where", exc)
+    return _fold_call("delete_where", _call_with_cap(fn, kwargs, "delete_where"))
 
 
 # ----------------------------------------------------- MCP 决策面（可选，默认关）

@@ -40,22 +40,25 @@ AgenticReader 是基于大语言模型（LLM）的智能文档分析与问答工
 ### 🧠 长期记忆（src/memory/）
 - 单 LanceDB 表 `memories`，按 namespace 隔离：`ai-research`（简报/文章摘要）、`webapp-chat`（对话历史）与 `AATF`（简报卡片导读轻量入库）
 - **chat_ingest 后台车道**：周期扫描会话目录，把"有新内容 + 已静默 + 完整问答"的会话自动入库（按内容 hash 幂等去重，水位线在 `data/pipeline/chat_ingest_state.json`）
-- **简报轻量入库**：`/briefs` 页"轻量入库(全天)"按钮把当天简报卡片的中文导读直接写进 `AATF`——零 LLM 调用、chunk hash 幂等，重管线（`/load`）与轻量入库二选一或都点
+- **简报轻量入库**：`/briefs` 页"轻量入库(全天)"按钮把当天简报卡片的中文导读写进 `AATF`，重管线（`/load`）与轻量入库二选一或都点；走上游时它递的是"卡片 JSON + 上游 ingest"，会过一轮 LLM 抽取、幂等归上游（详见下方"记忆收敛"段的代价说明）
 - **agentic_search**：semantic / keyword / keywords-pool / list-by-source 四工具的 ReAct 检索循环（上限 4 轮），供 Orchestrator 调用；缺省范围是 ai-research + webapp-chat，`AATF` 需在 `/chat` 的记忆范围里勾选
 - `/data` 页 Memory tab 提供概览、检索、删除（单条 / 按来源 / 整个 namespace）
 
 ### 🧠 记忆收敛 Phase 1（写/读路由到上游 LLM-Memory）
 
-本仓库的存储本身仍由 `src/memory/` 这层维护，外部 LLM-Memory 只是被寻址的上游；**在哪儿写、从哪儿读的决定点只有一个**——`src/memory/gateway.py` 的 **auto 路由**：`LLM_MEMORY_REPO` 有效且可达就走上游，否则回落原来的本地旧路并打 warning，调用方签名一律不动。看这把开关的只有 `gateway.search()` 与 `gateway.ingest()` 两处（mode 的取值也只在 `src/memory/config.py` 一处解析，非法值 warning→`auto`），浏览/删除与"轻量入库"的驱动分派都不碰它。Phase 1 的具体口径：
+本仓库的存储本身仍由 `src/memory/` 这层维护，外部 LLM-Memory 只是被寻址的上游；**在哪儿写、从哪儿读的决定点只有一个**——`src/memory/gateway.py` 的 **auto 路由**：`LLM_MEMORY_REPO` 有效且可达就走上游，否则回落原来的本地旧路并打 warning，调用方签名一律不动。看这把开关的是 `gateway.search()` / `gateway.ingest()` 加上一组 `gateway.delete_*`（mode 的取值也只在 `src/memory/config.py` 一处解析，非法值 warning→`auto`），`browse_*` 浏览原语仍是本地库的原语。Phase 1/2 的具体口径：
 
-- **两条写通道自动接上游**：管线 `ingest_source()`（`ai-research`）与 chat_ingest 车道（`webapp-chat`）的新行直接递上游 `ingest(path, source_type, namespace)`。**写路不回落**：`LLM_MEMORY_REPO` 没设/无效（路由判定为不可用）时照旧写本地 `data/memory_db`，但上游可用却写失败时 gateway 直接把失败抛给调用方（chat_ingest 的水位线、job_runner 的任务账本照常记一笔），绝不顺手再写一份本地——那是双写，同一份内容两处落库而水位线照推。要把路由整体退回本地只有两条正经办法：重试，或者 unset `LLM_MEMORY_REPO`／设 `MEMORY_STORE_MODE=local`。除这以外，`LLM_MEMORY_REPO` 与路由开关都不设时行为与今天逐字节一致，dev/CI 零变化、切换可逆。
+- **三条写通道都接上游**：管线 `ingest_source()`（`ai-research`）、chat_ingest 车道（`webapp-chat`），以及 `/briefs`"轻量入库(全天)"——后者现在递的是"卡片 JSON + 上游 `ingest(source_type=brief)`"，并且**沿用 item_id 当 source_id，id 空间没有换轨**（原先预告的 `aatf-<date>-<kind>` 因为上游补了 `source_id` 透传而省掉了）。写路上**不回落**：`LLM_MEMORY_REPO` 没设/无效（路由判定为不可用）时照旧写本地 `data/memory_db`，但上游可用却写失败时 gateway 直接把失败抛给调用方（chat_ingest 的水位线、job_runner 的任务账本照常记一笔），绝不顺手再写一份本地——那是双写，同一份内容两处落库而水位线照推。要把路由整体退回本地只有两条正经办法：重试，或者 unset `LLM_MEMORY_REPO`／设 `MEMORY_STORE_MODE=local`。除此之外，两个变量都不设时行为与收敛前逐字节一致，dev/CI 零变化、切换可逆。
 - **检索通道可回落**：gateway 的 `search()` 上游可用即转上游（多 namespace 直接透传），上游不可用或这次检索没成则走本地 `agentic_search`——这是读写唯一的差别；上游返回的宽表行由映射层摊平成子 agent 一直在吃的形状，`occurred_at` 日期字段保留，`/briefs` 的按日聚合口径不变。形状层**保真优先**：上游 schema 里本就有的列（含 `chunk_hash`，summary 行取空串）给了就直接用真值，只有结果行没把某列交出来时才退回启发式，不多塞任何一个键。
 - **存量不迁移，"删了重灌"**：`data/sessions/`、`data/pipeline/summaries/`、`BRIEFS_DIR` 本身就是可重建的事实源；`data/memory_db` 在收敛生效后只作为**只读兜底**存在，不是第二份真相。
 - **重复 ingest 的幂等归上游**：走上游时 AR 侧不再自己算 chunk-hash，去重交给上游 ingest 自带的 hash-dedup（同一文件再递一次应返回 0 新增，这条由测试钉着）；回落本地旧路时仍按原来的内容 hash 幂等。论文"下载即入库"的 `POST /briefs/fetch-pdf` 与文档对话能力都不受影响。
-- **本轮还没接的两处**（上游补丁落地前保持本地现状、不造假）：`/briefs` 的"轻量入库(全天)"仍走本地零 LLM 直写 `AATF`；`/data` Memory tab 的浏览与删除仍是本地路（Phase 2 才接上游 delete facade）。
-- **两条已知代价**（写明白，不算 bug）：① 记忆侧的 LLM/嵌入配置**归上游 config 管，`/config` 页管不到**，`/config` 的 provider 选择也不改变这一点——上游嵌入端点当前是局域网地址，机器不在该网段时上游路整体不可用，全靠上面的 auto 回落兜住；② AR 递过去的是"已摘要文件"，上游 ingest 会再抽一遍，同一份内容过两轮 LLM（`qa`/`qa_brief` 字段可显式传下去当现成摘要，省掉二次抽取）。
+- **删除面也接了上游，且这已是两个存储**：`/data` Memory tab 的三种 DELETE（单条 item / 按 source / 整个 namespace）走 `gateway.delete_*` → 上游 delete/delete_where，**同一条不回落纪律**，并且带着两个边界守卫——跨 namespace 的 id 直接拒（不许拿一个 id 去删掉别处的行）、unscoped 删除（既不给 id 也不给 namespace）一律拒，措辞与 `memory_browse` 期待的形状对齐。形状上有个例外值得记一笔：`gateway.delete_*` 三个函数**保持 sync**，不像 `search()`/`ingest()` 那样 async + `to_thread`——上游调用由线程池硬封顶，事件循环不被拖住由调用层保证。语义要说准：删的是**上游存储层**里的行，本地旧库 `data/memory_db` 的对应行**不受影响**——两个库现在是两套存储，别按"一个库里删掉了"去理解，也不存在"删了上游还能从本地捞回来"。
+- **计数层并上了上游（只读）**：`/api/v1/memory/overview` 与 namespace 列表把上游 `namespaces()` 的行数并进来，`/data` 页能同时看到两边各自的计数；这纯粹是计数层的只读并列，`browse_*` 的行级浏览仍走本地库，不去游数字底下翻行。
+- **三条已知代价**（写明白，不算 bug）：① 记忆侧的 LLM/嵌入配置**归上游 config 管，`/config` 页管不到**，`/config` 的 provider 选择也不改变这一点——上游嵌入端点当前是局域网地址，机器不在该网段时上游路整体不可用，全靠上面的 auto 回落兜住；② AR 递过去的是"已摘要文件"，上游 ingest 会再抽一遍，同一份内容过两轮 LLM（`qa`/`qa_brief` 字段可显式传下去当现成摘要，省掉二次抽取）；③ "轻量入库(全天)"**不再是零 LLM 调用**——那条旧承诺（"解析卡片直写、一次 LLM 都不调"）随上游 `source_type=brief` 通道**正式作废**：上游跑的是 agentic 抽取管线，一张卡片一轮抽取，卡片多的那天明显变慢。同时"这天/这卡是否已入库"的**判据也换了**：本地旧路看 chunk-hash，走上游后看的是上游报回来的 `chunks_added == 0`（那就是"已经在了"，不是失败也不是空跑）——别拿 chunk-hash 那套去推上游路上的状态。
 
-要绕开上游按旧路跑，用 `MEMORY_STORE_MODE=local` 这个 kill switch（默认 `auto`）；它和 `LLM_MEMORY_REPO` 都不设，就是全部走旧路。完整的阶段划分与裁决记录见 [PLAN-MEMORY-CONVERGENCE.md](PLAN-MEMORY-CONVERGENCE.md)。
+要绕开上游按旧路跑，用 `MEMORY_STORE_MODE=local` 这个 kill switch（默认 `auto`）；它和 `LLM_MEMORY_REPO` 都不设，就是全部走旧路。
+
+上游那侧需要三个改动（delete facade、`source_type=brief` 枚举、`ingest` 的 `source_id` 透传），**补丁已备好在 `tools/upstream-patches/` 并且验证过**：三个补丁各自 `git apply --check` 干净通过，打全 01+02+03 后上游全量套件 2114 passed / 4 skipped 全绿，pyflakes 门与"不广告破坏性工具"那条 MCP 纪律都没被碰坏。**状态是"未 commit 进上游 main"**——是不是在你的上游工作树里真打上了、以及什么时候提交推送，都是留给你的决定，文档不替它背书，别当成已经在主干上。顺序按 01 → 02 → 03 打最省事（03 的测试块接着 01 的位置写）。怎么打、验到了什么、没验到什么，都记在 [tools/upstream-patches/README.md](tools/upstream-patches/README.md)；阶段划分与裁决记录在 [PLAN-MEMORY-CONVERGENCE.md](PLAN-MEMORY-CONVERGENCE.md)。
 
 ### 📰 每日简报管线（src/pipeline/）
 - `BRIEFS_DIR` 下的简报 HTML 解析入队（`data/pipeline/pipeline_queue.json`）
@@ -172,7 +175,7 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 | 数据管理 | `/data` | 存储总览、按文档删除四类产物（JSON/向量库/图片/摘要）、批量删除、智能清理、会话统计、Memory tab |
 | 配置中心 | `/config` | 切换 provider、每 provider 多模型的注册表（增删/设为当前/一键测试）、系统设置（落 `data/config/app_config.json`） |
 | 结构编辑器 | `/structure` | 编辑文档章节 structure.json 并重建摘要/索引，PDF 在线预览 |
-| 每日简报 | `/briefs` | 浏览 `BRIEFS_DIR` 简报条目，勾选加载进管线队列，"轻量入库(全天)"直写 AATF 记忆，卡片里的论文可一键下载入库（`POST /briefs/fetch-pdf` 落 `data/pdf` + 后台索引），查看后台任务 |
+| 每日简报 | `/briefs` | 浏览 `BRIEFS_DIR` 简报条目，勾选加载进管线队列，"轻量入库(全天)"把当天卡片写进 AATF 记忆（走上游时经上游 ingest 抽取），卡片里的论文可一键下载入库（`POST /briefs/fetch-pdf` 落 `data/pdf` + 后台索引），查看后台任务 |
 | ~~简报记忆桥接~~ | `/memory` | 已退役——职责并入 `/briefs`；外部 LLM-Memory 的 HTTP 桥也已退役，接入改走进程内 SDK / MCP 只读门面，老书签自动 302 |
 | API 文档 | `/docs` `/redoc` | FastAPI 自动生成 |
 | 健康检查 | `/health` | status / timestamp / version |
@@ -264,8 +267,10 @@ AgenticReader/
 │   ├── parallel/               # indexing.py（ChapterProcessor）/ retrieval.py（ParallelRetrievalCoordinator）
 │   └── vector_db/              # vector_db_client（FAISS + 轮次去重 + 索引缓存）/ metadata_db
 ├── src/memory/                 # LanceDB 长期记忆（config / gateway / ingest / search / brief_ingest / migrate_aatf / upstream / vector_store / adapters）
-│                               #   upstream=外部 LLM-Memory 只读访问层（SDK 进程内 + 可选 MCP 决策面）
-│                               #   brief_ingest=「轻量入库(全天)」直写 AATF 的实现体；
+│                               #   upstream=外部 LLM-Memory 访问层（SDK 进程内 + 可选 MCP 决策面；
+│                               #     写路也在这层，"只读"纪律因收敛有意反转）
+│                               #   brief_ingest=「轻量入库(全天)」的实现体（卡片 JSON 交给上游
+│                               #     ingest，本地直写是其回落形态）；
 │                               #   migrate_aatf 是一次性 A→B 库迁移 CLI，
 │                               #   用前先 --dry-run 看清单再实跑
 ├── src/pipeline/               # 简报管线（briefs_parser / queue_store / process_pdf_queue /
@@ -330,8 +335,9 @@ briefs     GET  /dates /cards /memory-status   POST /load /sync-memory /light-lo
 jobs       GET  ""                         POST /{job_id}/retry /cancel
 memory     GET  /overview /namespace/{ns}  POST /search
            DELETE /item/{id} /namespace/{ns}/source/{source_id} /namespace/{ns}
-                 # 收敛注记：写/读已按 gateway 的 auto 路由选上游，三种 DELETE
-                 # 连同浏览仍是本地路（Phase 2 才接上游 delete facade）
+                 # 收敛注记：写/读/删已按 gateway 的 auto 路由选上游——三种 DELETE
+                 # 走上游 delete/delete_where（unscoped 与跨 ns 的 id 都被拒），删的是
+                 # 上游存储层，本地旧库行不受影响；浏览 browse_* 仍是本地原语
            GET  /upstream                  POST /upstream/search
                 # 上游 LLM-Memory 只读门面：status 字段 available + namespaces/rows + version，
                 # 内嵌 decision:{enabled,available,note}；检索缺省作用域=全局（scoped=False），

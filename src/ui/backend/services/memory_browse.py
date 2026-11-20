@@ -43,6 +43,9 @@ def _build_overview() -> Dict[str, Any]:
     for entry in by_ns.values():
         entry["avg_importance"] = round(entry["_imp_sum"] / entry["total"], 3) if entry["total"] else 0
         del entry["_imp_sum"]
+        # name 是给计数层用的别名（namespace 键照旧留着，前端两处都读得到）——
+        # 上游并进来的条目没有"行"，只有名字和计数，靠这两个键对齐。
+        entry["name"] = entry["namespace"]
         namespaces.append(entry)
     namespaces.sort(key=lambda e: e["latest_created_at"], reverse=True)
 
@@ -116,7 +119,42 @@ def _delete_namespace(namespace: str) -> Dict[str, Any]:
 
 
 async def fetch_overview() -> Dict[str, Any]:
-    return await asyncio.to_thread(_build_overview)
+    """总览：本地数一遍行，上游那一侧只借 `namespaces()` 的计数。
+
+    收敛期两边各有自己的一份账，这里的口径是**并列不是相加**：
+      * 两边都有的 ns → 本地 `total` 不动，多一个 `upstream_total`；
+      * 只在上游有的 ns → 新条目，`total` 记 0（本地一条都没有是事实，
+        不能拿上游的数冒充本地行数），行数放 `upstream_total`；
+      * 上游断开/不可达 → `gateway.upstream_namespaces()` 自己折叠成空列表，
+        这条结果就等价于纯本地旧形状，不会端出半截上游数据。
+
+    上游计数来自 store 级的列表视图，没有 source_types / latest_created_at /
+    avg_importance 可填——缺的字段给中性值并标 `source: "upstream"`，
+    前端别把这种条目当本地行渲染（行级浏览仍是 browse_* 的本地原语）。
+    """
+    local = await asyncio.to_thread(_build_overview)
+    by_name = {e["name"]: e for e in local["namespaces"]}
+    for item in await gateway.upstream_namespaces():
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        rows = int(item.get("rows") or 0)
+        mine = by_name.get(name)
+        if mine is None:
+            fresh = {"name": name, "namespace": name, "total": 0,
+                     "upstream_total": rows, "source_types": {},
+                     "latest_created_at": "", "avg_importance": 0,
+                     "source": "upstream"}
+            by_name[name] = fresh
+            local["namespaces"].append(fresh)
+        else:
+            mine["upstream_total"] = rows
+    local["total_namespaces"] = len(local["namespaces"])
+    local["namespaces"].sort(key=lambda e: (
+        -(int(e.get("total", 0)) + int(e.get("upstream_total", 0))),
+        e.get("latest_created_at") or "", e.get("name") or ""))
+    return local
+
 
 
 async def fetch_namespace(namespace: str) -> Dict[str, Any]:
