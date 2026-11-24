@@ -251,14 +251,14 @@ class DataManager {
     }
 
     async deleteMemoryItem(memoryId) {
-        if (!confirm('删除这一条记忆？')) return;
+        if (!await (window.I18N ? I18N.confirm('删除这一条记忆？', '确认操作') : Promise.resolve(confirm('删除这一条记忆？')))) return;
         await API.memory.deleteItem(memoryId, { checkOk: false, parse: 'none' });
         if (this.currentMemoryNamespace) this.selectMemoryNamespace(this.currentMemoryNamespace);
         this.loadMemoryOverview();
     }
 
     async deleteMemorySource(namespace, sourceId) {
-        if (!confirm(`删除来源 "${sourceId}" 的全部记忆？此操作不可撤销。`)) return;
+        if (!await (window.I18N ? I18N.confirm(`删除来源 "${sourceId}" 的全部记忆？此操作不可撤销。`, '确认操作') : Promise.resolve(confirm(`删除来源 "${sourceId}" 的全部记忆？此操作不可撤销。`)))) return;
         await API.memory.deleteSource(namespace, sourceId, { checkOk: false, parse: 'none' });
         if (this.currentMemoryNamespace) this.selectMemoryNamespace(this.currentMemoryNamespace);
         this.loadMemoryOverview();
@@ -267,7 +267,7 @@ class DataManager {
     async clearMemoryNamespace() {
         const ns = this.currentMemoryNamespace;
         if (!ns) return;
-        if (!confirm(`清空 namespace "${ns}" 下的全部记忆？此操作不可撤销。`)) return;
+        if (!await (window.I18N ? I18N.confirm(`清空 namespace "${ns}" 下的全部记忆？此操作不可撤销。`, '确认操作') : Promise.resolve(confirm(`清空 namespace "${ns}" 下的全部记忆？此操作不可撤销。`)))) return;
         await API.memory.deleteNamespace(ns, { checkOk: false, parse: 'none' });
         this.selectMemoryNamespace(ns);
         this.loadMemoryOverview();
@@ -1098,7 +1098,7 @@ class DataManager {
     }
 
     async showSmartCleanup() {
-        const days = prompt('清理多少天前的数据？（默认 30 天）', '30');
+        const days = window.I18N ? await I18N.prompt('清理多少天前的数据？（默认 30 天）', '30', '清理数据') : prompt('清理多少天前的数据？（默认 30 天）', '30');
         if (!days) return;
 
         const daysNum = parseInt(days);
@@ -1107,7 +1107,7 @@ class DataManager {
             return;
         }
 
-        if (!confirm(`确定要清理 ${daysNum} 天前的所有文档数据吗？此操作不可恢复！`)) {
+        if (!await (window.I18N ? I18N.confirm(`确定要清理 ${daysNum} 天前的所有文档数据吗？此操作不可恢复！`, '确认清理') : Promise.resolve(confirm(`确定要清理 ${daysNum} 天前的所有文档数据吗？此操作不可恢复！`)))) {
             return;
         }
 
@@ -1392,8 +1392,8 @@ class DataManager {
             return;
         }
 
-        const confirm = window.confirm(`确定要删除 ${sessionIds.length} 个会话吗？此操作不可恢复！`);
-        if (!confirm) return;
+        const ok = window.I18N ? await I18N.confirm(`确定要删除 ${sessionIds.length} 个会话吗？此操作不可恢复！`, '确认删除') : confirm(`确定要删除 ${sessionIds.length} 个会话吗？此操作不可恢复！`);
+        if (!ok) return;
 
         let successCount = 0;
         let failCount = 0;
@@ -1615,7 +1615,7 @@ class DataManager {
     }
 
     async indexPdf(filename) {
-        if (!confirm(`确定要索引 "${filename}" 吗？\n\n索引将在后台进行，完成后会通知您。`)) {
+        if (!await (window.I18N ? I18N.confirm(`确定要索引 "${filename}" 吗？\n\n索引将在后台进行，完成后会通知您。`, '确认索引') : Promise.resolve(confirm(`确定要索引 "${filename}" 吗？\n\n索引将在后台进行，完成后会通知您。`)))) {
             return;
         }
 
@@ -1769,7 +1769,7 @@ class DataManager {
             return;
         }
 
-        if (!confirm(`确定要批量索引 ${filenames.length} 个PDF文件吗？\n\n所有文件将在后台索引，完成后会通知您。`)) {
+        if (!await (window.I18N ? I18N.confirm(`确定要批量索引 ${filenames.length} 个PDF文件吗？\n\n所有文件将在后台索引，完成后会通知您。`, '确认批量索引') : Promise.resolve(confirm(`确定要批量索引 ${filenames.length} 个PDF文件吗？\n\n所有文件将在后台索引，完成后会通知您。`)))) {
             return;
         }
 

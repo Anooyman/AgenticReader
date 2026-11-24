@@ -51,17 +51,66 @@ def _normalize_dates(body: dict) -> list:
     return valid
 
 
+async def _build_memory_meta() -> dict:
+    """收集 /briefs 界面解释性与日历状态所需的元数据（全部降级容错，不炸主接口）。"""
+    storage_mode = "local"
+    upstream_available = False
+    upstream_aatf_rows = None
+    upstream_ai_research_rows = None
+
+    try:
+        from src.memory import gateway
+        from src.memory.config import MEMORY_MODE_AUTO, get_memory_store_mode
+
+        mode = get_memory_store_mode()
+        avail = await gateway.upstream_available()
+        upstream_available = bool(avail)
+        if mode == MEMORY_MODE_AUTO and upstream_available:
+            storage_mode = "upstream"
+        if upstream_available:
+            ns_list = await gateway.upstream_namespaces()
+            for entry in ns_list or []:
+                name = str(entry.get("name") or "")
+                rows = entry.get("rows")
+                if name == "AATF":
+                    upstream_aatf_rows = rows
+                elif name == "ai-research":
+                    upstream_ai_research_rows = rows
+    except Exception:  # noqa: BLE001 - 上游探测失败只降级，不拖垮简报页
+        logger.warning("memory-status: 读取上游元数据失败，按 local 降级", exc_info=True)
+
+    html_dates, queue_by_date = await asyncio.gather(
+        asyncio.to_thread(briefs_data.html_dates_presence),
+        asyncio.to_thread(briefs_data.queue_stats_by_date),
+    )
+    return {
+        "storage_mode": storage_mode,
+        "upstream_available": upstream_available,
+        "upstream_aatf_rows": upstream_aatf_rows,
+        "upstream_ai_research_rows": upstream_ai_research_rows,
+        "html_dates": html_dates,
+        "queue_by_date": queue_by_date,
+    }
+
+
 @router.get("/memory-status")
-async def get_memory_status():
+async def get_memory_status(include_meta: bool = False):
     """各日期的真实入库计数：{"dates": {"2026-11-12": {"aatf": 37, "heavy_done": 2}, ...}}
 
     供 /briefs 页区分"有 HTML 未入库 / 有 HTML 已入库 / 无 HTML"三种状态
     （无 HTML 的日期根本不会出现在列表里）。数据来源是 A 自库行 + queue
     事实，**不是任务账本**——bridge 时代的 done ≠ A 自库有数据，按账本
     显示只会造出满屏"已入库"的假象（state-auditor 审计实锤）。
-    纯读，LanceDB 全行扫描是函数级 to_thread，不阻塞事件循环。"""
+    纯读，LanceDB 全行扫描是函数级 to_thread，不阻塞事件循环。
+
+    include_meta=True（opt-in）时额外返回 meta 对象（storage_mode、上游
+    AATF/ai-research 行数、各日期 HTML 存在性、重管线排队/失败计数）；
+    默认 False 保持响应结构向后兼容。"""
     counts = await asyncio.to_thread(briefs_data.date_memory_counts)
-    return {"dates": counts}
+    if not include_meta:
+        return {"dates": counts}
+    meta = await _build_memory_meta()
+    return {"dates": counts, "meta": meta}
 
 
 @router.get("/dates")
@@ -70,8 +119,13 @@ async def get_dates():
 
 
 @router.get("/cards")
-async def get_cards(coverage_date: str):
-    return briefs_data.load_cards(coverage_date)
+async def get_cards(coverage_date: str, include_state: bool = False, compact: bool = False):
+    return await asyncio.to_thread(
+        briefs_data.load_cards,
+        coverage_date,
+        include_state=include_state,
+        compact=compact,
+    )
 
 
 @router.post("/load")

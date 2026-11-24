@@ -538,8 +538,9 @@ class StructureEditor {
         }
     }
 
-    deleteChapter(index) {
-        if (confirm('确定要删除这个章节吗？')) {
+    async deleteChapter(index) {
+        const ok = window.I18N ? await I18N.confirm('确定要删除这个章节吗？', '确认删除') : confirm('确定要删除这个章节吗？');
+        if (ok) {
             this.structure.splice(index, 1);
             this.renderChapters();
 
@@ -640,7 +641,7 @@ class StructureEditor {
         this.updateSelectedCount();
     }
 
-    confirmBatchDelete() {
+    async confirmBatchDelete() {
         if (!this.batchMode) {
             // 首次点击，进入批量模式
             this.enterBatchMode();
@@ -653,7 +654,8 @@ class StructureEditor {
             return;
         }
 
-        if (confirm(`确定要删除选中的 ${this.selectedChapters.size} 个章节吗？`)) {
+        const ok = window.I18N ? await I18N.confirm(`确定要删除选中的 ${this.selectedChapters.size} 个章节吗？`, '确认批量删除') : confirm(`确定要删除选中的 ${this.selectedChapters.size} 个章节吗？`);
+        if (ok) {
             // 按索引从大到小排序，避免删除时索引错位
             const toDelete = Array.from(this.selectedChapters).sort((a, b) => b - a);
             toDelete.forEach(index => {
@@ -720,7 +722,8 @@ class StructureEditor {
             return;
         }
 
-        if (!confirm('确定要根据当前结构重建索引和摘要吗？\n\n这将：\n• 重新生成章节chunks\n• 重新生成章节摘要\n• 重建向量数据库\n• 重新生成文档摘要\n\n重建将在后台进行，完成后会通知您。')) {
+        const rebuildOk = window.I18N ? await I18N.confirm('确定要根据当前结构重建索引和摘要吗？\n\n这将：\n• 重新生成章节chunks\n• 重新生成章节摘要\n• 重建向量数据库\n• 重新生成文档摘要\n\n重建将在后台进行，完成后会通知您。', '确认重建') : confirm('确定要根据当前结构重建索引和摘要吗？\n\n这将：\n• 重新生成章节chunks\n• 重新生成章节摘要\n• 重建向量数据库\n• 重新生成文档摘要\n\n重建将在后台进行，完成后会通知您。');
+        if (!rebuildOk) {
             return;
         }
 

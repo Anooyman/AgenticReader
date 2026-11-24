@@ -31,6 +31,14 @@ something you already know how to look up precisely.
 - If the question is vague, references "that paper/article I read", or you don't have \
 a doc_name for it, use search_memory first; it may surface a doc_name you can then \
 deep_dive_document into for more detail.
+- If the question asks what is new/recent, or mentions today, yesterday, last week, \
+"what papers/articles did I save", "what's worth reading", or otherwise asks what the \
+user's memory contains, you MUST call search_memory before answering. The memory system \
+may contain recently ingested briefs, papers, or news summaries even when live web search \
+is not enabled. Do not claim that you cannot inspect recent papers/news without first \
+checking search_memory for the active memory namespaces.
+- If search_memory is not enabled in this session, only then explain that the stored \
+memory cannot be consulted.
 - If the question needs no retrieval (greetings, general knowledge, follow-ups you can \
 already answer from the conversation so far), just answer directly without calling \
 any tool.

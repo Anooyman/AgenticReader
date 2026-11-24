@@ -17,6 +17,7 @@ bind_tools 惯例（与 src/memory/search.py 的 agentic_search 用同一套模�
 import asyncio
 import json
 import time
+from datetime import datetime, timezone, timedelta
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -255,6 +256,16 @@ async def ask(
             history_msgs.append(AIMessage(content=content))
 
     question_content = question
+    if "Current date" not in question:
+        try:
+            local_now = datetime.now().astimezone()
+            tz_abbr = local_now.tzname() or ""
+            date_line = f"[Current date: {local_now:%Y-%m-%d}]"
+            if tz_abbr:
+                date_line = f"{date_line} ({tz_abbr})"
+            question_content = f"{date_line}\n{question_content}"
+        except Exception:  # noqa: BLE001 - date context is best-effort, never break a turn
+            pass
     if doc_name:
         question_content = (
             f"[This conversation is bound to doc_name=\"{doc_name}\" — you may call "

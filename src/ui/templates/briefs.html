@@ -3,67 +3,324 @@
 {% block title %}AgenticReader - 每日简报{% endblock %}
 
 {% block extra_css %}
-<link rel="stylesheet" href="/static/css/briefs.css">
+<link rel="stylesheet" href="/static/css/briefs.css?v=14">
 {% endblock %}
 
 {% block content %}
-<div class="briefs-container">
-    <div class="page-header">
-        <h1>📰 每日简报</h1>
-        <div class="toolbar">
-            <select id="brief-date-select"></select>
-            <button id="select-all-btn">全选</button>
-            <button id="load-selected-btn" class="primary">加载选中</button>
-            <button id="light-load-btn" title="把这一天的简报卡片直接写进本地记忆库 AATF 命名空间：秒级完成，不下载 PDF、不做多维问答">轻量入库(全天)</button>
-            <button id="sync-memory-btn" title="只救重管线欠账：把 summaries/ 里已生成、但没写进 ai-research 的 QA 摘要补灌入库。与「轻量入库」是两个通道、两个 namespace，互不重复（AATF 的账由轻量入库自己管）">补灌记忆</button>
-            <button id="brief-chat-btn" title="新标签打开对话页，并把本会话的记忆检索范围预置为 AATF（简报库）">🧠 简报问答</button>
+<div class="briefs-workspace" id="briefs-workspace">
+    <!-- 移动端日期侧栏遮罩 -->
+    <div id="sidebar-backdrop" class="sidebar-backdrop" aria-hidden="true"></div>
+
+    <!-- 左栏：日期状态导航与多日批量入库 -->
+    <aside class="briefs-sidebar" id="briefs-sidebar" aria-label="简报日期与入库状态">
+        <div class="sidebar-header">
+            <div class="sidebar-title-group">
+                <h2 class="sidebar-title">简报日历</h2>
+                <span id="sidebar-coverage-meta" class="sidebar-coverage-meta tabular-nums">加载中…</span>
+            </div>
+            <div class="sidebar-header-actions">
+                <div class="segmented-mini" role="tablist" aria-label="日期视图切换">
+                    <button type="button" id="view-calendar-btn" class="seg-btn active" role="tab" aria-selected="true">月历</button>
+                    <button type="button" id="view-list-btn" class="seg-btn" role="tab" aria-selected="false">列表</button>
+                </div>
+                <button type="button" id="sidebar-close-btn" class="btn btn-ghost btn-xs mobile-only" aria-label="关闭日期栏">✕</button>
+            </div>
         </div>
-        <!-- 当前日期的真实入库计数（A 自库行 + queue 事实，不是任务账本）；
-             下拉框每项也带 AATF/重管线计数标记 -->
-        <div id="memory-status-line" class="memory-status-line"></div>
-    </div>
 
-    <!-- 入库日期面板（原 /memory 页 load 视图的归处）：跨日期多选批量
-         轻量入库，不切换上方浏览日期；每行徽章 = A 自库真实行 + queue 事实，
-         行尾是当日 load job 的实时状态。默认收起，保持首屏是简报本身。 -->
-    <details class="ingest-panel">
-        <summary>🗓 入库日期 <span class="ingest-summary-hint">多选一天或多天，一次排队</span>
-            <span id="ingest-queue-line" class="ingest-queue-line"></span>
-        </summary>
-        <div class="ingest-toolbar">
-            <button id="ingest-select-unchecked-btn" type="button">全选未入库</button>
-            <button id="ingest-clear-btn" type="button">清空</button>
-            <button id="ingest-bulk-btn" class="primary" type="button"
-                    title="把勾选日期的简报卡片逐日写入 A 自库 AATF：零 LLM、幂等，已在排队的日期自动跳过">
-                批量轻量入库(<span id="ingest-selected-count">0</span> 天)</button>
+        <!-- 月历视图 -->
+        <div id="calendar-view" class="calendar-view">
+            <div class="calendar-nav">
+                <button type="button" id="cal-prev-month" class="btn btn-ghost btn-xs" title="上个月" aria-label="上个月">‹</button>
+                <span id="cal-month-label" class="cal-month-label tabular-nums">—</span>
+                <button type="button" id="cal-next-month" class="btn btn-ghost btn-xs" title="下个月" aria-label="下个月">›</button>
+            </div>
+            <div class="calendar-weekdays" aria-hidden="true">
+                <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+            </div>
+            <div id="calendar-grid" class="calendar-grid" role="grid"></div>
+            <div class="calendar-mode-row">
+                <label class="toggle-inline" title="开启后点击日历日期将加入/移出批量入库勾选，而非切换浏览日期">
+                    <input type="checkbox" id="cal-bulk-mode-toggle">
+                    <span>点击日历用于多日批量勾选</span>
+                </label>
+            </div>
         </div>
-        <ul id="ingest-date-list" class="ingest-date-list"></ul>
-    </details>
 
-    <h2 class="section-heading">
-        📄 论文 (<span id="brief-pdf-count">0</span>)
-        <button class="link-btn" id="pdf-toggle-all-btn" type="button">全部展开</button>
-    </h2>
-    <div id="brief-pdf-list" class="card-list"></div>
+        <!-- 列表视图 -->
+        <div id="date-list-view" class="date-list-view" hidden>
+            <div class="list-view-options">
+                <label class="toggle-inline">
+                    <input type="checkbox" id="list-show-missing-toggle">
+                    <span>显示无简报的断档日期</span>
+                </label>
+            </div>
+            <ul id="sidebar-date-list" class="sidebar-date-list"></ul>
+        </div>
 
-    <h2 class="section-heading">
-        🌐 文章 (<span id="brief-web-count">0</span>)
-        <button class="link-btn" id="web-toggle-all-btn" type="button">全部展开</button>
-    </h2>
-    <div id="brief-web-list" class="card-list"></div>
+        <!-- 常驻 6 态图例 -->
+        <div class="sidebar-legend" aria-label="日期状态图例">
+            <div class="legend-title">状态图例</div>
+            <div class="legend-grid">
+                <span class="legend-item"><i class="legend-swatch sw-none"></i>无简报 HTML</span>
+                <span class="legend-item"><i class="legend-swatch sw-unloaded"></i>有 HTML · 待入库</span>
+                <span class="legend-item"><i class="legend-swatch sw-aatf"></i>已入简报库 (AATF)</span>
+                <span class="legend-item"><i class="legend-swatch sw-heavy"></i>含深度精析</span>
+                <span class="legend-item"><i class="legend-swatch sw-running"></i>排队 / 入库中</span>
+                <span class="legend-item"><i class="legend-swatch sw-error"></i>异常 / 中断</span>
+            </div>
+        </div>
 
-    <div class="jobs-panel">
-        <h3>后台任务</h3>
-        <table>
-            <thead><tr><th>目标</th><th>类型</th><th>状态</th><th>创建时间</th><th>错误</th><th>操作</th></tr></thead>
-            <tbody id="jobs-tbody"></tbody>
-        </table>
+        <!-- 底部：多日批量收入简报速览库 -->
+        <div class="sidebar-bulk-box">
+            <div class="bulk-box-head">
+                <span class="bulk-box-title">批量收入简报速览库</span>
+                <span id="bulk-selected-badge" class="bulk-count-pill tabular-nums">已选 0 天</span>
+            </div>
+            <p class="bulk-box-hint" id="bulk-box-hint">勾选多日后一次排队入库（单次最多 40 天，已入库条目自动去重）。</p>
+            <div class="bulk-box-actions">
+                <button type="button" id="ingest-select-unchecked-btn" class="btn btn-secondary btn-xs" title="只勾选有简报 HTML 且尚未进入简报速览库的日期">只选待入库</button>
+                <button type="button" id="ingest-clear-btn" class="btn btn-ghost btn-xs">清空</button>
+                <button type="button" id="ingest-bulk-btn" class="btn btn-soft-primary btn-xs bulk-submit-btn" disabled>
+                    批量入库 (<span id="ingest-selected-count">0</span>)
+                </button>
+            </div>
+        </div>
+    </aside>
+
+    <!-- 右主栏：当日简报阅读与操作工作台 -->
+    <section class="briefs-main" aria-label="当日简报内容">
+        <!-- 区域 1：当日抬头与状态概览卡 -->
+        <header class="briefs-hero-card">
+            <div class="hero-top-row">
+                <div class="hero-heading">
+                    <div class="hero-date-line">
+                        <button type="button" id="mobile-sidebar-btn" class="btn btn-secondary btn-sm mobile-only">📅 选择日期</button>
+                        <h1 id="hero-date-title" class="hero-title tabular-nums">每日简报</h1>
+                        <span id="hero-day-counts" class="hero-counts tabular-nums"></span>
+                    </div>
+                    <p class="hero-subtitle">
+                        浏览每日筛选论文与文章：整日导读可收入<strong>简报速览库</strong>，勾选重点做<strong>深度精析</strong>，或单篇收入 <strong>PDF 文档库</strong>精读。
+                    </p>
+                </div>
+
+                <div class="hero-utilities">
+                    <button type="button" id="toggle-guide-btn" class="btn btn-ghost btn-sm" aria-expanded="false" aria-controls="briefs-guide-panel">
+                        <svg class="btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>
+                        </svg>
+                        <span>处理方式说明</span>
+                    </button>
+
+                    <div class="dropdown-wrap" id="more-menu-wrap">
+                        <button type="button" id="more-menu-btn" class="btn btn-ghost btn-sm" aria-haspopup="menu" aria-expanded="false" title="更多维护操作">
+                            <svg class="btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>
+                            </svg>
+                            <span>更多</span>
+                        </button>
+                        <div id="more-menu-panel" class="dropdown-menu" role="menu" hidden>
+                            <button type="button" id="sync-memory-btn" class="dropdown-item" role="menuitem">
+                                <span class="dropdown-item-title">补写漏同步摘要</span>
+                                <span class="dropdown-item-desc">仅用于运维兜底：把历史已完成但漏写进深度研报记忆 (ai-research) 的摘要补齐</span>
+                            </button>
+                            <a href="/data" class="dropdown-item" role="menuitem">
+                                <span class="dropdown-item-title">前往数据中心管理记忆与文档 ↗</span>
+                                <span class="dropdown-item-desc">查看或清理简报速览库 (AATF)、深度研报记忆与本地 PDF 索引</span>
+                            </a>
+                            <button type="button" id="open-jobs-menu-btn" class="dropdown-item" role="menuitem">
+                                <span class="dropdown-item-title">打开后台任务队列</span>
+                                <span class="dropdown-item-desc">查看排队、运行中、失败中断任务并支持取消或重试</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 双通道状态摘要 + 主动作行 -->
+            <div class="hero-status-row">
+                <div class="hero-pills" id="hero-status-pills">
+                    <span class="status-pill state-unloaded">加载状态中…</span>
+                </div>
+                <div class="hero-actions">
+                    <button type="button" id="light-load-btn" class="btn btn-soft-primary btn-sm"
+                            title="将当前日期全部卡片导读写入简报速览库 (AATF)，不下载原文 PDF、不受卡片勾选影响">
+                        <svg class="btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                        </svg>
+                        <span>整日入简报库</span>
+                    </button>
+                    <button type="button" id="brief-chat-btn" class="btn btn-secondary btn-sm"
+                            title="新标签打开对话页，并预设记忆范围为简报速览库 (AATF)">
+                        <svg class="btn-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                        </svg>
+                        <span>问简报库 ↗</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 上下文引导提示行 -->
+            <div id="hero-context-tip" class="hero-context-tip"></div>
+
+            <!-- 可折叠：处理方式与状态说明面板 -->
+            <div id="briefs-guide-panel" class="guide-panel" hidden>
+                <div class="guide-grid">
+                    <div class="guide-card guide-aatf">
+                        <div class="guide-card-head">
+                            <span class="guide-badge badge-aatf">按整天</span>
+                            <h3>1. 整日入简报库</h3>
+                        </div>
+                        <p class="guide-desc">将当天所有卡片的导读写入<strong>简报速览库 (AATF)</strong>，不下载 PDF、不做多维问答。重复执行自动去重。</p>
+                        <ul class="guide-meta">
+                            <li><strong>耗时</strong>：<span id="guide-aatf-latency">视存储模式而定（上游语义抽取约 1–数分钟/天；本地模式秒级）</span></li>
+                            <li><strong>对话怎么用</strong>：对话页默认不检索此库；点击「问简报库 ↗」或在对话页 🧠 记忆范围手动勾选。</li>
+                        </ul>
+                    </div>
+
+                    <div class="guide-card guide-heavy">
+                        <div class="guide-card-head">
+                            <span class="guide-badge badge-heavy">按勾选条目</span>
+                            <h3>2. 深度精析选中</h3>
+                        </div>
+                        <p class="guide-desc">对左侧复选框勾选的条目下载 PDF 或抓取全文，经多维度问答提炼结构化研报摘要，写入<strong>深度研报记忆 (ai-research)</strong>。</p>
+                        <ul class="guide-meta">
+                            <li><strong>耗时</strong>：论文约 15–30 分钟/篇，文章约 3–5 分钟/篇（单队列串行排队）。</li>
+                            <li><strong>对话怎么用</strong>：完成后在对话页<strong>默认自动检索</strong>，直接提问即可命中。</li>
+                        </ul>
+                    </div>
+
+                    <div class="guide-card guide-pdf">
+                        <div class="guide-card-head">
+                            <span class="guide-badge badge-pdf">按单篇论文</span>
+                            <h3>3. 收入 PDF 文档库</h3>
+                        </div>
+                        <p class="guide-desc">直接点击卡片操作行的「收入 PDF 文档库」，下载完整原 PDF 并建立独立本地全文向量索引（不写上述两个记忆库）。</p>
+                        <ul class="guide-meta">
+                            <li><strong>耗时</strong>：约 2–10 分钟/篇（独立后台执行，不阻塞下方简报任务队列）。</li>
+                            <li><strong>对话怎么用</strong>：索引就绪后原地显示「📖 打开精读 ↗」，直达单篇全文深挖对话。</li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="guide-footnote">
+                    <strong>关于状态徽标：</strong>每张卡片右上角的「未深度精析 / 精析排队中 / 已深度精析 / 精析失败」<strong>仅代表第 2 项（深度精析）进度</strong>，不受“整日入简报库”或“收入 PDF 文档库”影响。左侧日历完整显示每天状态——虚线灰格表示当天没有生成简报 HTML。
+                </div>
+            </div>
+        </header>
+
+        <!-- 区域 2：吸顶分段、筛选与阅读控制条 -->
+        <div class="briefs-filter-bar" id="briefs-filter-bar">
+            <div class="filter-bar-left">
+                <div class="type-tabs" role="tablist" aria-label="内容类型切换">
+                    <button type="button" class="type-tab active" data-tab="all" role="tab" aria-selected="true">
+                        全部 <span id="tab-count-all" class="tab-count tabular-nums">0</span>
+                    </button>
+                    <button type="button" class="type-tab" data-tab="pdf" role="tab" aria-selected="false">
+                        论文 <span id="tab-count-pdf" class="tab-count tabular-nums">0</span>
+                    </button>
+                    <button type="button" class="type-tab" data-tab="web" role="tab" aria-selected="false">
+                        文章 <span id="tab-count-web" class="tab-count tabular-nums">0</span>
+                    </button>
+                </div>
+
+                <div class="search-input-wrap">
+                    <svg class="search-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+                    </svg>
+                    <input type="search" id="card-search-input" class="search-input" placeholder="搜索标题、导读、标签…">
+                </div>
+            </div>
+
+            <div class="filter-bar-right">
+                <select id="status-filter-select" class="filter-select" aria-label="按深度精析状态筛选">
+                    <option value="all">全部精析状态</option>
+                    <option value="not_loaded">未深度精析</option>
+                    <option value="queued">精析排队中</option>
+                    <option value="done">已深度精析</option>
+                    <option value="failed">精析失败</option>
+                </select>
+
+                <label class="toggle-pill" title="隐藏没有中文导读的条目">
+                    <input type="checkbox" id="only-cn-toggle">
+                    <span>仅有导读</span>
+                </label>
+
+                <button type="button" id="select-all-btn" class="btn btn-secondary btn-xs" title="全选或取消全选当前筛选下可参与深度精析的条目">
+                    全选待精析
+                </button>
+                <button type="button" id="toggle-expand-all-btn" class="btn btn-ghost btn-xs">
+                    全部展开
+                </button>
+            </div>
+        </div>
+
+        <!-- 区域 3：卡片列表主区 -->
+        <div id="briefs-feed" class="briefs-feed" aria-live="polite">
+            <div class="feed-empty-state">正在加载简报内容…</div>
+        </div>
+
+        <!-- 区域 4：上下文浮动批量操作条（仅当勾选 ≥1 篇卡片时显示） -->
+        <div id="selection-dock" class="selection-dock" hidden role="region" aria-label="深度精析批量操作">
+            <div class="selection-dock-info">
+                <strong id="selection-dock-summary">已选 0 篇</strong>
+                <span id="selection-dock-hint" class="selection-dock-hint">将加入后台串行队列，摘要自动写入深度研报记忆 (ai-research)</span>
+            </div>
+            <div class="selection-dock-actions">
+                <button type="button" id="selection-clear-btn" class="btn btn-ghost btn-sm">取消选择</button>
+                <button type="button" id="load-selected-btn" class="btn btn-primary btn-sm">深度精析选中 (0)</button>
+            </div>
+        </div>
+    </section>
+</div>
+
+<!-- 深度精析执行前确认弹窗（让耗时与去向一目了然） -->
+<div id="heavy-confirm-modal" class="briefs-modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="heavy-confirm-title">
+    <div class="briefs-modal-card">
+        <div class="briefs-modal-head">
+            <h3 id="heavy-confirm-title">确认加入深度精析队列</h3>
+            <button type="button" id="heavy-confirm-close" class="btn btn-ghost btn-xs" aria-label="关闭">✕</button>
+        </div>
+        <div class="briefs-modal-body" id="heavy-confirm-body"></div>
+        <div class="briefs-modal-foot">
+            <button type="button" id="heavy-confirm-cancel" class="btn btn-secondary btn-sm">取消</button>
+            <button type="button" id="heavy-confirm-submit" class="btn btn-primary btn-sm">确认加入队列</button>
+        </div>
     </div>
 </div>
+
+<!-- 右侧滑出：后台任务抽屉 -->
+<div id="jobs-drawer-backdrop" class="drawer-backdrop" hidden aria-hidden="true"></div>
+<aside id="jobs-drawer" class="jobs-drawer" aria-label="后台任务队列" aria-hidden="true">
+    <div class="drawer-header">
+        <div>
+            <h2 class="drawer-title">后台任务队列</h2>
+            <p class="drawer-subtitle">单队列串行执行：耗时较长的论文深度精析会阻塞后续排队任务</p>
+        </div>
+        <button type="button" id="jobs-drawer-close" class="btn btn-ghost btn-sm" aria-label="关闭任务抽屉">✕</button>
+    </div>
+
+    <div class="drawer-tabs" role="tablist">
+        <button type="button" class="drawer-tab active" data-jobs-tab="active" role="tab">
+            进行中 <span id="jobs-count-active" class="tab-count tabular-nums">0</span>
+        </button>
+        <button type="button" class="drawer-tab" data-jobs-tab="failed" role="tab">
+            异常/中断 <span id="jobs-count-failed" class="tab-count tabular-nums">0</span>
+        </button>
+        <button type="button" class="drawer-tab" data-jobs-tab="all" role="tab">
+            全部记录 <span id="jobs-count-all" class="tab-count tabular-nums">0</span>
+        </button>
+    </div>
+
+    <div id="jobs-drawer-list" class="drawer-body"></div>
+
+    <div class="drawer-footer">
+        <div class="drawer-footer-note">历史已完成深度精析但漏写记忆时使用：</div>
+        <button type="button" id="drawer-sync-memory-btn" class="btn btn-secondary btn-xs">补写漏同步摘要 (ai-research)</button>
+    </div>
+</aside>
 {% endblock %}
 
 {% block extra_js %}
 <script src="/static/js/ui-feedback.js?v=1"></script>
-<script src="/static/js/paper-ingest.js?v=1"></script>
-<script src="/static/js/briefs.js?v=10"></script>
+<script src="/static/js/paper-ingest.js?v=3"></script>
+<script src="/static/js/briefs.js?v=14"></script>
 {% endblock %}

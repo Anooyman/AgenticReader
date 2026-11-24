@@ -337,38 +337,63 @@ const API = (function () {
             },
 
             async cards(coverageDate, options = {}) {
-                return request('/api/v1/briefs/cards?coverage_date=' + encodeURIComponent(coverageDate),
-                    withDefaults({ errorText: '加载简报内容失败' }, options));
+                const params = new URLSearchParams({ coverage_date: coverageDate });
+                const reqOpts = Object.assign({}, options);
+                if (reqOpts.includeState) params.set('include_state', '1');
+                if (reqOpts.compact) params.set('compact', '1');
+                delete reqOpts.includeState;
+                delete reqOpts.compact;
+                return request('/api/v1/briefs/cards?' + params.toString(),
+                    withDefaults({ errorText: '加载简报内容失败' }, reqOpts));
             },
 
             async load(coverageDate, itemIds, options = {}) {
                 return request('/api/v1/briefs/load',
-                    withDefaults({ method: 'POST', json: { coverage_date: coverageDate, item_ids: itemIds }, errorText: '加载简报失败' }, options));
+                    withDefaults({
+                        method: 'POST',
+                        json: { coverage_date: coverageDate, item_ids: itemIds },
+                        useDetailError: true,
+                        errorText: '深度精析排队失败'
+                    }, options));
             },
 
             async syncMemory(options = {}) {
                 return request('/api/v1/briefs/sync-memory',
-                    withDefaults({ method: 'POST', parse: 'none', errorText: '补灌记忆失败' }, options));
+                    withDefaults({ method: 'POST', useDetailError: true, errorText: '补写漏同步摘要失败' }, options));
             },
 
-            // 轻量入库：单日传字符串、批量传日期数组，body 统一走 dates
-            // （后端 /light-load 同时兼容旧 coverage_date 单键）。
+            // 整日入简报库：单日传字符串、批量传日期数组，body 统一走 dates
             async lightLoad(dates, options = {}) {
                 const list = Array.isArray(dates) ? dates : [dates];
                 return request('/api/v1/briefs/light-load',
-                    withDefaults({ method: 'POST', json: { dates: list },
-                                   errorText: '轻量入库请求失败' }, options));
+                    withDefaults({
+                        method: 'POST',
+                        json: { dates: list },
+                        useDetailError: true,
+                        errorText: '简报库入库请求失败'
+                    }, options));
             },
 
             async memoryStatus(options = {}) {
-                return request('/api/v1/briefs/memory-status',
-                    withDefaults({ errorText: '加载入库状态失败' }, options));
+                const reqOpts = Object.assign({}, options);
+                const suffix = reqOpts.includeMeta ? '?include_meta=1' : '';
+                delete reqOpts.includeMeta;
+                return request('/api/v1/briefs/memory-status' + suffix,
+                    withDefaults({ errorText: '加载入库状态失败' }, reqOpts));
             },
 
             async fetchPdf(url, options = {}) {
+                const reqOpts = Object.assign({}, options);
+                const body = { url };
+                if (reqOpts.force) body.force = true;
+                delete reqOpts.force;
                 return request('/api/v1/briefs/fetch-pdf',
-                    withDefaults({ method: 'POST', json: { url }, useDetailError: true,
-                                   errorText: '下载入库失败' }, options));
+                    withDefaults({
+                        method: 'POST',
+                        json: body,
+                        useDetailError: true,
+                        errorText: '收入 PDF 文档库失败'
+                    }, reqOpts));
             }
         },
 

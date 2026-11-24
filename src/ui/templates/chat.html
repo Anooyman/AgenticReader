@@ -78,17 +78,17 @@
                         <button id="memory-scope-close" class="doc-picker-close-btn">✕</button>
                     </div>
                     <div style="padding: 0.5rem 1rem 0; font-size: 0.8125rem; color: var(--text-muted);">
-                        缺省 = 全部已勾选（ai-research + webapp-chat）。勾选子集会立即保存到当前会话。
+                        默认开启「深度研报记忆 + 历史对话」。勾选修改会立即保存到当前会话。
                     </div>
-                    <div class="doc-picker-list" style="padding: 0.5rem 1rem; max-height: 220px;">
+                    <div class="doc-picker-list" style="padding: 0.5rem 1rem; max-height: 240px;">
                         <div class="doc-picker-option">
-                            <label><input type="checkbox" class="memory-scope-cb" value="ai-research" checked> ai-research（简报 / 论文摘要）</label>
+                            <label title="由简报页「深度精析」生成的高密度多维研报摘要，默认自动检索"><input type="checkbox" class="memory-scope-cb" value="ai-research" checked> 深度研报记忆 <small style="color: var(--text-muted);">(ai-research)</small></label>
                         </div>
                         <div class="doc-picker-option">
-                            <label><input type="checkbox" class="memory-scope-cb" value="webapp-chat" checked> webapp-chat（对话历史）</label>
+                            <label title="过往会话中自动沉淀的历史问答记忆，默认自动检索"><input type="checkbox" class="memory-scope-cb" value="webapp-chat" checked> 历史对话 <small style="color: var(--text-muted);">(webapp-chat)</small></label>
                         </div>
                         <div class="doc-picker-option">
-                            <label><input type="checkbox" class="memory-scope-cb" value="AATF" title="简报卡片导读已落 A 自库：在「简报」页点「轻量入库(全天)」加载；未加载过时此项检索为空"> AATF（简报库，简报页"轻量入库"写入）</label>
+                            <label title="由简报页「整日入简报库」写入的每日简报卡片导读；未导入过时检索为空"><input type="checkbox" class="memory-scope-cb" value="AATF"> 简报速览库 <small style="color: var(--text-muted);">(AATF · 简报页整日导入)</small></label>
                         </div>
                     </div>
                     <div class="doc-picker-footer" style="display: flex; justify-content: space-between;">
