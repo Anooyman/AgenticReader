@@ -19,7 +19,6 @@ from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings, ChatOpenAI,
 from langchain_community.chat_models import ChatOllama
 from langchain_community.embeddings import OllamaEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
-from google.api_core.client_options import ClientOptions
 
 from src.config.settings import (
     LLM_CONFIG,

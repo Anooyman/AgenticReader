@@ -27,7 +27,6 @@
 
 const API = (function () {
     const JSON_CONTENT_TYPE = 'application/json';
-    const LLM_MEMORY_BASE = '/api/v1/llmmemory';
 
     function buildInit(options) {
         const init = { method: options.method || 'GET' };
@@ -130,44 +129,9 @@ const API = (function () {
             }
         },
 
-        // LLM-Memory 桥（/api/v1/llmmemory/*，转发给外部 LLM-Memory webui）
-        // 同 documents 的三个 raw 封装：/memory 页自己判状态码并解析 detail。
-        llmmemory: {
-            async dates(options = {}) {
-                return request(LLM_MEMORY_BASE + '/dates', withDefaults({ raw: true }, options));
-            },
-
-            async enqueueLoadJobs(dates, options = {}) {
-                return request(LLM_MEMORY_BASE + '/load-jobs',
-                    withDefaults({ method: 'POST', json: { dates }, raw: true }, options));
-            },
-
-            async loadJobs(options = {}) {
-                return request(LLM_MEMORY_BASE + '/load-jobs', withDefaults({ raw: true }, options));
-            },
-
-            async download(url, options = {}) {
-                return request(LLM_MEMORY_BASE + '/download',
-                    withDefaults({ method: 'POST', json: { url }, raw: true }, options));
-            },
-
-            async chat(message, history, options = {}) {
-                return request(LLM_MEMORY_BASE + '/chat',
-                    withDefaults({ method: 'POST', json: { message, history }, raw: true }, options));
-            },
-
-            async chatProgress(jobId, options = {}) {
-                return request(LLM_MEMORY_BASE + '/chat/progress/' + jobId,
-                    withDefaults({ raw: true }, options));
-            },
-
-            // flag 式取消：外部 job 在下一次检索检查点自行收尾；
-            // 页面先停本地轮询，这里只是把停止请求递过去。
-            async chatStop(jobId, options = {}) {
-                return request(LLM_MEMORY_BASE + '/chat/stop/' + encodeURIComponent(jobId),
-                    withDefaults({ method: 'POST', raw: true }, options));
-            }
-        },
+        // 注：原 llmmemory 域（/api/v1/llmmemory/*，/memory 页的桥接面）随
+        // 该页退役删除。外部 LLM-Memory 的 HTTP 桥此后也已彻底移除——前后端
+        // 已无任何路由出网访问它；上游经进程内只读门面接入，不经过前端。
 
         // 聊天
         chat: {
@@ -373,18 +337,63 @@ const API = (function () {
             },
 
             async cards(coverageDate, options = {}) {
-                return request('/api/v1/briefs/cards?coverage_date=' + encodeURIComponent(coverageDate),
-                    withDefaults({ errorText: '加载简报内容失败' }, options));
+                const params = new URLSearchParams({ coverage_date: coverageDate });
+                const reqOpts = Object.assign({}, options);
+                if (reqOpts.includeState) params.set('include_state', '1');
+                if (reqOpts.compact) params.set('compact', '1');
+                delete reqOpts.includeState;
+                delete reqOpts.compact;
+                return request('/api/v1/briefs/cards?' + params.toString(),
+                    withDefaults({ errorText: '加载简报内容失败' }, reqOpts));
             },
 
             async load(coverageDate, itemIds, options = {}) {
                 return request('/api/v1/briefs/load',
-                    withDefaults({ method: 'POST', json: { coverage_date: coverageDate, item_ids: itemIds }, errorText: '加载简报失败' }, options));
+                    withDefaults({
+                        method: 'POST',
+                        json: { coverage_date: coverageDate, item_ids: itemIds },
+                        useDetailError: true,
+                        errorText: '深度精析排队失败'
+                    }, options));
             },
 
             async syncMemory(options = {}) {
                 return request('/api/v1/briefs/sync-memory',
-                    withDefaults({ method: 'POST', parse: 'none', errorText: '补灌记忆失败' }, options));
+                    withDefaults({ method: 'POST', useDetailError: true, errorText: '补写漏同步摘要失败' }, options));
+            },
+
+            // 整日入简报库：单日传字符串、批量传日期数组，body 统一走 dates
+            async lightLoad(dates, options = {}) {
+                const list = Array.isArray(dates) ? dates : [dates];
+                return request('/api/v1/briefs/light-load',
+                    withDefaults({
+                        method: 'POST',
+                        json: { dates: list },
+                        useDetailError: true,
+                        errorText: '简报库入库请求失败'
+                    }, options));
+            },
+
+            async memoryStatus(options = {}) {
+                const reqOpts = Object.assign({}, options);
+                const suffix = reqOpts.includeMeta ? '?include_meta=1' : '';
+                delete reqOpts.includeMeta;
+                return request('/api/v1/briefs/memory-status' + suffix,
+                    withDefaults({ errorText: '加载入库状态失败' }, reqOpts));
+            },
+
+            async fetchPdf(url, options = {}) {
+                const reqOpts = Object.assign({}, options);
+                const body = { url };
+                if (reqOpts.force) body.force = true;
+                delete reqOpts.force;
+                return request('/api/v1/briefs/fetch-pdf',
+                    withDefaults({
+                        method: 'POST',
+                        json: body,
+                        useDetailError: true,
+                        errorText: '收入 PDF 文档库失败'
+                    }, reqOpts));
             }
         },
 

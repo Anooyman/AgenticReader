@@ -20,6 +20,18 @@ from src.utils.json_io import write_json_atomic  # noqa: F401
 
 from src.config.settings import DATA_ROOT
 
+# 这个模块的全部对外面——写出来一是给人看，二是让"write_json_atomic 只是
+# 路过这里"这件事对 lint 也成立：# noqa 只对 flake8/ruff 有效，pyflakes 不
+# 认，光靠注释它永远会被算成一处未用 import。
+__all__ = [
+    "PROJECT_ROOT",
+    "STATE_DIR",
+    "SUMMARIES_DIR",
+    "OUTPUT_DIR",
+    "BRIEFS_DIR",
+    "write_json_atomic",
+]
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # src/pipeline/ 的上两级是项目根
 STATE_DIR = PROJECT_ROOT / DATA_ROOT / "pipeline"
 SUMMARIES_DIR = STATE_DIR / "summaries"

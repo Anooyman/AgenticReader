@@ -116,12 +116,14 @@ async def set_memory_scope(session_id: str, request: MemoryScopeRequest):
     设置会话级记忆检索范围（供 chat_service 透传给 Orchestrator）。
 
     校验集合 = gateway.DEFAULT_SEARCH_NAMESPACES（自库白名单）
-             + NAMESPACE_AATF（DA 预留）+ gateway.EXTERNAL_SEARCH_NAMESPACES（占位）。
+             + NAMESPACE_AATF（local driver 轻量入库写入自库）+ gateway.EXTERNAL_SEARCH_NAMESPACES（占位）。
     null / 缺键 → 恢复默认；[] → 400（空作用域无意义）；含未知项 → 400；
     重复项在端点层保序去重后落库。
-    注：AATF 目前随 DA 预留位放行，本地 _local_brief_load 实装前自库恒无
-    AATF 行，选它检索结果为空——前端浮层已加同源提示，避免"加载了但搜
-    不到"的断链错觉（blueprint OQ-1 口径）。
+    注：AATF 由本地 driver 实装写入（/briefs 页"轻量入库(全天)"，经
+    gateway.load_brief_date 的 local 路直落 A 自库——外部桥驱动已退役，
+    这已不是"分派分支"而是唯一一条路）——某天没做过轻量
+    入库时选它检索为空属正常，与 sessions 页注释同源，前端浮层有对应
+    提示。
     """
     try:
         # 函数级延迟 import：api 层不往模块级拖记忆内核依赖链

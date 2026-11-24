@@ -42,6 +42,8 @@ if not os.path.isabs(DATA_ROOT):
     DATA_ROOT = str(project_root / DATA_ROOT)
 
 # 配置日志
+# 与 core/llm/client.py 等处重复：basicConfig 只在 root 未配置时生效，
+# 谁先 import 谁说话。统一说明见 src/core/llm/client.py:45。
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s - %(message)s'
@@ -232,7 +234,7 @@ def display_document_info(doc_name: str, doc_data: Dict):
 
     brief_summary = info.get("brief_summary", "")
     if brief_summary:
-        print(f"\n📝 摘要:")
+        print("\n📝 摘要:")
         print(f"   {brief_summary[:200]}...")
 
     # 文件详情
@@ -345,7 +347,7 @@ def delete_document_files(doc_name: str, confirm: bool = True) -> bool:
         print("\n📝 已从文档注册表中移除记录")
 
     # 总结
-    print(f"\n删除完成:")
+    print("\n删除完成:")
     print(f"  - 成功删除: {len(result.deleted)} 项")
     if result.failed:
         failed_parts = sorted({i.part for i in result.failed})

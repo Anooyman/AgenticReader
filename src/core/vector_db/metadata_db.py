@@ -6,7 +6,7 @@
 
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -264,7 +264,11 @@ class MetadataVectorDB:
                             "metadata": doc_info.get("metadata_enhanced", {})
                         })
                     else:
-                        logger.warning(f"⚠️ [MetadataDB] 文档 {doc_id} 在注册表中不存在")
+                        # doc_name 是这里从向量命中 metadata 里拿的——registry
+                        # 查不到时它是唯一还能认身份的东西，所以进日志而不是
+                        # 丢掉（此前这行赋值纯属空转，被 pyflakes 点名）。
+                        logger.warning(f"⚠️ [MetadataDB] 文档 {doc_id}"
+                                       f"{f' ({doc_name})' if doc_name else ''} 在注册表中不存在")
 
                 except Exception as e:
                     logger.error(f"❌ [MetadataDB] 处理第 {idx+1} 个检索结果失败: {e}")
@@ -310,7 +314,7 @@ class MetadataVectorDB:
             all_docs = registry.list_all()
 
             if not all_docs:
-                logger.warning(f"⚠️  [MetadataDB] 文档注册表为空")
+                logger.warning("⚠️  [MetadataDB] 文档注册表为空")
                 return False
 
             # 过滤掉要删除的文档，重建索引
@@ -370,7 +374,7 @@ class MetadataVectorDB:
                 if self.index_path.exists():
                     shutil.rmtree(self.index_path)
                     _invalidate_index_cache(self.index_path)
-                logger.info(f"✅ [MetadataDB] 元数据索引已清空（无剩余文档）")
+                logger.info("✅ [MetadataDB] 元数据索引已清空（无剩余文档）")
 
             return True
 

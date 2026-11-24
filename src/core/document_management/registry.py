@@ -8,7 +8,6 @@ import copy
 import json
 import logging
 import os
-import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -18,32 +17,14 @@ import uuid
 # 原子落盘（tmp + os.replace），与 queue_store/registry 同一套范式。
 # 实现放在 src/utils/json_io（与 path_guard 同层）——从 pipeline.paths 导入会形成
 # core→pipeline 反向依赖，只为一行函数不值得。
+from src.core import filelock
 from src.utils.json_io import write_json_atomic
-
-try:
-    import fcntl  # POSIX 下才有：跨进程排他锁
-    _HAS_FCNTL = True
-except ImportError:  # pragma: no cover - Windows 平台没有 fcntl
-    fcntl = None  # type: ignore
-    _HAS_FCNTL = False
 
 logger = logging.getLogger(__name__)
 
-# 进程内互斥锁表：按注册表文件路径分桶，不同路径（比如测试用的临时目录）
-# 之间互不干扰。只在 Windows 缺 fcntl 时用作兜底——POSIX 下 flock 对同一
-# 文件的两个 fd 同样互斥，同进程内的线程竞争已经挡住了。
-_THREAD_LOCKS: Dict[str, threading.Lock] = {}
-_THREAD_LOCKS_GUARD = threading.Lock()
-
-
-def _thread_lock_for(path: Path) -> threading.Lock:
-    key = str(Path(path).resolve())
-    with _THREAD_LOCKS_GUARD:
-        lock = _THREAD_LOCKS.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _THREAD_LOCKS[key] = lock
-        return lock
+# 跨进程排他锁现在由 src/core/filelock.py 提供，所以这里不再有"Windows 上
+# 退化成进程内 threading.Lock"的分支。那个分支的问题不是不工作，而是它不报
+# 错：两个进程都会认为自己拿到了锁，然后互相覆盖，看起来却像正常的并发写入。
 
 
 class DocumentRegistry:
@@ -137,26 +118,19 @@ class DocumentRegistry:
         不直接锁 json 文件本身：write_json_atomic 是 tmp+rename，rename 之后
         原来的 inode 就换了，锁在旧 inode 上会失效——这点和 queue_store 一致。
 
-        flock 只在 POSIX 可用。Windows 上没有 fcntl，退化为进程内 threading.Lock：
-        此时只能保证同进程内线程互斥，跨进程写仍然可能互相覆盖，这是缺 fcntl
-        时能做到的最好保证（本项目运行环境以 POSIX 为主）。
+        锁由 src/core/filelock.py 取得：POSIX 走 flock，Windows 走 msvcrt，
+        两边都是跨进程的。flock 不可重入——callback 里不要再调本类其它写方法。
         """
-        if not _HAS_FCNTL:
-            # Windows fallback：仅进程内互斥
-            with _thread_lock_for(self.registry_path):
-                yield
-            return
-
         # 直接拼后缀，不用 with_suffix：后者会把 "doc.registry.json" 的后缀
         # 当成 ".json" 换掉，落到意料之外的文件名上。
         lock_path = Path(str(self.registry_path) + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            filelock.acquire(fd)
             yield
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            filelock.release(fd)
             os.close(fd)
 
     def _transaction(self, callback: Callable[[Dict[str, Dict]], Any]) -> Any:

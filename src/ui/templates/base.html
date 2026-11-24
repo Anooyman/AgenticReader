@@ -5,65 +5,96 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}AgenticReader{% endblock %}</title>
 
-    <!-- 在任何 CSS 生效之前先把已保存的主题应用到 <html>，避免深色模式下
-         刷新页面时先闪一下白色背景再变黑（FOUC）。 -->
+    <!-- 在任何 CSS 生效之前先把已保存的主题应用到 <html>，避免深色模式下刷新闪烁 -->
     <script>
         (function () {
-            const saved = localStorage.getItem('AgenticReader_theme');
-            if (saved === 'dark') {
+            const savedTheme = localStorage.getItem('AgenticReader_theme');
+            if (savedTheme === 'dark') {
                 document.documentElement.setAttribute('data-theme', 'dark');
             }
+            const savedLang = localStorage.getItem('AgenticReader_lang');
+            const lang = (savedLang === 'en' || savedLang === 'zh') ? savedLang : 'zh';
+            document.documentElement.setAttribute('data-lang', lang);
+            document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN';
         })();
     </script>
 
     <!-- CSS -->
-    <link rel="stylesheet" href="/static/css/variables.css?v=12">
-    <link rel="stylesheet" href="/static/css/base.css?v=12">
-    <link rel="stylesheet" href="/static/css/components.css?v=12">
+    <link rel="stylesheet" href="/static/css/variables.css?v=13">
+    <link rel="stylesheet" href="/static/css/base.css?v=13">
+    <link rel="stylesheet" href="/static/css/components.css?v=13">
     <style>
         /* Badge for pending notifications */
         .badge {
             position: absolute;
-            top: -8px;
-            right: -8px;
-            background: #dc3545;
+            top: -5px;
+            right: -6px;
+            background: var(--danger-color);
             color: white;
-            font-size: 0.75rem;
+            font-size: 0.6875rem;
             font-weight: 600;
-            padding: 0.125rem 0.5rem;
-            border-radius: 1rem;
-            min-width: 20px;
+            padding: 1px 6px;
+            border-radius: 9999px;
+            min-width: 18px;
+            line-height: 1.3;
             text-align: center;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% {
-                transform: scale(1);
-            }
-            50% {
-                transform: scale(1.1);
-            }
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
         }
     </style>
     {% block extra_css %}{% endblock %}
 </head>
 <body>
+    {% set _path = request.url.path if request is defined else '' %}
     <div class="app-container">
         <!-- Header -->
         <header class="header">
-            <div class="header-title">📚 AgenticReader</div>
-            <nav class="header-nav">
-                <a href="/" class="nav-link">🏠 首页</a>
-                <a href="/briefs" class="nav-link">📰 简报</a>
-                <a href="/memory" class="nav-link">🧠 记忆</a>
-                <a href="/data" class="nav-link" style="position: relative;">
-                    🗂️ 管理中心
+            <a href="/" class="header-brand">
+                <svg class="header-brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>
+                    <path d="M8 7h6"/><path d="M8 11h8"/>
+                </svg>
+                <span>AgenticReader</span>
+            </a>
+
+            <nav class="header-nav" aria-label="主导航">
+                <a href="/" class="nav-link{% if _path == '/' %} active{% endif %}">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
+                    </svg>
+                    <span class="nav-link-label">首页</span>
+                </a>
+                <a href="/briefs" class="nav-link{% if _path.startswith('/briefs') %} active{% endif %}">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2"/>
+                        <path d="M18 14h-8"/><path d="M15 18h-5"/><path d="M10 6h8v4h-8V6Z"/>
+                    </svg>
+                    <span class="nav-link-label">每日简报</span>
+                </a>
+                <a href="/data" class="nav-link{% if _path.startswith('/data') %} active{% endif %}">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>
+                    </svg>
+                    <span class="nav-link-label">数据中心</span>
                     <span id="pending-badge" class="badge" style="display: none;"></span>
                 </a>
-                <a href="/config" class="nav-link" title="配置">⚙️</a>
-                <button id="theme-toggle-btn" class="nav-link" type="button" title="切换深色/浅色模式" style="border: none; background: none; cursor: pointer; font: inherit;">🌙</button>
+
+                <span class="header-divider" aria-hidden="true"></span>
+
+                <button id="header-jobs-btn" class="nav-link nav-jobs-pill" type="button" title="查看后台任务队列">
+                    <span class="nav-jobs-dot" aria-hidden="true"></span>
+                    <span id="header-jobs-label">任务</span>
+                </button>
+
+                <button id="language-toggle-btn" class="nav-link nav-lang-btn" type="button" data-i18n-lang-btn aria-label="切换中英文" title="切换中英文">English</button>
+
+                <a href="/config" class="nav-link nav-icon-btn{% if _path.startswith('/config') %} active{% endif %}" title="系统与模型配置" aria-label="系统与模型配置">
+                    <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>
+                    </svg>
+                </a>
+
+                <button id="theme-toggle-btn" class="nav-link nav-icon-btn" type="button" title="切换深色/浅色模式" aria-label="切换深色/浅色模式"></button>
             </nav>
         </header>
 
@@ -74,31 +105,38 @@
 
         <!-- Footer -->
         <footer class="footer">
-            &copy; Powered by FastAPI & LangGraph
+            &copy; Powered by FastAPI &amp; LangGraph
         </footer>
     </div>
 
-    <!-- 全站共享：api.js 唯一出口（必须排在各页消费者脚本之前）+ 待处理徽章 -->
-    <script src="/static/js/api.js?v=3"></script>
-    <script src="/static/js/base-badge.js?v=1"></script>
+    <!-- 全站共享：i18n locale 注册 + api.js 唯一出口 + 待处理徽章 -->
+    <script src="/static/js/i18n.js?v=2"></script>
+    <script src="/static/js/locales/base.js?v=2"></script>
+    <script src="/static/js/locales/briefs.js?v=2"></script>
+    <script src="/static/js/locales/chat.js?v=2"></script>
+    <script src="/static/js/locales/config.js?v=2"></script>
+    <script src="/static/js/locales/data.js?v=2"></script>
+    <script src="/static/js/locales/dashboard.js?v=2"></script>
+    <script src="/static/js/locales/structure.js?v=2"></script>
+    <script src="/static/js/api.js?v=5"></script>
+    <script src="/static/js/base-badge.js?v=3"></script>
 
     {% block extra_js %}{% endblock %}
 
-
-    <!-- 深色/浅色模式切换：状态存在 localStorage，跨页面/刷新保持；
-         <head> 里的内联脚本已经在首次渲染前应用过一次，这里只负责
-         按钮图标同步和点击切换。 -->
+    <!-- 深色/浅色模式切换 + 顶栏任务胶囊入口 -->
     <script>
         (function () {
             const THEME_KEY = 'AgenticReader_theme';
             const btn = document.getElementById('theme-toggle-btn');
+            const SUN_SVG = '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>';
+            const MOON_SVG = '<svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>';
 
             function currentTheme() {
                 return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
             }
 
             function syncButtonIcon() {
-                btn.textContent = currentTheme() === 'dark' ? '☀️' : '🌙';
+                btn.innerHTML = currentTheme() === 'dark' ? SUN_SVG : MOON_SVG;
             }
 
             btn.addEventListener('click', () => {
@@ -113,6 +151,32 @@
             });
 
             syncButtonIcon();
+
+            // 顶栏任务胶囊：当前页如已注册 window.openJobsDrawer（例如 /briefs），直接打开抽屉；
+            // 其他页面则跳转 /briefs?drawer=jobs，并在非 /briefs 页加载时做一次轻量计数同步。
+            const jobsBtn = document.getElementById('header-jobs-btn');
+            if (jobsBtn) {
+                jobsBtn.addEventListener('click', () => {
+                    if (typeof window.openJobsDrawer === 'function') {
+                        window.openJobsDrawer();
+                    } else {
+                        window.location.href = '/briefs?drawer=jobs';
+                    }
+                });
+                if (!window.location.pathname.startsWith('/briefs') && window.API && API.jobs) {
+                    API.jobs.list({ checkOk: false }).then((data) => {
+                        const jobs = (data && data.jobs) || [];
+                        const active = jobs.filter(j => ['queued', 'running', 'cancelling'].includes(j.status)).length;
+                        const failed = jobs.filter(j => ['failed', 'interrupted'].includes(j.status)).length;
+                        const label = document.getElementById('header-jobs-label');
+                        jobsBtn.classList.toggle('has-active', active > 0);
+                        jobsBtn.classList.toggle('has-error', active === 0 && failed > 0);
+                        if (label) {
+                            label.textContent = active > 0 ? `任务 (${active})` : (failed > 0 ? `异常 (${failed})` : '任务');
+                        }
+                    }).catch(() => {});
+                }
+            }
         })();
     </script>
 </body>

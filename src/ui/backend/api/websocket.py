@@ -154,6 +154,7 @@ async def websocket_chat(websocket: WebSocket):
                         "type": "assistant_message",
                         "content": answer_content,
                         "references": response.get("references", []),
+                        "memory_hits": response.get("memory_hits", []),
                         "timestamp": datetime.now().isoformat()
                     })
 

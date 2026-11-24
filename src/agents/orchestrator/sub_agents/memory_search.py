@@ -28,10 +28,11 @@ class MemorySearchAgent(SubAgent):
                     "Search the user's persistent memory (past-ingested paper/article "
                     "summaries and prior conversation notes) for anything semantically "
                     "relevant to the user's question. Use this FIRST for any question that "
-                    "references remembered content, even vaguely (e.g. 'that paper about X', "
+                    "references remembered content, recent saved papers/news, today/yesterday/"
+                    "last-week recaps, or vague recall (e.g. 'that paper about X', "
                     "'what did we discuss about Y'). Searches AgenticReader's own memory "
-                    "(ai-research + webapp-chat) by default — only pass namespace to narrow "
-                    "the search to one kind of content. Returns a synthesized answer "
+                    "(ai-research + webapp-chat, plus AATF if opted in) by default — only pass "
+                    "namespace to narrow the search to one kind of content. Returns a synthesized answer "
                     "plus a list of hits, each optionally carrying a source_id you can pass to "
                     "deep_dive_document for details beyond the stored summary."
                 ),
@@ -81,6 +82,12 @@ class MemorySearchAgent(SubAgent):
 
     @staticmethod
     def _shape_hits(results: list) -> list:
+        # 注意形状来源：gateway.search 返回的行是 shape_result_row(include_raw=True)
+        # 裁出来的——带 detail 全文但**没有现成的 url 键**；search.py 的
+        # _trim_rows 只管喂工具循环的那份，不在这条返回路上。所以这里
+        # 现场从 detail/raw_source 提一次链接（与 _trim_rows 同一提取器）。
+        from src.memory.search import _extract_row_url
+
         hits = []
         for row in results:
             hit = {
@@ -89,9 +96,25 @@ class MemorySearchAgent(SubAgent):
                 "abstract": row.get("abstract", ""),
                 "score": row.get("score", 0),
             }
+            url = row.get("url") or _extract_row_url(row)
+            if not url:
+                # 兜底：AATF 卡片行的 source_id 与 arxiv id 同源（item_id 约定），
+                # 行内容没留下链接时也能给出一条规范 arxiv 摘要页地址。
+                # 日聚合行（aatf-<date>-radar 之类）对不上这个形状，保持无 url。
+                sid = str(row.get("source_id") or "")
+                import re as _re
+                if _re.fullmatch(r"\d{4}\.\d{4,5}(v\d+)?", sid):
+                    url = f"https://arxiv.org/abs/{sid}"
+            if url:
+                # 带给模型它在回答里给出可点链接，UI 的"提及论文"条
+                # 更是直接拿它渲染下载按钮。
+                hit["url"] = url
             if row.get("source_type") == "ai_research" and row.get("source_id"):
                 # source_id 本身就是 doc_name（见 src/memory/adapters/ai_research.py
                 # 的约定），不需要像原实现那样反查摘要文件才能拿到 doc_name。
                 hit["doc_name"] = row["source_id"]
             hits.append(hit)
+        # 带行动面（url/doc_name）的命中排前：分数顺序保留，但日聚合摘要行
+        # （无链接）不会把可下载的论文行挤出模型的视野和 UI 的第一屏。
+        hits.sort(key=lambda h: (not (h.get("url") or h.get("doc_name")),))
         return hits

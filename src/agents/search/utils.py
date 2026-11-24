@@ -25,6 +25,16 @@ logger = logging.getLogger(__name__)
 # LLM 响应里的 JSON 清洗已收敛到 src/agents/common/json_utils.py:parse_llm_json
 # （原先本文件里的 extract_json_from_llm_response 是它的一个子集，已删除）。
 
+# URL 抽取正则（extract_urls_from_text 专用，收在这里好读也好测）。
+# 第一段是主机（含百分号转义），第二段是可选的 path/query/fragment——
+# 少了第二段就会把带路径的链接抽成光秃秃的主机名，见该函数注释。
+# 终止字符集合覆盖：空白、引号/反引号、成对符号、方括号，以及中文标点，
+# 这样 "看 https://a.com/p，还有" 里的中文逗号不会跟着进 URL。
+_URL_RE = re.compile(
+    r"(?:https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+"
+    r"(?:[/?#][^\s\"'`<>()\[\]{}，、。；：！？《》「」『』【】]*)?)"
+)
+
 
 class SimpleMCPClient:
     """
@@ -249,21 +259,28 @@ class SearchUtils:
         """
         从文本中提取所有URL
 
+        正则分两段：主机段沿用旧写法（含 % 转义），后面接**可选的
+        path/query/fragment**。旧版的字符类里没有 "/"，于是
+        "https://arxiv.org/abs/1706.03762" 会被抽成 "https://arxiv.org"——
+        下游拿它当 target_urls 去爬首页、generate_doc_name_from_url 还会
+        给同一主机不同论文算出同一个文档名，这是实打实的行为错误。
+        终止字符表把空白、成对符号和中英文标点都排除了，免得
+        "看 https://a.com/p，还有" 这种紧跟标点的写法把逗号吞进 URL。
+
         Args:
             text: 输入文本
 
         Returns:
-            URL列表
+            URL列表（保留 path/query/fragment，已去重）
         """
-        # URL正则表达式
-        url_pattern = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+'
-        urls = re.findall(url_pattern, text)
+        urls = _URL_RE.findall(text)
 
         # 验证并去重
         valid_urls = []
         seen = set()
 
         for url in urls:
+            url = url.rstrip(".,;:")  # 西文句末点号不算 URL 的一部分
             if SearchUtils.is_valid_url(url) and url not in seen:
                 valid_urls.append(url)
                 seen.add(url)

@@ -5,7 +5,10 @@ src.memory 向量库的内容。改自 ai-research-pipeline 的 webapp/api/memor
 合并进 AgenticReader 后已经改为同进程直接调用（见 services/memory_browse.py
 的说明），这里的路由/错误处理逻辑基本不变。
 """
-from fastapi import APIRouter, HTTPException
+import json
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Request
 
 from src.ui.backend.services import memory_browse
 
@@ -56,4 +59,111 @@ async def post_search(body: dict):
     result = await gateway.search(query,
                                   namespaces=[namespace] if namespace else "*",
                                   provider=resolve_provider(None))
+    return result
+
+
+# ---- 上游 LLM-Memory 只读面（SDK 为主 + 可选 MCP 决策面，均经 gateway 门面）----
+# 路由只做输入校验与失败→状态码的映射；作用域规则住在 gateway（缺省
+# 不传作用域=全局搜，显式 str/列表/"*" 才收窄），这里不另立规则，也不
+# import 上游细节——src/memory 不沾 fastapi，映射归本层。
+# 两个 POST 的 body 故意不走 FastAPI 的类型校验：dict 注解会让框架在
+# 路由函数之前就 422 掉数组类畸形 body——虽然那也不是 500，但"是不是
+# 我们的输入校验在把关"就成了框架的事。这里收 Request 后自己
+# .json()，非法 JSON / 非对象 body 统一 400 归我们，语义可预期。
+# （本文件早先的 /search 端点保持原 dict 签名不动。）
+
+# 只读决策面白名单：why/pack 两个读工具。API 层先挡一道，
+# src/memory/upstream.py 还有第二道同名单（纵深不是重复）。
+_DECISION_TOOLS = ("memory_why", "memory_pack")
+
+
+@router.get("/upstream")
+async def get_upstream(namespace: Optional[str] = None):
+    """上游状态视图：{available, namespaces:[{name,rows}], total, version?,
+    decision:{enabled, available, note}, note?|error?}。
+    这是一个**状态查询**，不是操作——未配置/不可达也如实返回 200 +
+    available:false，前端据此渲染灰徽章，不该拿 4xx/5xx 谎报"接口坏了"。
+    decision 位只报开关的诚实答案：未启用时是纯 gate 答案，不会顺手起
+    子进程探测（探测发生在 POST /upstream/decision 或显式打开之后）。
+    """
+    from src.memory import gateway  # 函数级：api 层不往模块级拖记忆内核
+    status = await gateway.upstream_status(namespace)
+    status["decision"] = await gateway.upstream_decision_status()
+    return status
+
+
+def _bad_body(detail: str) -> HTTPException:
+    return HTTPException(status_code=400, detail=detail)
+
+
+async def _json_object_body(request: Request) -> dict:
+    """把请求体收成 dict：空体按 {}；非法 JSON / 数组 / 标量都算调用方
+    的输入错误，统一 400——绝不让 .get 撞上 AttributeError→500。"""
+    raw = await request.body()
+    if not raw:
+        return {}
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        raise _bad_body("body must be valid JSON")
+    if not isinstance(body, dict):
+        raise _bad_body("body must be a JSON object")
+    return body
+
+
+@router.post("/upstream/search")
+async def post_upstream_search(request: Request):
+    """对上游做一次只读检索：body {query, namespace?}。
+    query 非空 str；namespace 只接受 str / list[str] / 省略——缺省**不传
+    作用域**（全局搜，返回里 scoped=False），显式列表或 "*" 才收窄，
+    规则全在 gateway。结果形状为门面原样（available + scoped + 上游
+    result 摊平，门面位压后防上游撞键）。失败折叠在 body 里，本层映射：
+    运行时错误→502（上游回了坏东西），未配置→503（服务在但门关着）。
+    """
+    body = await _json_object_body(request)
+    query = body.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise _bad_body("query is required (non-empty string)")
+    namespace = body.get("namespace")
+    if namespace is not None and not isinstance(namespace, (str, list)):
+        raise _bad_body("namespace must be a string or list of strings")
+
+    from src.memory import gateway
+
+    result = await gateway.upstream_search(query.strip(), namespace)
+    if not result.get("available"):
+        status = 502 if "error" in result else 503
+        raise HTTPException(
+            status_code=status,
+            detail=result.get("error") or result.get("note") or "上游 LLM-Memory 不可用",
+        )
+    return result
+
+
+@router.post("/upstream/decision")
+async def post_upstream_decision(request: Request):
+    """MCP 决策面一跳直通：body {tool, args?}。
+    tool 限白名单 _DECISION_TOOLS——不是白名单的工具（含一切写工具）
+    直接 403，压根不碰内核；白名单内但决策面未启用→503（诚实的 gate
+    答案，不装成 502"上游坏了"）；启用后运行时错误→502。
+    """
+    body = await _json_object_body(request)
+    tool = body.get("tool")
+    if not isinstance(tool, str) or tool not in _DECISION_TOOLS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"tool {tool!r} not in read-only decision whitelist {list(_DECISION_TOOLS)}",
+        )
+    args = body.get("args", {})
+    if not isinstance(args, dict):
+        raise _bad_body("args must be a JSON object")
+
+    from src.memory import gateway
+
+    result = await gateway.upstream_decision_call(tool, args)
+    if not result.get("available"):
+        raise HTTPException(
+            status_code=502 if "error" in result else 503,
+            detail=result.get("error") or result.get("note") or "MCP 决策面不可用",
+        )
     return result

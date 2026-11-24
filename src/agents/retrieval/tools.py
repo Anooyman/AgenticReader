@@ -4,7 +4,7 @@ RetrievalAgent 工具方法实现
 所有检索相关的工具方法
 """
 
-from typing import List, Dict, TYPE_CHECKING
+from typing import Dict, TYPE_CHECKING
 import logging
 import json
 
@@ -42,7 +42,7 @@ class RetrievalTools:
             }
         """
         from ..common.tool_response_format import create_content_response
-        logger.info(f"🔍 [Tool:search_by_context] ---------- 语义检索 ----------")
+        logger.info("🔍 [Tool:search_by_context] ---------- 语义检索 ----------")
         logger.info(f"🔍 [Tool:search_by_context] 查询内容: {query}")
 
         if not query or not query.strip():
@@ -54,7 +54,7 @@ class RetrievalTools:
             return []
 
         try:
-            logger.info(f"🔍 [Tool:search_by_context] 执行向量检索 (k=3, type=context)")
+            logger.info("🔍 [Tool:search_by_context] 执行向量检索 (k=3, type=context)")
             # 使用 type='context' 过滤器进行语义搜索，启用去重
             doc_res = self.agent.vector_db_client.search_with_metadata_filter(
                 query=query,
@@ -252,7 +252,7 @@ class RetrievalTools:
             }
         """
         from ..common.tool_response_format import create_content_response
-        logger.info(f"📑 [Tool:search_by_title] ---------- 标题检索 ----------")
+        logger.info("📑 [Tool:search_by_title] ---------- 标题检索 ----------")
         logger.info(f"📑 [Tool:search_by_title] 输入标题: {title_list}")
 
         if not self.agent.vector_db_client:
@@ -445,7 +445,7 @@ class RetrievalTools:
         from ..common.tool_response_format import create_structure_response
 
         _ = query  # 参数保留用于接口兼容，实际不使用
-        logger.info(f"📚 [Tool:get_document_structure] ---------- 获取文档结构 ----------")
+        logger.info("📚 [Tool:get_document_structure] ---------- 获取文档结构 ----------")
 
         if not self.agent.vector_db_client:
             logger.error("📚 [Tool:get_document_structure] ❌ VectorDBClient 未初始化")

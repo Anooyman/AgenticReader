@@ -14,7 +14,9 @@ from src.config.constants import RetrievalDedupConfig
 # 注意：不再继承 LLMBase，改用组合模式（依赖注入）
 
 logging.basicConfig(
-    level=logging.INFO,  # 可根据需要改为 DEBUG
+    # basicConfig 只认第一次调用——同 src/core/llm/client.py:45 那处及其余
+    # 三处互为"先到先赢"，本处生效与否取决于 import 顺序。详见 client.py 注释。
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 logger = logging.getLogger(__name__)

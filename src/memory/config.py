@@ -16,20 +16,28 @@ from src.config.settings import (
     DATA_ROOT,
     get_embedding_model_env_var,
     get_embedding_model_name,
+    resolve_provider,
 )
 
 logger = logging.getLogger(__name__)
 
 MEMORY_DB_DIR = os.path.join(DATA_ROOT, "memory_db")
 
+# 上游路上"卡片 → 摘要 JSON"的落地处。上游的 ingest 只读**一个文件**
+# （isfile + size guard + allow/deny 检查都冲着文件去），所以轻量入库那条
+# 上游路必须先把卡片写成一份结构上像 ai_research 摘要的 JSON 再递过去——
+# 这个目录就是那份中转，不是第二个库：内容随时可以从 BRIEFS_DIR 重算，
+# 删了也不掉任何事实。落盘一律走 write_json_atomic 那套惯例。
+MEMORY_STAGING_DIR = os.path.join(DATA_ROOT, "memory_staging", "brief")
+
 # 每篇论文/文章一个 source_id（=doc_name），namespace 用来把"论文/文章摘要"
 # 和"webapp 对话历史"分开检索（两者语义不同，混在一起会互相污染 top-k）。
 NAMESPACE_AI_RESEARCH = "ai-research"
 NAMESPACE_WEBAPP_CHAT = "webapp-chat"
 
-# DA 裁决：将来本地 brief 加载写入 A 自库 data/memory_db/ 时落在这个
-# namespace（现桥接侧 /api/v1/llmmemory /chat 的缺省 namespace 也是 AATF，
-# 两边名字保持一致）。
+# DA 裁决：本地 brief 加载写入 A 自库 data/memory_db/ 时落在这个
+# namespace——已由 brief_ingest.load_brief_date_local 实装（/briefs 页
+# "轻量入库"驱动），缺省检索作用域不含它，按需经会话 memory-scope 勾选。
 NAMESPACE_AATF = "AATF"
 
 # D-B 检索作用域语义（唯一实现处在 src/memory/gateway.py 的
@@ -44,6 +52,39 @@ DEFAULT_SEARCH_NAMESPACES: List[str] = [NAMESPACE_AI_RESEARCH, NAMESPACE_WEBAPP_
 # 会话检索范围校验用的外部 namespace 白名单占位（现恒空；将来接外部
 # 记忆源时在这里登记，gateway 与 sessions PATCH 端点共用同一来源）。
 EXTERNAL_SEARCH_NAMESPACES: List[str] = []
+
+# ---- 记忆读写路由开关（收敛 Phase 1）----
+# policy 只在这里定义，选路动作在 gateway（policy 在本层 / 执行在别处，与
+# browse/delete 的分工同构）。这里刻意**不含**任何 namespace 知识：三个显式
+# 名字（ai-research / webapp-chat / AATF）还是上面的常量，路由只决定"走哪条
+# 路"，不决定"写哪个 ns"。
+MEMORY_STORE_MODE_ENV = "MEMORY_STORE_MODE"
+MEMORY_MODE_AUTO = "auto"    # 缺省：上游可用走上游，否则本地旧路
+MEMORY_MODE_LOCAL = "local"  # kill switch：即使上游可用也强制本地旧路
+MEMORY_MODES = (MEMORY_MODE_AUTO, MEMORY_MODE_LOCAL)
+
+# 非法取值只 warning 一次，别每次 search/ingest 都刷屏（同 _DIMENSION_CHECK_LOGGED 的口径）。
+_BAD_MODE_LOGGED: set = set()
+
+
+def get_memory_store_mode() -> str:
+    """读 MEMORY_STORE_MODE，返回 "auto" 或 "local"。
+
+    未设 / 空 / 取值不在白名单 → "auto"（缺省行为＝上游可用就走上游）。这是
+    纯 env 读取，不碰 settings 也不碰上游——路由决策链上唯一允许在 gateway
+    之外读的 env 开关，其它上游可用性判断一律走 upstream.upstream_available()。
+    """
+    raw = (os.environ.get(MEMORY_STORE_MODE_ENV) or "").strip().lower()
+    if not raw:
+        return MEMORY_MODE_AUTO
+    if raw not in MEMORY_MODES:
+        if raw not in _BAD_MODE_LOGGED:
+            _BAD_MODE_LOGGED.add(raw)
+            logger.warning("%s 取值 %r 不在白名单 %s，按 %s 处理",
+                           MEMORY_STORE_MODE_ENV, raw, list(MEMORY_MODES), MEMORY_MODE_AUTO)
+        return MEMORY_MODE_AUTO
+    return raw
+
 
 # 已知 embedding 模型 -> 向量维度。新增模型时在这里补一条即可。
 _KNOWN_DIMENSIONS = {
@@ -117,16 +158,23 @@ def _log_dimension_check(provider: str, model_name: Optional[str]) -> None:
         )
 
 
-def get_embedding_dimensions(provider: str = "azure") -> int:
+def get_embedding_dimensions(provider: Optional[str] = None) -> int:
     """按当前配置的 embedding 模型名解析向量维度。解析不到时回退到 1536
     （text-embedding-ada-002 的维度，也是本项目目前所有 provider 的默认模型），
     不抛异常——维度只影响建表 schema，不该在配置加载阶段就让整个记忆子系统
     无法初始化。
 
+    provider 缺省时走 settings.resolve_provider(None) 而不是写死 "azure"：
+    默认值曾经让"调用方懒得传 provider"的路径按 azure 的 embedding 模型查
+    维度表，而实际建库用的是 app_config/env 选中的那个 provider——两边模型
+    不一样时维度就错配了（错配的后果按 provider 而定：建表能过、写入静默
+    失败）。缺省即"跟全仓 provider 决策链一致"，与 gateway._store() 的调用
+    方式统一。
+
     模型名走 settings.get_embedding_model_name()，与 client.py / providers.py
     创建 embedding 实例时读到的是同一个值；模型名不在已知维度表里时打 ERROR
     （见 _log_dimension_check），避免静默按 1536 建表写坏 LanceDB 库。"""
-    provider = (provider or "azure").lower()
+    provider = (provider or resolve_provider(None)).lower()
     model_name = get_embedding_model_name(provider)
     _log_dimension_check(provider, model_name)
     if model_name is None:

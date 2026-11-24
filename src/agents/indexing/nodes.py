@@ -16,6 +16,11 @@ from src.config.constants import (
     get_brief_summary_path,
     get_vector_db_path,
 )
+# 索引期产物（data.json / structure.json / chunk json）一律走与 registry、
+# queue_store、sessions 同一套原子落盘：索引跑几分钟，中途被 kill/断电时
+# 裸 open('w') 会留下半截 JSON，下一次 check_cache 把坏文件当"已完成阶段"
+# 读回来——写坏了比没写更糟。
+from src.utils.json_io import write_json_atomic
 
 if TYPE_CHECKING:
     from .agent import IndexingAgent
@@ -341,8 +346,7 @@ class IndexingNodes:
                 doc_json_folder = os.path.join(self.agent.json_data_path, doc_name)
                 os.makedirs(doc_json_folder, exist_ok=True)
                 output_json_path = os.path.join(doc_json_folder, "data.json")
-                with open(output_json_path, 'w', encoding='utf-8') as f:
-                    json.dump(pdf_data_list, f, ensure_ascii=False, indent=2)
+                write_json_atomic(Path(output_json_path), pdf_data_list)
 
                 state["pdf_data_list"] = pdf_data_list
                 state["json_data_dict"] = json_data_dict
@@ -435,9 +439,7 @@ class IndexingNodes:
                 logger.info(f"✅ [ExtractStructure] Web内容结构分析完成: {len(agenda_dict)} 个章节")
 
                 structure_data = {"agenda_dict": agenda_dict, "has_toc": False}
-                os.makedirs(os.path.dirname(structure_json_path), exist_ok=True)
-                with open(structure_json_path, 'w', encoding='utf-8') as f:
-                    json.dump(structure_data, f, ensure_ascii=False, indent=2)
+                write_json_atomic(Path(structure_json_path), structure_data)
 
                 self.agent.doc_registry.update_stage_status(
                     doc_name=doc_name,
@@ -501,9 +503,7 @@ class IndexingNodes:
                 "has_toc": state["has_toc"]
             }
             try:
-                os.makedirs(os.path.dirname(structure_json_path), exist_ok=True)
-                with open(structure_json_path, 'w', encoding='utf-8') as f:
-                    json.dump(structure_data, f, ensure_ascii=False, indent=2)
+                write_json_atomic(Path(structure_json_path), structure_data)
                 logger.info(f"💾 [ExtractStructure] 结构数据已保存: {structure_json_path}")
             except Exception as e:
                 logger.warning(f"⚠️  [ExtractStructure] 保存结构数据失败: {e}")
@@ -608,9 +608,7 @@ class IndexingNodes:
 
             # 保存章节数据到文件
             try:
-                os.makedirs(os.path.dirname(chunk_json_path), exist_ok=True)
-                with open(chunk_json_path, 'w', encoding='utf-8') as f:
-                    json.dump(agenda_data_list, f, ensure_ascii=False, indent=2)
+                write_json_atomic(Path(chunk_json_path), agenda_data_list)
                 logger.info(f"💾 [Chunk] 章节数据已保存: {chunk_json_path}")
             except Exception as e:
                 logger.warning(f"⚠️  [Chunk] 保存章节数据失败: {e}")

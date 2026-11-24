@@ -363,7 +363,10 @@ def group_data_by_sections_with_titles(total_sections: List[Dict[str, Any]], raw
         return [], []
 
     try:
-        with error_context("数据分组处理", reraise=True) as error_handler:
+        # 这里只借 error_context 的统一日志/清理包装，ErrorHandler 实例本身
+        # 在这段里没有被调用过任何方法，所以不绑定变量（旧写法挂了个
+        # `as error_handler` 却一次没用到，pyflakes 点名的是这条）。
+        with error_context("数据分组处理", reraise=True):
             # 去重章节
             unsort_sections = deduplicate_by_title(total_sections)
             logger.info(f"去重后章节数: {len(unsort_sections)}")

@@ -56,12 +56,12 @@ class ParallelRetrievalCoordinator:
             ...
         }
         """
-        logger.info(f"")
-        logger.info(f"=" * 80)
-        logger.info(f"🚀 [ParallelCoordinator] ========== 并行检索多文档 ==========")
-        logger.info(f"=" * 80)
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("🚀 [ParallelCoordinator] ========== 并行检索多文档 ==========")
+        logger.info("=" * 80)
         logger.info(f"📝 [ParallelCoordinator] 原始查询: {query[:100]}...")
-        logger.info(f"📊 [ParallelCoordinator] 配置:")
+        logger.info("📊 [ParallelCoordinator] 配置:")
         logger.info(f"   - 文档数量: {len(doc_list)}")
         logger.info(f"   - 最大迭代: {max_iterations}")
         logger.info(f"   - 最大并发: {max_concurrent}")
@@ -69,7 +69,7 @@ class ParallelRetrievalCoordinator:
         logger.info(f"   - 使用定制查询: {'是' if doc_specific_queries else '否'}")
 
         if not doc_list:
-            logger.warning(f"⚠️  [ParallelCoordinator] 文档列表为空，返回空结果")
+            logger.warning("⚠️  [ParallelCoordinator] 文档列表为空，返回空结果")
             return {}
 
         # 创建信号量控制并发数
@@ -98,8 +98,8 @@ class ParallelRetrievalCoordinator:
             tasks.append((doc_name, task))
 
         # 并行执行所有检索任务
-        logger.info(f"")
-        logger.info(f"🔄 [ParallelCoordinator] 开始并行检索...")
+        logger.info("")
+        logger.info("🔄 [ParallelCoordinator] 开始并行检索...")
 
         results = {}
         task_results = await asyncio.gather(
@@ -122,15 +122,15 @@ class ParallelRetrievalCoordinator:
         success_count = sum(1 for r in results.values() if r.get("is_complete", False))
         error_count = len(results) - success_count
 
-        logger.info(f"")
-        logger.info(f"=" * 80)
-        logger.info(f"✅ [ParallelCoordinator] 并行检索完成")
-        logger.info(f"=" * 80)
-        logger.info(f"📊 [ParallelCoordinator] 结果统计:")
+        logger.info("")
+        logger.info("=" * 80)
+        logger.info("✅ [ParallelCoordinator] 并行检索完成")
+        logger.info("=" * 80)
+        logger.info("📊 [ParallelCoordinator] 结果统计:")
         logger.info(f"   - 成功: {success_count} 个文档")
         logger.info(f"   - 失败: {error_count} 个文档")
-        logger.info(f"=" * 80)
-        logger.info(f"")
+        logger.info("=" * 80)
+        logger.info("")
 
         return results
 

@@ -5,6 +5,8 @@ Session Manager for AgenticReader
 所有会话统一存储在 data/sessions/{session_id}.json
 """
 
+from collections import OrderedDict
+import asyncio
 import json
 import uuid
 from datetime import datetime
@@ -12,9 +14,109 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 import logging
 
+from src.config.settings import resolve_provider
 from src.utils.json_io import write_json_atomic
 
 logger = logging.getLogger(__name__)
+
+
+# ---- 会话历史窗口化 / 早期摘要 ----
+# 原文保留的最近消息条数。取值依据：对话"正文"一般就落在最近几轮到十几轮，
+# 20 条 ≈ 10 轮问答，够模型拿住指代与刚讨论过的细节，又不至于长会话每轮
+# 都把整段历史重发一遍（旧实现的真实行为）。
+HISTORY_WINDOW_MESSAGES = 20
+
+# 摘要合并结果的上限。超过它就对全量更早消息重算一次，避免这条摘要块
+# 随会话无限膨胀——那正好违背做窗口化的初衷。
+HISTORY_SUMMARY_MAX_CHARS = 4000
+
+# 摘要缓存（session_id -> {"covered": 已覆盖条数, "text": 摘要}）。
+# 只放在进程里，理由见 history_for_llm_async 的 docstring。
+_HISTORY_SUMMARIES: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+_HISTORY_SUMMARIES_MAX = 64
+
+
+def _remember_history_summary(session_id: str, covered: int, text: str) -> None:
+    """写入摘要缓存（有界：超出淘汰最久未用到的会话）。"""
+    if not session_id or not text:
+        return
+    _HISTORY_SUMMARIES[session_id] = {"covered": covered, "text": text}
+    _HISTORY_SUMMARIES.move_to_end(session_id)
+    while len(_HISTORY_SUMMARIES) > _HISTORY_SUMMARIES_MAX:
+        _HISTORY_SUMMARIES.popitem(last=False)
+
+
+def _summarize_new_prefix(dropped: List[Dict], covered: int, provider: str,
+                          previous: str) -> str:
+    """把"掉出窗口但还没被摘要覆盖"的那一段消息并进已有摘要，返回新的全文。
+
+    同步函数，调用方要放去线程里跑（history_for_llm_async 用的
+    asyncio.to_thread）。摘要机制本身不自造一套：直接借
+    src/core/llm/history.py 里现成的 LimitedChatMessageHistory——它已经把
+    "消息列表 → 喂给 LLM 的对话文本" 和 "调 LLM 拿摘要并容错" 都写好了
+    （_format_messages_for_summary / _call_llm_for_summary），本项目别的
+    agent 也走同一个类，行为口径一致。
+
+    为什么不用它现成的"自动压缩"入口（add_message 里那条）：
+    history.py 的压缩策略是把**全部**消息总结成 1 条然后清空原文
+    （docstring 自己写的"不保留原始对话"）——用它会把我要留的最近 20 条
+    原文一起吃掉。所以这里只借它的两块能力，窗口策略自己拿。
+
+    covered 之前的消息已经在 previous 摘要里，本次只算新增的那一段
+    （通常几条），所以正常情况下这趟 LLM 调用很短。
+    """
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    from src.core.llm import LLMBase
+    from src.core.llm.history import LimitedChatMessageHistory
+
+    fresh = dropped[covered:]
+    if not fresh:
+        return previous
+
+    lc_messages = [
+        HumanMessage(content=m.get("content") or "")
+        if (m.get("role") or "assistant") == "user" else AIMessage(content=m.get("content") or "")
+        for m in fresh
+    ]
+    try:
+        hist = LimitedChatMessageHistory(use_llm_summary=True,
+                                         llm_client=LLMBase(provider=provider))
+        conversation = hist._format_messages_for_summary(lc_messages)
+        if not conversation.strip():
+            return previous
+        prompt = (
+            "请把下面的对话片段总结成简洁要点，保留：讨论过什么、给出了什么结论、"
+            "用户表达过的偏好或约束、以及后续对话可能要用到的背景事实。\n\n"
+            f"{conversation}\n\n"
+            "只输出总结本身，不要复述原文。\n总结："
+        )
+        addition = (hist._call_llm_for_summary(prompt) or "").strip()
+    except Exception:  # noqa: BLE001 —— 摘要路径的失败不该冒泡到一次正常提问
+        logger.warning("会话历史摘要失败（provider=%s），按截断处理", provider, exc_info=True)
+        return previous
+
+    if not addition:
+        return previous
+
+    merged = f"{previous}\n\n{addition}".strip() if previous else addition
+    if len(merged) <= HISTORY_SUMMARY_MAX_CHARS:
+        return merged
+
+    # 合并后太长：对全部更早消息重算一次，把摘要本身压回预算内。
+    try:
+        hist = LimitedChatMessageHistory(use_llm_summary=True,
+                                         llm_client=LLMBase(provider=provider))
+        whole = hist._format_messages_for_summary([
+            HumanMessage(content=m.get("content") or "")
+            if (m.get("role") or "assistant") == "user" else AIMessage(content=m.get("content") or "")
+            for m in dropped
+        ])
+        return (hist._call_llm_for_summary(
+            "请把下面这段很长的对话史压成一段简短摘要（不超过 600 字），"
+            "保留话题、结论与用户偏好：\n\n" + whole + "\n\n总结：") or "").strip() or merged
+    except Exception:  # noqa: BLE001
+        return merged
 
 
 class SessionManager:
@@ -257,7 +359,8 @@ class SessionManager:
         role: str,
         content: str,
         references: Optional[List] = None,
-        agents_used: Optional[List[str]] = None
+        agents_used: Optional[List[str]] = None,
+        memory_hits: Optional[List] = None
     ):
         """
         保存消息到会话
@@ -268,6 +371,8 @@ class SessionManager:
             content: 消息内容
             references: 引用信息（可选）
             agents_used: 本条消息使用的agent列表（可选）
+            memory_hits: 本轮检索命中的记忆条目（可选，供 UI 渲染
+                "提及论文可下载"条目——没有它，历史消息刷新后按钮会丢）
         """
         session_path = self._get_session_path(session_id)
         session_data = self._load_session_file(session_path)
@@ -284,6 +389,9 @@ class SessionManager:
 
         if references:
             message["references"] = references
+
+        if memory_hits:
+            message["memory_hits"] = memory_hits
 
         if agents_used:
             message["agents_used"] = agents_used
@@ -325,15 +433,67 @@ class SessionManager:
         self._save_session_file(session_path, session_data)
         logger.debug(f"更新会话agents: {session_id} - {session_data['agents_used']}")
 
-    def get_session_history_for_llm(self, session: Dict) -> List[Dict[str, str]]:
-        """将会话历史转换为 LLM 可用的格式"""
-        history = []
-        for msg in session.get("messages", []):
-            history.append({
-                "role": msg["role"],
-                "content": msg["content"]
-            })
-        return history
+    async def history_for_llm_async(self, session: Dict,
+                                    provider: Optional[str] = None) -> List[Dict[str, str]]:
+        """会话历史 → LLM 可用的历史（窗口化 + 早期摘要）。
+
+        为什么要改这里：原来的 get_session_history_for_llm 把
+        session["messages"] 原样搬出去，一条不裁。会话是永久落盘的、只有
+        /chat 清空按钮才会清，于是长会话每一轮都把自己整段历史重发一遍——
+        成本随轮次线性涨，而且第一轮的请求就已经把模型窗口占满
+        （Orchestrator 那道 MAX_CONTEXT_CHARS 以前只在看完成本之后才做）。
+        现在切成两段：
+
+          * 最近 HISTORY_WINDOW_MESSAGES 条：原文照给。这是"我们在聊什么"
+            的正文，摘要化反而会丢指代与细节，得留原文。
+          * 更早的部分：压成开头一条 system 摘要块，块里明说更早的 N 条
+            原文已省略——模型知道自己在看摘要，才不会把摘要里的说法当成
+            "用户原话"来引用。
+
+        摘要不是每轮重算：结果按 session_id 记进进程内的 _HISTORY_SUMMARIES
+        缓存，且按"只补摘要新掉出窗口的那一段"增量合并，所以一条超长会话
+        摊到每轮大约只多一次很短的 LLM 调用。缓存不落盘这点是刻意的——
+        把摘要写回 session JSON 就得在历史读路径上做读-改-写，而
+        save_message 也在写同一个文件，为了省一次 LLM 调用去引入丢消息的
+        风险不值当；代价是进程重启后的第一问会付一次全量摘要。
+
+        LLM 不可用 / 摘要失败时退化为纯截断（只给窗口内原文 + 一句"早期
+        历史已省略"），绝不因为这条辅助路径失败就让一次正常提问报错。
+        """
+        messages = session.get("messages") or []
+        if len(messages) <= HISTORY_WINDOW_MESSAGES:
+            return [self._as_history_entry(m) for m in messages]
+
+        kept = [self._as_history_entry(m) for m in messages[-HISTORY_WINDOW_MESSAGES:]]
+        dropped = messages[:-HISTORY_WINDOW_MESSAGES]
+        session_id = session.get("session_id") or ""
+        resolved = resolve_provider(provider)
+
+        entry = _HISTORY_SUMMARIES.get(session_id) if session_id else None
+        if entry and entry["covered"] >= len(dropped):
+            summary = entry["text"]
+        else:
+            covered = entry["covered"] if entry else 0
+            summary = await asyncio.to_thread(
+                _summarize_new_prefix, dropped, covered, resolved,
+                entry["text"] if entry else "")
+            if summary:
+                _remember_history_summary(session_id, len(dropped), summary)
+
+        if summary:
+            note = (
+                f"[早期对话摘要] 本会话更早的 {len(dropped)} 条消息未以原文注入，"
+                f"以下是它们的要点：\n\n{summary}"
+            )
+        else:
+            # 摘要失败也要交代"少了东西"，别让模型以为眼前就是完整对话史。
+            note = (f"[早期历史已省略] 本会话更早的 {len(dropped)} 条消息因摘要不可用"
+                    f"未注入上下文。")
+        return [{"role": "system", "content": note}] + kept
+
+    @staticmethod
+    def _as_history_entry(msg: Dict) -> Dict[str, str]:
+        return {"role": msg.get("role") or "assistant", "content": msg.get("content") or ""}
 
     def get_messages_range(
         self,

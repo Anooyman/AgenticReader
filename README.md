@@ -21,7 +21,7 @@ AgenticReader 是基于大语言模型（LLM）的智能文档分析与问答工
 - **AnswerAgent**：确定性单轮问答图——`rewrite_query → plan → (execute → generate | generate) → END`；plan 按用户勾选的工具纯代码构造调用（无 LLM 决策、无回环）
 - **RetrievalAgent**：单/多文档 ReAct 检索循环（语义检索 + 观察 + 总结）
 - **SearchAgent**：网络搜索与 URL 分析（DuckDuckGo MCP 搜索 + web_scraper MCP 爬取；大内容自动转索引后对话）
-- **Orchestrator**：Web 聊天的真正入口，ReAct 循环自主决定调用 `search_memory`（查长期记忆）和/或 `deep_dive_document`（深挖某文档原文），多个工具调用并行执行
+- **Orchestrator**：Web 聊天的真正入口，ReAct 循环自主决定调用 `search_memory`（查长期记忆）、`deep_dive_document`（深挖某文档原文），会话勾了"网络搜索"时还能调 `search_web`（→ SearchAgent），多个工具调用并行执行；工具集按会话的启用勾选裁剪（前两个恒开，第三个要开关才进）
 
 ### 📄 文档处理
 - PDF 转图片逐页解析、目录/章节结构自动检测、章节级分块
@@ -35,13 +35,51 @@ AgenticReader 是基于大语言模型（LLM）的智能文档分析与问答工
 - **工具系统**：`retrieve_documents`（文档检索）、`search_web`（网络搜索），聊天界面可勾选启用
 - **长期记忆加持**：对话自动沉淀到 LanceDB（`webapp-chat` namespace），提问时 Orchestrator 可自动检索历史记忆
 - 对话历史 LLM 压缩，节省上下文；检索结果按对话轮次窗口去重（`RETRIEVAL_DEDUP_WINDOW`，默认 5 轮）
-- 会话服务端落盘 `data/sessions/{session_id}.json` 平铺文件；浏览器端仅主题偏好使用 localStorage（`AgenticReader_theme` 键）
+- 会话服务端落盘 `data/sessions/{session_id}.json` 平铺文件；浏览器端只保存界面偏好：主题存 `AgenticReader_theme`，中英文语言存 `AgenticReader_lang`
+
+### 🌐 中英文界面
+- 顶栏右侧新增语言切换按钮，可在中文 / English 之间切换；偏好会持久化到 `localStorage`
+- 全局 i18n 覆盖主要页面：`/`、`/chat`、`/data`、`/config`、`/structure`、`/briefs`，动态插入的 UI 节点也会自动翻译
+- LLM 回复正文、文档内容、模型/provider/env/namespace 等技术标识不强行翻译
 
 ### 🧠 长期记忆（src/memory/）
-- 单 LanceDB 表 `memories`，按 namespace 隔离：`ai-research`（简报/文章摘要）与 `webapp-chat`（对话历史）
+- 单 LanceDB 表 `memories`，按 namespace 隔离：`ai-research`（简报/文章摘要）、`webapp-chat`（对话历史）与 `AATF`（简报卡片导读轻量入库）
 - **chat_ingest 后台车道**：周期扫描会话目录，把"有新内容 + 已静默 + 完整问答"的会话自动入库（按内容 hash 幂等去重，水位线在 `data/pipeline/chat_ingest_state.json`）
-- **agentic_search**：semantic / keyword / keywords-pool / list-by-source 四工具的 ReAct 检索循环（上限 4 轮），供 Orchestrator 调用
+- **简报轻量入库**：`/briefs` 页"轻量入库(全天)"按钮把当天简报卡片的中文导读写进 `AATF`，重管线（`/load`）与轻量入库二选一或都点；走上游时它递的是"卡片 JSON + 上游 ingest"，会过一轮 LLM 抽取、幂等归上游（详见下方"记忆收敛"段的代价说明）
+- **agentic_search**：semantic / keyword / keywords-pool / list-by-source 四工具的 ReAct 检索循环（上限 4 轮），供 Orchestrator 调用；缺省范围是 ai-research + webapp-chat，`AATF` 需在 `/chat` 的记忆范围里勾选
 - `/data` 页 Memory tab 提供概览、检索、删除（单条 / 按来源 / 整个 namespace）
+
+### 🧠 记忆收敛 Phase 1–2（写/读/删路由到上游 LLM-Memory）
+
+本仓库的存储本身仍由 `src/memory/` 这层维护，外部 LLM-Memory 只是被寻址的上游；**在哪儿写、从哪儿读的决定点只有一个**——`src/memory/gateway.py` 的 **auto 路由**：`LLM_MEMORY_REPO` 有效且可达就走上游，否则回落原来的本地旧路并打 warning，调用方签名一律不动。看这把开关的是 `gateway.search()` / `gateway.ingest()` 加上一组 `gateway.delete_*`（mode 的取值也只在 `src/memory/config.py` 一处解析，非法值 warning→`auto`），`browse_*` 浏览原语仍是本地库的原语。Phase 1/2 的具体口径：
+
+- **三条写通道都接上游**：管线 `ingest_source()`（`ai-research`）、chat_ingest 车道（`webapp-chat`），以及 `/briefs`"轻量入库(全天)"——后者现在递的是"卡片 JSON + 上游 `ingest(source_type=brief)`"，并且**沿用 item_id 当 source_id，id 空间没有换轨**（原先预告的 `aatf-<date>-<kind>` 因为上游补了 `source_id` 透传而省掉了）。写路上**不回落**：`LLM_MEMORY_REPO` 没设/无效（路由判定为不可用）时照旧写本地 `data/memory_db`，但上游可用却写失败时 gateway 直接把失败抛给调用方（chat_ingest 的水位线、job_runner 的任务账本照常记一笔），绝不顺手再写一份本地——那是双写，同一份内容两处落库而水位线照推。要把路由整体退回本地只有两条正经办法：重试，或者 unset `LLM_MEMORY_REPO`／设 `MEMORY_STORE_MODE=local`。除此之外，两个变量都不设时行为与收敛前逐字节一致，dev/CI 零变化、切换可逆。
+- **检索通道可回落**：gateway 的 `search()` 上游可用即转上游（多 namespace 直接透传），上游不可用或这次检索没成则走本地 `agentic_search`——这是读写唯一的差别；上游返回的宽表行由映射层摊平成子 agent 一直在吃的形状，`occurred_at` 日期字段保留，`/briefs` 的按日聚合口径不变。形状层**保真优先**：上游 schema 里本就有的列（含 `chunk_hash`，summary 行取空串）给了就直接用真值，只有结果行没把某列交出来时才退回启发式，不多塞任何一个键。
+- **存量不迁移，"删了重灌"**：`data/sessions/`、`data/pipeline/summaries/`、`BRIEFS_DIR` 本身就是可重建的事实源；`data/memory_db` 在收敛生效后只作为**只读兜底**存在，不是第二份真相。
+- **重复 ingest 的幂等归上游**：走上游时 AR 侧不再自己算 chunk-hash，去重交给上游 ingest 自带的 hash-dedup（同一文件再递一次应返回 0 新增，这条由测试钉着）；回落本地旧路时仍按原来的内容 hash 幂等。论文"下载即入库"的 `POST /briefs/fetch-pdf` 与文档对话能力都不受影响。
+- **删除面也接了上游，且这已是两个存储**：`/data` Memory tab 的三种 DELETE（单条 item / 按 source / 整个 namespace）走 `gateway.delete_*` → 上游 delete/delete_where，**同一条不回落纪律**，并且带着两个边界守卫——跨 namespace 的 id 直接拒（不许拿一个 id 去删掉别处的行）、unscoped 删除（既不给 id 也不给 namespace）一律拒，措辞与 `memory_browse` 期待的形状对齐。形状上有个例外值得记一笔：`gateway.delete_*` 三个函数**保持 sync**，不像 `search()`/`ingest()` 那样 async + `to_thread`——上游调用由线程池硬封顶，事件循环不被拖住由调用层保证。语义要说准：删的是**上游存储层**里的行，本地旧库 `data/memory_db` 的对应行**不受影响**——两个库现在是两套存储，别按"一个库里删掉了"去理解，也不存在"删了上游还能从本地捞回来"。
+- **计数层并上了上游（只读）**：`/api/v1/memory/overview` 与 namespace 列表把上游 `namespaces()` 的行数并进来，`/data` 页能同时看到两边各自的计数；这纯粹是计数层的只读并列，`browse_*` 的行级浏览仍走本地库，不去游数字底下翻行。
+- **三条已知代价**（写明白，不算 bug）：① 记忆侧的 LLM/嵌入配置**归上游 config 管，`/config` 页管不到**，`/config` 的 provider 选择也不改变这一点——上游嵌入端点当前是局域网地址，机器不在该网段时上游路整体不可用，全靠上面的 auto 回落兜住；② AR 递过去的是"已摘要文件"，上游 ingest 会再抽一遍，同一份内容过两轮 LLM（`qa`/`qa_brief` 字段可显式传下去当现成摘要，省掉二次抽取）；③ "轻量入库(全天)"**不再是零 LLM 调用**——那条旧承诺（"解析卡片直写、一次 LLM 都不调"）随上游 `source_type=brief` 通道**正式作废**：上游跑的是 agentic 抽取管线，一张卡片一轮抽取，卡片多的那天明显变慢。同时"这天/这卡是否已入库"的**判据也换了**：本地旧路看 chunk-hash，走上游后看的是上游报回来的 `chunks_added == 0`（那就是"已经在了"，不是失败也不是空跑）——别拿 chunk-hash 那套去推上游路上的状态。
+
+要绕开上游按旧路跑，用 `MEMORY_STORE_MODE=local` 这个 kill switch（默认 `auto`）；它和 `LLM_MEMORY_REPO` 都不设，就是全部走旧路。
+
+上游那侧需要的三个改动（delete facade、`source_type=brief` 枚举、`ingest` 的 `source_id` 透传）**现在都已在上游 main 里**：用户侧自己把它们提交了（`888f966` 把三件全部纳入、`f181999` 补 docs，已推 github/main，HEAD `f181999`；AR 侧探针对着新 HEAD 跑也是 15/15 过）。**这是用户侧的提交动作，不是本仓的**——本仓一条都没往上游合。`tools/upstream-patches/` 里那三片保留下来作**历史参照**：当初的路径是"先在 `/tmp` 干净克隆里叠 01 → 02 → 03 验一遍"（各自 `git apply --check` 干净通过、叠满后上游全量套件 2114 passed / 4 skipped 全绿，pyflakes 门与"不广告破坏性工具"那条 MCP 纪律都没被碰坏），验证完才由用户落进 main，所以现在没有"还得自己打补丁"这回事，也别把这三片当成待办清单。此前那句"三片还停在主干之外、要不要打上由用户自己定"的旧口径一并作废。怎么验的、验到了什么、没验到什么，仍记在 [tools/upstream-patches/README.md](tools/upstream-patches/README.md)；阶段划分与裁决记录在 [PLAN-MEMORY-CONVERGENCE.md](PLAN-MEMORY-CONVERGENCE.md)。
+
+### ♻️ 存量重灌（Phase 3 · `python -m src.memory.converge`）
+
+存量**不迁移**——三个事实源本身就躺在本地，所以这里做的是"重灌"而不是"搬家"：`src/memory/converge.py` 是单文件 CLI，`data/memory_db` 的一行都不读、也不搬，收敛生效后它只是只读兜底。映射与三条常驻写通道**逐字对齐**，不另立 id 空间：`data/pipeline/summaries/{pdf,web}/ → ai_research / ai-research`、`data/sessions/*.json → webapp_chat / webapp-chat`、`BRIEFS_DIR/<date>/*.html` 卡片 `→ brief / AATF`，`source_id` 分别是 item_id / session_id / 卡片 item_id。
+
+```bash
+python -m src.memory.converge                              # 缺省＝dry-run：只枚举，零写入
+python -m src.memory.converge --apply                      # 真递上游
+python -m src.memory.converge --only briefs --limit 50     # 只推一路、每源各截前 N 条
+python -m src.memory.converge --apply --retire-old-db      # 末位是占位：只打印，不执行
+```
+
+- **dry-run 一个字节都不写**：连 `MemoryClient` 都不构造——构造它看着无害，其实会让上游按自己的规矩把 store 目录撑开（`~/.llm-memory/` 下多出 `ingest_state` 之类的空脚手架，mtime 跟着动）。所以 dry-run 那道门只做**配置面**检查（env 有没有配、`<repo>/src` 在不在），打印的是"配置面就绪，未连接上游确认"——**通不等于已连上**，"上游可达"留给 `--apply` 那道门去判。
+- **只写上游，不回退本地**：`LLM_MEMORY_REPO` 无效或 `MEMORY_STORE_MODE=local` 时直接退 1 并把拒跑理由一条条打出来（"这一条都不会递出去"），不做静默降级——半批进上游、半批进旧库是最难收场的局面。这也解释了它为什么调 `upstream.upstream_ingest()` 而不是 `gateway.ingest()`：gateway 的选路按调用点现探，跑到一半上游掉线时会按契约给那一条写本地，跟"整批只进上游"的批处理契约正相反。
+- **计数形状**：每条印 `+N 新增 / M 已存在`，末尾汇总"调用次数 → 新增 / 幂等命中 / 失败"；单条失败记一笔继续往下跑，有失败退 1。幂等交给上游 hash-dedup，**没有断点账本，也不需要**——Ctrl-C 落在源边界，再跑一次自动续上（中断退 130，全绿退 0，`--dry-run` 与 `--apply` 同时给退 2）。
+- **成本要写实**：`--since/--until` 是**闭区间**日期过滤，`--limit N` 对每个源分别截断，`--only {summaries,sessions,briefs}` 单独走一路。这层节流不是装饰——本机 `BRIEFS_DIR` 按 69 天存量算就是几千次 agentic 抽取（一天几十张卡片就是一轮一轮的 LLM 调用），想少花钱就先 dry-run 看规模、再按日期分片推。日期形状写错（不是 `YYYY-MM-DD`）直接报错，而不是"当作没有这天"静默滤掉——后者等于悄悄少灌一批。
 
 ### 📰 每日简报管线（src/pipeline/）
 - `BRIEFS_DIR` 下的简报 HTML 解析入队（`data/pipeline/pipeline_queue.json`）
@@ -154,12 +192,12 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 | 页面 | 地址 | 用途 |
 |---|---|---|
 | 仪表板 | `/` | 已索引文档概览、快速索引、进入聊天 |
-| 智能聊天 | `/chat` | WebSocket 实时对话（走 Orchestrator），Markdown/LaTeX 渲染，勾选工具与文档，消息带 MemorySearch/DeepDive 标签 |
+| 智能聊天 | `/chat` | WebSocket 实时对话（走 Orchestrator），Markdown/LaTeX 渲染，勾选工具与文档，消息带 MemorySearch/DeepDive/WebSearch 标签 |
 | 数据管理 | `/data` | 存储总览、按文档删除四类产物（JSON/向量库/图片/摘要）、批量删除、智能清理、会话统计、Memory tab |
-| 配置中心 | `/config` | 切换 provider、系统设置（落 `data/config/app_config.json`） |
+| 配置中心 | `/config` | 切换 provider、每 provider 多模型的注册表（增删/设为当前/一键测试）、系统设置（落 `data/config/app_config.json`） |
 | 结构编辑器 | `/structure` | 编辑文档章节 structure.json 并重建摘要/索引，PDF 在线预览 |
-| 每日简报 | `/briefs` | 浏览 `BRIEFS_DIR` 简报条目，勾选加载进管线队列，查看后台任务 |
-| 简报记忆桥接 | `/memory` | 桥接**外部** LLM-Memory webui（`LLM_MEMORY_URL`，默认 `http://127.0.0.1:8765`），与内置 `src/memory/` 是两套东西 |
+| 每日简报 | `/briefs` | 双栏简报工作台：左侧日期状态日历展示 AATF/深度分析/运行中/错误/缺档日期，中间卡片流支持筛选、多选、批量入 AATF、深度精析，右侧任务抽屉统一展示后台任务；卡片里的论文可一键下载入库（`POST /briefs/fetch-pdf` → `data/pdf` + 后台索引） |
+| ~~简报记忆桥接~~ | `/memory` | 已退役——职责并入 `/briefs`；外部 LLM-Memory 的 HTTP 桥也已退役，接入改走进程内 SDK / MCP 只读门面，老书签自动 302 |
 | API 文档 | `/docs` `/redoc` | FastAPI 自动生成 |
 | 健康检查 | `/health` | status / timestamp / version |
 
@@ -168,6 +206,8 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 **索引第一个 PDF**：把 PDF 放入 `data/pdf/`，在 `/` 页点索引（或 CLI 选 `i`）。日志按节点推进：解析 → 结构 → 分块 → 章节处理 → 建索引 → 摘要 → 注册。
 
 **在聊天里利用长期记忆**：正常对话即可——回答结束后 chat_ingest 车道会在会话静默后自动入库；之后的提问 Orchestrator 可自主调用 `search_memory` 检索历史。
+
+**问今天/昨天有哪些新论文或新闻**：在 `/chat` 的记忆范围里勾选 `AATF` 后再问，这样 Orchestrator 会优先检索简报卡片记忆；默认记忆范围仍不自动包含 `AATF`，避免每个普通问题都搜到简报库。
 
 **让回答同时查文档和搜网页**：在 `/chat` 勾选 📎文档检索 与 🌐网络搜索 两个工具；CLI 网络搜索用 `w` 模式。
 
@@ -213,12 +253,20 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 | `PROVIDER` | CLI 等无 UI 配置时的 provider 回退 |
 | `RETRIEVAL_DEDUP_WINDOW` | 检索去重的轮次窗口，默认 5 |
 | `BRIEFS_DIR` | 简报 HTML 目录，默认 `~/Desktop/AATF-Intelligence-Briefs` |
-| `LLM_MEMORY_URL` | 外部 LLM-Memory webui 地址（`/memory` 页桥接），默认 `http://127.0.0.1:8765` |
+| `LLM_MEMORY_REPO` | 上游 LLM-Memory 的 checkout 路径——只读门面（SDK 进程内为主 / 可选 MCP stdio 决策面）的唯一寻址点；未设或路径无效时上游一律报 `available:false` + note，本地功能零影响 |
+| `LLM_MEMORY_MCP_ENABLED` | `=1` 时启用可选的 MCP stdio 决策面（`python -m llm_memoryd.mcp --tools memory_why,memory_pack`，why/pack 工具需显式开）；默认关闭——两个变量都不设，默认行为完全不受影响 |
+| `MEMORY_STORE_MODE` | 记忆存储的路由开关：`auto`（**默认**）＝ gateway 一处决策点自动选路，`LLM_MEMORY_REPO` 可用走上游、否则回落本地旧路；`local` ＝ 强制本地旧路（排障/对照用的 kill switch，上游可用也不写上游）。它与 `LLM_MEMORY_REPO` 都不设＝全部走旧路，dev/CI 零变化。只影响写/读路由，**不**影响 `LLM_MEMORY_MCP_ENABLED` 那条只读决策面 |
 | `DEBUG` | WebSocket 调试输出开关（`true` 开启），默认关闭 |
 
+> 历史注记：旧的外部 LLM-Memory webui HTTP 桥（`MEMORY_BRIEF_DRIVER=bridge` + `LLM_MEMORY_URL`，
+> 默认 `http://127.0.0.1:8765`）**已彻底退役**——`load_brief_date` 的 driver 白名单收敛为 `local`
+> 一条路，显式设成 `bridge` 只会打 warning 后按 `local` 跑，仓内不再有任何出网调用。
+> 另：外部"加载某天简报"的桥路退役后**没有任何替身**，brief 入库只此 `local` 一条路——
+> 该能力缺位是裁决而非 regression，日后别找回来。
+
 **两个常见误解**
-- **没有 `LOGGING_LEVEL` 环境变量**：代码不读取它，日志级别写死在 `src/core/llm/client.py` 的 `logging.basicConfig(level=logging.INFO)`，调 DEBUG 需改这一行。
-- **没有前端会话存储**：会话一律服务端落盘，localStorage 仅保存主题偏好（`base.html` 的 `AgenticReader_theme` 键）。
+- **没有 `LOGGING_LEVEL` 环境变量**：代码不读取它。应用日志级别写死在 `src/core/llm/client.py` 的 `logging.basicConfig(level=logging.INFO)`（全仓共 5 处同样的 basicConfig，只有第一个生效的算数），调 DEBUG 改这些行；uvicorn 自身的访问日志级别则读 `data/config/app_config.json` 的 `log_level` 键（`src/ui/run_server.py:resolve_log_level`，/config 页写入的就是这个键，无效值按 info 处理）。
+- **没有前端会话存储**：会话一律服务端落盘，localStorage 仅保存界面偏好（`base.html` 的 `AgenticReader_theme` 与 `AgenticReader_lang` 键）。
 
 ---
 
@@ -233,7 +281,7 @@ AgenticReader/
 │   ├── answer/                 #   AnswerAgent（tools_config.py 注册工具；components/ 选档·综合·格式化）
 │   ├── retrieval/              #   RetrievalAgent（ReAct 检索）
 │   ├── search/                 #   SearchAgent（utils.py 内置 SimpleMCPClient，stdio 传输）
-│   └── orchestrator/           #   Orchestrator + sub_agents/（memory_search、deep_dive）
+│   └── orchestrator/           #   Orchestrator + sub_agents/（memory_search、deep_dive、search_web）
 ├── src/config/                 # settings.py（LLM/Embedding/MCP 配置）、constants.py、
 │   └── prompts/                #   model_overrides.py；prompts 仅 metadata_prompts.py
 ├── src/core/
@@ -241,7 +289,13 @@ AgenticReader/
 │   ├── llm/                    # client（LLMBase + 日志 + embeddings 缓存）/ providers / history
 │   ├── parallel/               # indexing.py（ChapterProcessor）/ retrieval.py（ParallelRetrievalCoordinator）
 │   └── vector_db/              # vector_db_client（FAISS + 轮次去重 + 索引缓存）/ metadata_db
-├── src/memory/                 # LanceDB 长期记忆（config / ingest / search / vector_store / adapters）
+├── src/memory/                 # LanceDB 长期记忆（config / gateway / ingest / search / brief_ingest / migrate_aatf / upstream / vector_store / adapters）
+│                               #   upstream=外部 LLM-Memory 访问层（SDK 进程内 + 可选 MCP 决策面；
+│                               #     写路也在这层，"只读"纪律因收敛有意反转）
+│                               #   brief_ingest=「轻量入库(全天)」的实现体（卡片 JSON 交给上游
+│                               #     ingest，本地直写是其回落形态）；
+│                               #   migrate_aatf 是一次性 A→B 库迁移 CLI，
+│                               #   用前先 --dry-run 看清单再实跑
 ├── src/pipeline/               # 简报管线（briefs_parser / queue_store / process_pdf_queue /
 │                               #   process_web_queue / generate_qa_brief / render_report / sync_* / paths）
 ├── src/services/scraper/       # Playwright 抓取包（core/browser·downloader·extractor·anti_detection、
@@ -249,14 +303,14 @@ AgenticReader/
 ├── src/ui/
 │   ├── run_server.py           # 启动入口（HOST/PORT、回环安全默认）
 │   ├── backend/                # app.py（lifespan 起 job_runner + chat_ingest 两车道）、config.py
-│   │   ├── api/                # pages（7 页面）、websocket（/ws/chat）、v1/（documents chat pdf
+│   │   ├── api/                # pages（页面路由；/memory 302 到 /briefs）、websocket（/ws/chat）、v1/（documents chat pdf
 │   │   │                       #   structure config sessions data·data_storage·data_ops·data_common
-│   │   │                       #   briefs jobs memory speech llmmemory）
+│   │   │                       #   briefs jobs memory speech）
 │   │   └── services/           # chat_service（走 Orchestrator）、session_manager、chat_ingest、
-│   │                           #   job_runner、memory_browse、task_service、briefs_data、brief_memory
-│   ├── templates/              # base dashboard chat config manage structure_editor briefs memory
-│   └── static/                 # css/（chat manage dashboard briefs memory …）js/（api chat
-│                               #   chat-enhancer manage config dashboard briefs memory …）
+│   │                           #   job_runner、memory_browse、task_service、briefs_data
+│   ├── templates/              # base dashboard chat config manage structure_editor briefs
+│   └── static/                 # css/（chat manage dashboard briefs …）js/（api chat i18n locales
+│                               #   chat-enhancer manage config dashboard briefs …）
 ├── src/utils/                  # json_io（write_json_atomic 唯一实现）、path_guard（safe_path 防目录穿越）等
 └── data/                       # 运行时数据（见下）
 ```
@@ -277,11 +331,11 @@ data/
 └── doc_registry.json  # 文档注册表
 ```
 
-**对话数据流**：`/ws/chat` → `chat_service` → **Orchestrator.ask()**（ReAct：可自主调用 `search_memory` → `src/memory/search.py` 的 `agentic_search`，`deep_dive_document` → AnswerAgent 深挖原文；带轮次/上下文/超时三重护栏）。CLI 则由 `main.py` 直接驱动 AnswerAgent / SearchAgent。
+**对话数据流**：`/ws/chat` → `chat_service` → **Orchestrator.ask()**（ReAct：可自主调用 `search_memory` → `src/memory/search.py` 的 `agentic_search`、`deep_dive_document` → AnswerAgent 深挖原文、`search_web` → SearchAgent 联网搜索，后者按会话开关启用；带轮次/上下文/超时三重护栏）。长会话历史由 `session_manager.history_for_llm_async` 窗口化：最近 20 条原文 + 更早部分增量摘要，摘要失败退化为纯截断。CLI 则由 `main.py` 直接驱动 AnswerAgent / SearchAgent。
 
 **索引数据流**：上传/选择 PDF → IndexingAgent 图（check_cache → parse → extract_structure → chunk → process_chapters → build_index → generate_brief_summary → register），出错短路直达 register 且不会标成 completed。
 
-**MCP 服务**（`settings.py` 的 `MCP_CONFIG`）：`duckduckgo`（`uvx duckduckgo-mcp-server`）与 `web_scraper`（本仓库自带 Playwright 抓取 MCP）。MCP 客户端是 `src/agents/search/utils.py` 的 `SimpleMCPClient`（stdio）。
+**MCP 服务**（`settings.py` 的 `MCP_CONFIG`）：`duckduckgo`（`uvx duckduckgo-mcp-server`）、`web_scraper`（本仓库自带 Playwright 抓取 MCP），以及默认关的 `llm_memory` 条目（`python -m llm_memoryd.mcp --tools memory_why,memory_pack`，由 `src/memory/upstream.py` 按 `LLM_MEMORY_MCP_ENABLED` 门控调用）。SearchAgent 的 MCP 客户端是 `src/agents/search/utils.py` 的 `SimpleMCPClient`（stdio）；`upstream.py` 的决策面客户端按同一 stdio 形状就地实现，不 import `src.agents`。
 
 ## REST API 速查
 
@@ -290,29 +344,42 @@ data/
 ```
 documents  GET  /list /available-pdfs      POST /upload /index       DELETE /{doc_name}
 chat       POST /initialize /clear         GET  /load-more-messages
-sessions   GET  /list /{id}  DELETE /{id}  PATCH /{id}/rename
+sessions   GET  /list /{id}  DELETE /{id}  PATCH /{id}/rename /{id}/memory-scope
 pdf        GET  /view/{doc_name}           # PDF 页面图
 structure  GET|PUT /{doc_name}             POST /{doc_name}/rebuild
 config     GET  ""                         POST /provider /system /reset
+               GET  /models                POST /models /models/test
 data       GET  /overview /documents /documents/{name}/summary /documents/pending
                /sessions/stats /tasks/{task_id}
            POST /documents/{filename}/index /cleanup/smart
            DELETE /pdfs /documents/{name}/parts /documents
-briefs     GET  /dates /cards              POST /load /sync-memory
+briefs     GET  /dates /cards /memory-status   POST /load /sync-memory /light-load
+                # GET /cards 支持 date、include_state=1、compact=1，返回卡片及可选 AATF/深度分析/任务态
+                # GET /memory-status 支持 include_meta=1 返回 storage_mode、上游行数、HTML 日期覆盖与队列统计
+               POST /fetch-pdf                 # 论文 PDF 拉进 data/pdf 并触发后台索引
 jobs       GET  ""                         POST /{job_id}/retry /cancel
 memory     GET  /overview /namespace/{ns}  POST /search
            DELETE /item/{id} /namespace/{ns}/source/{source_id} /namespace/{ns}
+                 # 收敛注记：写/读/删已按 gateway 的 auto 路由选上游——三种 DELETE
+                 # 走上游 delete/delete_where（unscoped 与跨 ns 的 id 都被拒），删的是
+                 # 上游存储层，本地旧库行不受影响；浏览 browse_* 仍是本地原语
+           GET  /upstream                  POST /upstream/search
+                # 上游 LLM-Memory 只读门面：status 字段 available + namespaces/rows + version，
+                # 内嵌 decision:{enabled,available,note}；检索缺省作用域=全局（scoped=False），
+                # 显式 namespace 才收窄
+           POST /upstream/decision         # 上游决策面一跳：memory_why/memory_pack 白名单，
+                # 由 LLM_MEMORY_MCP_ENABLED 门控，未启用即折叠 unavailable+note
 speech     POST /transcribe /synthesize
-llmmemory  # 外部 LLM-Memory webui 的透传代理（/memory 页）
 ```
 
-注意：会话端点只有 list / get / delete / rename 四个，**没有** import/export（曾有 current/info，因无消费者已删）；`/api/v1/memory` 没有单条 item 的 GET 读取端点。
+注意：会话端点是 list / get / delete / rename 加一个 `PATCH /{id}/memory-scope`（设定这条会话检索哪些记忆 namespace，缺省 ai-research + webapp-chat，AATF 需显式勾选）——**没有** import/export（曾有 current/info，因无消费者已删）；`/api/v1/memory` 没有单条 item 的 GET 读取端点；页面侧 `/memory` 已退役，302 重定向到 `/briefs`。`DELETE /sessions/{id}` 会顺带按 source 回收这条会话写进 `webapp-chat` 的记忆行并清理 chat_ingest 水位线（尽力而为，失败只记日志）。
 
 ## 安全说明
 
 - 默认仅监听 `127.0.0.1`，CORS 默认只放行本机来源——应用面向本地使用，未做鉴权；改 `HOST` 对外暴露前请自行加防护。
 - 所有按文档名拼数据目录的 API 都过 `safe_path()`（`src/utils/path_guard.py`）防目录穿越。
 - 删除操作收敛在 `delete_service.py` 单点实现，配合路径校验。
+- `POST /briefs/fetch-pdf` 是服务端发起的抓取：scheme 限 http(s)，目标主机解析后过内网/云元数据/保留地址黑名单，重定向由后端逐跳跟且每跳重校验（没有主机白名单，arxiv 与公网照常可达）；与 SearchAgent 的抓取面同级。
 
 ---
 

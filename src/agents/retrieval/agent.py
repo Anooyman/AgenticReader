@@ -5,7 +5,7 @@ Retrieval Agent - 智能检索Agent
 """
 
 from langgraph.graph import StateGraph, END
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, Optional
 import logging
 
 from src.config.constants import ProcessingLimits

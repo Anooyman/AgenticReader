@@ -35,11 +35,30 @@ def _orphan_already_ingested(summary_path) -> bool:
         return False
 
 
+def _existing_ingested_sources():
+    """ai-research 库里真实有行的 source_id 集合；memory 库读取失败时返回
+    None——调用方按"校验不可用"处理，退回旧纯 flag 语义，避免一次库故障
+    把整库重灌一遍。"""
+    try:
+        return {row.get("source_id")
+                for row in gateway.browse_all_rows(namespace=gateway.NAMESPACE_AI_RESEARCH)}
+    except Exception as e:  # noqa: BLE001 - 库缺失/损坏不该让整轮补灌崩掉
+        print(f"⚠️ 读取 ai-research 库失败，按 flag 判断（不强制重灌）: {e}")
+        return None
+
+
 def find_pending_summaries(only_item_id: str = None) -> list:
-    """扫描 summaries/{pdf,web}/*.json，找出尚未写入 memory 的摘要：queue
+    """扫描 summaries/{pdf,web}/*.json，找出需要写入 memory 的摘要：queue
     里有条目的看 artifacts.memory_ingested，孤儿文件看其自身的
-    memory_ingested 字段。"""
+    memory_ingested 字段。
+
+    flag=True 不再是终点：docstring 场景 (a)"memory 库被清空/重建过"里，
+    旧 flag 还是 True、库却空了——纯 flag 判断会让"补灌记忆"一条都不补
+    （state-auditor 审计实锤）。现在对 flagged 条目做一次真实行核对：
+    库里没有它的 source 就重新入列。库读不到（None）则退回纯 flag 语义。
+    """
     queue = load_queue()
+    existing = _existing_ingested_sources()
     pending = []
     for subdir in ("pdf", "web"):
         d = SUMMARIES_DIR / subdir
@@ -51,12 +70,17 @@ def find_pending_summaries(only_item_id: str = None) -> list:
                 continue
             item = queue.get(item_id)
             if item is None:
-                if not _orphan_already_ingested(summary_path):
+                # 孤儿：看文件自身标记；标记在但库里没货同样算欠账
+                flagged_orphan = _orphan_already_ingested(summary_path)
+                if not flagged_orphan or (existing is not None and item_id not in existing):
                     pending.append((item_id, summary_path))
                 continue
             if item.get("pipeline_status") != "done":
                 continue
             if item.get("artifacts", {}).get("memory_ingested"):
+                if existing is not None and item_id not in existing:
+                    # 库清空/重建后的漏网条目：flag 是旧的，行已经没了
+                    pending.append((item_id, summary_path))
                 continue
             pending.append((item_id, summary_path))
     return pending

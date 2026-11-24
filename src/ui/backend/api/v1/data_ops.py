@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pathlib import Path
 
 from ...config import PDF_DIR
+from src.config.settings import resolve_provider
 from src.core.document_management import DocumentRegistry
 from ...services.task_service import task_manager
 
@@ -40,8 +41,12 @@ async def _index_pdf_background(task_id: str, filename: str, pdf_path: Path):
         task_manager.update_task(task_id, progress=10, status="running")
 
         # 从配置加载 provider 和 pdf_preset
+        # provider 统一走 settings.resolve_provider 的唯一入口（app_config.json
+        # → env PROVIDER → openai）；这里不再自己读 config 的键并按写死的
+        # "openai" 兜底，否则同一次点击下 /data 页与 /documents 页会选到不同
+        # provider。
         config = load_config()
-        provider = config.get("provider", "openai")
+        provider = resolve_provider(None)
         pdf_preset = config.get("pdf_preset", "high")
         print(f"📌 使用配置: provider={provider}, pdf_preset={pdf_preset}")
 

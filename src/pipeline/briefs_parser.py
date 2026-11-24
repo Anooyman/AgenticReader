@@ -147,6 +147,7 @@ def parse_paper_cards(html_path: Path, coverage_date: str) -> list:
     text = Path(html_path).read_text(encoding="utf-8")
 
     items = []
+    seen_ids = set()
     for card in ARTICLE_RE.findall(text):
         title_match = TITLE_RE.search(card)
         abs_match = ARXIV_ABS_RE.search(card)
@@ -155,6 +156,10 @@ def parse_paper_cards(html_path: Path, coverage_date: str) -> list:
 
         abs_url = abs_match.group(1)
         raw_id = abs_url.rstrip("/").rsplit("/", 1)[-1]
+        item_id = arxiv_id_no_version(raw_id)
+        if item_id in seen_ids:
+            continue
+        seen_ids.add(item_id)
         pdf_match = ARXIV_PDF_RE.search(card)
 
         # 新版模板（<article class="card">）的 meta 行只有
@@ -178,7 +183,7 @@ def parse_paper_cards(html_path: Path, coverage_date: str) -> list:
         why_match = WHY_RE.search(card)
 
         items.append({
-            "item_id": arxiv_id_no_version(raw_id),
+            "item_id": item_id,
             "type": "pdf_arxiv",
             "title": _text(title_match.group(2)),
             "url": abs_url,

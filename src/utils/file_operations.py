@@ -10,12 +10,15 @@ import tempfile
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, BinaryIO, TextIO
+from typing import Any, Dict, List, Optional, Union
 from contextlib import contextmanager
 
 from .exceptions import FileProcessingError, ValidationError
-from .validators import validate_file_path, sanitize_filename
-from .error_handler import retry_on_error, safe_execute, error_context
+from .validators import validate_file_path
+# 只取装饰器那一个：safe_execute / error_context 在本模块里一个都没用上
+# （helpers.py 是从 error_handler 直接取的，不经过这里），留着等于凭空给
+# 这个模块挂上两个依赖面。
+from .error_handler import retry_on_error
 
 logger = logging.getLogger(__name__)
 
@@ -370,10 +373,15 @@ class AdvancedFileOperations(SafeFileOperations):
             FileProcessingError: 文件读取失败
         """
         try:
+            # chardet 是**可选**依赖：requirements.txt 没有钉它，也没进
+            # requirements-dev.txt（那里也只需跑测试，用不到编码探测）。
+            # 缺装时走下面的 ImportError 分支退回 UTF-8——不是"装不上就坏"，
+            # 但也没人会替你装。真要开这个能力，显式 pip install chardet，
+            # 别把它写成隐式依赖。（附带事实：本方法目前全仓零调用点，
+            # 所以这条降级路径今天是完全静默的。）
             import chardet
 
             validated_path = validate_file_path(file_path, check_exists=True)
-            path_obj = Path(validated_path)
 
             # 读取文件的一部分来检测编码
             with open(validated_path, 'rb') as f:
@@ -387,7 +395,7 @@ class AdvancedFileOperations(SafeFileOperations):
             # 如果置信度太低，使用UTF-8作为默认编码
             if confidence < 0.7:
                 detected_encoding = 'utf-8'
-                logger.warning(f"编码检测置信度较低，使用UTF-8作为默认编码")
+                logger.warning("编码检测置信度较低，使用UTF-8作为默认编码")
 
             # 使用检测到的编码读取文件
             with open(validated_path, 'r', encoding=detected_encoding) as f:

@@ -53,6 +53,14 @@ async def lifespan(app: FastAPI):
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        # 上游门面收尾：清掉惰性 SDK client 缓存——别让上游 SDK 对象
+        # 带进解释器退出（sys.path 注入保持不动，幂等无害）。尽力而为，
+        # 这一步失败不许拖住上面两条车道的关闭。
+        try:
+            from src.memory import upstream  # 函数级：与整个 lifespan 同款
+            upstream.shutdown()
+        except Exception:  # noqa: BLE001
+            print("⚠️ upstream.shutdown() 失败（忽略）")
         print("✅ 应用关闭完成")
 
 
@@ -86,7 +94,7 @@ from .api import pages, websocket
 from .api.v1 import (
     documents, chat, pdf, structure, config, sessions,
     data, data_storage, data_ops,
-    briefs, jobs, memory, speech, llmmemory,
+    briefs, jobs, memory, speech,
 )
 
 app.include_router(pages.router, tags=["Pages"])
@@ -107,7 +115,6 @@ app.include_router(briefs.router, prefix="/api/v1/briefs", tags=["Briefs"])
 app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["Jobs"])
 app.include_router(memory.router, prefix="/api/v1/memory", tags=["Memory"])
 app.include_router(speech.router, prefix="/api/v1/speech", tags=["Speech"])
-app.include_router(llmmemory.router, prefix="/api/v1/llmmemory", tags=["LLM-Memory Bridge"])
 
 
 @app.get("/health")

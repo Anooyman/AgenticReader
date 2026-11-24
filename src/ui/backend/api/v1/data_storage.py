@@ -263,7 +263,9 @@ async def delete_pdf_source_files(request: PendingPDFDeleteRequest):
             try:
                 safe_path(PDF_DIR, candidate)
             except ValueError as guard_e:
-                failed_items.append(f"{candidate}: 非法文件名")
+                # 把守卫给的理由带上：同一个前缀的失败可能是"含分隔符"也可能
+                # 是"越界"，只写"非法文件名"用户与日志都得再猜一遍。
+                failed_items.append(f"{candidate}: 非法文件名（{guard_e}）")
                 continue
 
             file_path = PDF_DIR / candidate

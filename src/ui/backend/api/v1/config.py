@@ -1,7 +1,7 @@
 """配置管理 API"""
 
 import json
-from pathlib import Path
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, Any, List
@@ -262,8 +262,12 @@ async def get_models() -> Dict[str, Any]:
             override = resolve_model_config(provider)
             effective[provider] = (override.get("model")
                                    or (env_defaults.get(provider) or {}).get("model"))
-    except Exception:
-        pass
+    except Exception as e:
+        # 不静默吞掉：这里失败只意味着"内置默认/effective 拿不到"，前端仍能
+        # 看注册表，但界面会显示成一片空——出问题时得有一条日志能指回 settings
+        # 的解析链，否则 /config 页的空白永远无从下手。
+        logging.getLogger(__name__).warning(
+            "读取 provider 内置默认模型失败，effective 字段将为空（注册表本身仍可用）: %s", e)
 
     return {
         "registry": _sanitize_registry_for_ui(registry),
@@ -282,16 +286,23 @@ async def update_models(update: ModelRegistryUpdate) -> Dict[str, Any]:
     provider = _validate_registry_update(update)
 
     try:
-        # 读最新文件（而非模块缓存），避免与其它写入方互相覆盖
+        # 读最新文件（而非模块缓存），避免与其它写入方互相覆盖。
+        # 注意区分"文件不存在"与"文件坏了"：前者可以空盘起笔（首次写入），
+        # 后者必须拒绝——拿 {} 起盘回写会把 provider/system 等其它键整个抹掉，
+        # 比一次失败的更新糟得多。
         cfg = {}
-        try:
-            if CONFIG_FILE.exists():
+        if CONFIG_FILE.exists():
+            try:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     loaded = json.load(f)
-                    if isinstance(loaded, dict):
-                        cfg = loaded
-        except Exception:
-            cfg = {}
+            except Exception as e:
+                logging.getLogger(__name__).warning(
+                    "app_config.json 读取/解析失败，拒绝以空配置为底回写模型注册表: %s", e)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"app_config.json 当前不可读（{e}），为避免抹掉其余配置键已拒绝本次写入")
+            if isinstance(loaded, dict):
+                cfg = loaded
 
         models = cfg.get("models") if isinstance(cfg.get("models"), dict) else {}
         models[provider] = {

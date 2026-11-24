@@ -7,7 +7,9 @@ import json
 from pathlib import Path
 
 from ...config import JSON_DATA_DIR, PDF_DIR, DATA_DIR
+from src.utils.json_io import write_json_atomic
 from src.utils.path_guard import safe_path
+from src.config.settings import resolve_provider
 from ...services.task_service import task_manager
 
 router = APIRouter()
@@ -154,8 +156,10 @@ async def update_structure(
             "has_toc": structure.has_toc
         }
 
-        with open(structure_path, 'w', encoding='utf-8') as f:
-            json.dump(structure_data, f, ensure_ascii=False, indent=2)
+        # 原子落盘（utils.json_io 的共享范式）：结构编辑器保存时 UI 可能
+        # 同时在跑 rebuild 后台任务，裸 open('w') 留的半截 structure.json 会
+        # 让 rebuild 读到空结构。
+        write_json_atomic(structure_path, structure_data)
 
         print(f"✅ 结构更新成功: {doc_name}, {len(structure.agenda_dict)} 个章节")
 
@@ -190,8 +194,11 @@ async def _rebuild_background(task_id: str, doc_name: str, pdf_path: Path):
         task_manager.update_task(task_id, progress=10, status="running")
 
         # 从配置加载 provider 和 pdf_preset
+        # provider 走 settings.resolve_provider 的唯一入口（app_config.json →
+        # env PROVIDER → openai），不再在这里读 config 的键回退到写死 "openai"，
+        # 否则用户没存 provider 的会话里 rebuild 会绕开 /config 页的选择。
         config = load_config()
-        provider = config.get("provider", "openai")
+        provider = resolve_provider(None)
         pdf_preset = config.get("pdf_preset", "high")
         print(f"📌 使用配置: provider={provider}, pdf_preset={pdf_preset}")
 

@@ -29,6 +29,8 @@ from src.core.document_management.manager import (
 )
 
 # 配置日志
+# CLI 入口是五处 basicConfig 里最容易生效的一处（import 链最靠前）；
+# 想换级别改这里，其余四处基本只是装饰。统一说明见 src/core/llm/client.py:45。
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(name)s - %(message)s'
