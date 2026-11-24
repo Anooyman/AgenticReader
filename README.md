@@ -35,7 +35,12 @@ AgenticReader 是基于大语言模型（LLM）的智能文档分析与问答工
 - **工具系统**：`retrieve_documents`（文档检索）、`search_web`（网络搜索），聊天界面可勾选启用
 - **长期记忆加持**：对话自动沉淀到 LanceDB（`webapp-chat` namespace），提问时 Orchestrator 可自动检索历史记忆
 - 对话历史 LLM 压缩，节省上下文；检索结果按对话轮次窗口去重（`RETRIEVAL_DEDUP_WINDOW`，默认 5 轮）
-- 会话服务端落盘 `data/sessions/{session_id}.json` 平铺文件；浏览器端仅主题偏好使用 localStorage（`AgenticReader_theme` 键）
+- 会话服务端落盘 `data/sessions/{session_id}.json` 平铺文件；浏览器端只保存界面偏好：主题存 `AgenticReader_theme`，中英文语言存 `AgenticReader_lang`
+
+### 🌐 中英文界面
+- 顶栏右侧新增语言切换按钮，可在中文 / English 之间切换；偏好会持久化到 `localStorage`
+- 全局 i18n 覆盖主要页面：`/`、`/chat`、`/data`、`/config`、`/structure`、`/briefs`，动态插入的 UI 节点也会自动翻译
+- LLM 回复正文、文档内容、模型/provider/env/namespace 等技术标识不强行翻译
 
 ### 🧠 长期记忆（src/memory/）
 - 单 LanceDB 表 `memories`，按 namespace 隔离：`ai-research`（简报/文章摘要）、`webapp-chat`（对话历史）与 `AATF`（简报卡片导读轻量入库）
@@ -191,7 +196,7 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 | 数据管理 | `/data` | 存储总览、按文档删除四类产物（JSON/向量库/图片/摘要）、批量删除、智能清理、会话统计、Memory tab |
 | 配置中心 | `/config` | 切换 provider、每 provider 多模型的注册表（增删/设为当前/一键测试）、系统设置（落 `data/config/app_config.json`） |
 | 结构编辑器 | `/structure` | 编辑文档章节 structure.json 并重建摘要/索引，PDF 在线预览 |
-| 每日简报 | `/briefs` | 浏览 `BRIEFS_DIR` 简报条目，勾选加载进管线队列，"轻量入库(全天)"把当天卡片写进 AATF 记忆（走上游时经上游 ingest 抽取），卡片里的论文可一键下载入库（`POST /briefs/fetch-pdf` 落 `data/pdf` + 后台索引），查看后台任务 |
+| 每日简报 | `/briefs` | 双栏简报工作台：左侧日期状态日历展示 AATF/深度分析/运行中/错误/缺档日期，中间卡片流支持筛选、多选、批量入 AATF、深度精析，右侧任务抽屉统一展示后台任务；卡片里的论文可一键下载入库（`POST /briefs/fetch-pdf` → `data/pdf` + 后台索引） |
 | ~~简报记忆桥接~~ | `/memory` | 已退役——职责并入 `/briefs`；外部 LLM-Memory 的 HTTP 桥也已退役，接入改走进程内 SDK / MCP 只读门面，老书签自动 302 |
 | API 文档 | `/docs` `/redoc` | FastAPI 自动生成 |
 | 健康检查 | `/health` | status / timestamp / version |
@@ -201,6 +206,8 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 **索引第一个 PDF**：把 PDF 放入 `data/pdf/`，在 `/` 页点索引（或 CLI 选 `i`）。日志按节点推进：解析 → 结构 → 分块 → 章节处理 → 建索引 → 摘要 → 注册。
 
 **在聊天里利用长期记忆**：正常对话即可——回答结束后 chat_ingest 车道会在会话静默后自动入库；之后的提问 Orchestrator 可自主调用 `search_memory` 检索历史。
+
+**问今天/昨天有哪些新论文或新闻**：在 `/chat` 的记忆范围里勾选 `AATF` 后再问，这样 Orchestrator 会优先检索简报卡片记忆；默认记忆范围仍不自动包含 `AATF`，避免每个普通问题都搜到简报库。
 
 **让回答同时查文档和搜网页**：在 `/chat` 勾选 📎文档检索 与 🌐网络搜索 两个工具；CLI 网络搜索用 `w` 模式。
 
@@ -259,7 +266,7 @@ python tests/test_imports.py   # 零依赖 import 冒烟，不联网不调 LLM
 
 **两个常见误解**
 - **没有 `LOGGING_LEVEL` 环境变量**：代码不读取它。应用日志级别写死在 `src/core/llm/client.py` 的 `logging.basicConfig(level=logging.INFO)`（全仓共 5 处同样的 basicConfig，只有第一个生效的算数），调 DEBUG 改这些行；uvicorn 自身的访问日志级别则读 `data/config/app_config.json` 的 `log_level` 键（`src/ui/run_server.py:resolve_log_level`，/config 页写入的就是这个键，无效值按 info 处理）。
-- **没有前端会话存储**：会话一律服务端落盘，localStorage 仅保存主题偏好（`base.html` 的 `AgenticReader_theme` 键）。
+- **没有前端会话存储**：会话一律服务端落盘，localStorage 仅保存界面偏好（`base.html` 的 `AgenticReader_theme` 与 `AgenticReader_lang` 键）。
 
 ---
 
@@ -302,7 +309,7 @@ AgenticReader/
 │   │   └── services/           # chat_service（走 Orchestrator）、session_manager、chat_ingest、
 │   │                           #   job_runner、memory_browse、task_service、briefs_data
 │   ├── templates/              # base dashboard chat config manage structure_editor briefs
-│   └── static/                 # css/（chat manage dashboard briefs …）js/（api chat
+│   └── static/                 # css/（chat manage dashboard briefs …）js/（api chat i18n locales
 │                               #   chat-enhancer manage config dashboard briefs …）
 ├── src/utils/                  # json_io（write_json_atomic 唯一实现）、path_guard（safe_path 防目录穿越）等
 └── data/                       # 运行时数据（见下）
@@ -347,6 +354,8 @@ data       GET  /overview /documents /documents/{name}/summary /documents/pendin
            POST /documents/{filename}/index /cleanup/smart
            DELETE /pdfs /documents/{name}/parts /documents
 briefs     GET  /dates /cards /memory-status   POST /load /sync-memory /light-load
+                # GET /cards 支持 date、include_state=1、compact=1，返回卡片及可选 AATF/深度分析/任务态
+                # GET /memory-status 支持 include_meta=1 返回 storage_mode、上游行数、HTML 日期覆盖与队列统计
                POST /fetch-pdf                 # 论文 PDF 拉进 data/pdf 并触发后台索引
 jobs       GET  ""                         POST /{job_id}/retry /cancel
 memory     GET  /overview /namespace/{ns}  POST /search
