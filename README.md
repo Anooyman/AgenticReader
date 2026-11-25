@@ -136,7 +136,11 @@ playwright install chromium
 
 ### 配置环境变量
 
-在项目根目录创建 `.env`（代码经 python-dotenv 读取；也可用 shell 环境变量）：
+在项目根目录创建 `.env`（代码经 python-dotenv 读取；也可用 shell 环境变量）。
+**`.env` 只在服务启动的 import 期读一次**——settings 是 import 期定型的快照，
+改完必须重启服务才生效，不是热更新；服务运行中途改 .env 不会有任何可见效果。
+`run_server.py` 启动时会按当前 provider 检查所需 key（进程 env → 项目 .env →
+模型注册表 override 三处），全空则打 WARNING 说明"对话将失败"，只警告不拦启动。
 
 ```bash
 # === Azure OpenAI ===

@@ -18,6 +18,15 @@ DEFAULT_PORT = 8000
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
+# chat 路各 provider 需要的 key env；None＝该 provider 不需要 key。
+_CHAT_KEY_ENVS = {
+    "openai": "OPENAI_API_KEY",
+    "azure": "CHAT_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "ollama": None,
+}
+
+
 def resolve_host() -> str:
     """解析监听地址：默认 127.0.0.1，可用环境变量 HOST 覆盖；非本机地址打 WARNING"""
     host = (os.environ.get("HOST") or "").strip() or DEFAULT_HOST
@@ -103,6 +112,44 @@ def setup_windows_optimizations():
     print()
 
 
+def check_llm_credentials() -> None:
+    """启动自检：当前解析出的 provider 在所有真源都拿不到 key 时打 warning。
+
+    起因是 2026-11-25 的事故：服务重启后 shell 里 export 过的 OPENAI_API_KEY
+    消失，ChatOpenAI 在第一条消息的构造期才炸，界面上只剩"处理失败"——
+    诊断成本全花在"是不是代码改坏了"上。这条检查把"猜"变成"看"。
+
+    检查链与运行期完全同构，别让它自说自话：
+      * 进程环境——settings 的 load_dotenv(PROJECT_ENV_FILE) 会把项目 .env
+        并进来，所以"env 里有没有"已含 .env 这条源；
+      * app_config 模型注册表的 api_key override——providers.py 确实会采纳。
+    ollama 无 key 一说，直接跳过。
+
+    **只 warning 不退出**：/data、/briefs、任务侧栏这些不碰 LLM 的页面在
+    缺 key 时照样有诊断/运维价值，拦死启动反而是更糟的失败模式。
+    """
+    try:
+        from src.config.settings import get_model_registry, resolve_provider
+
+        provider = resolve_provider(None)
+        env_key = _CHAT_KEY_ENVS.get(provider)
+        if not env_key or os.environ.get(env_key):
+            return
+        registry = get_model_registry() or {}
+        entries = registry.get(provider) or {}
+        covered = any(str(item.get("api_key") or "").strip()
+                      for item in (entries.get("items") or []))
+        if not covered:
+            logging.warning(
+                "⚠️  provider=%s 但 %s 未设置（查过：进程 env / 项目 .env / "
+                "模型注册表 override 三处都空）——chat、索引摘要、记忆写入"
+                "通道将全部失败。修复：项目根 .env 写 %s=<key>（settings "
+                "是 import 期读定，改完需重启服务）或启动前 export",
+                provider, env_key, env_key)
+    except Exception as e:  # noqa: BLE001 —— 自检自身坏了不能拖累启动
+        logging.debug("llm 凭证自检跳过: %s", e)
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("🚀 AgenticReader 服务器启动中...")
@@ -111,6 +158,8 @@ if __name__ == "__main__":
 
     # 应用平台优化
     setup_windows_optimizations()
+
+    check_llm_credentials()
 
     host = resolve_host()
     try:
