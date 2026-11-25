@@ -18,7 +18,12 @@ from src.pipeline.paths import OUTPUT_DIR, SUMMARIES_DIR
 from src.pipeline.qa_labels import QA_LABELS
 
 
-def load_summaries(subdir: str) -> list:
+def load_summaries(subdir: str, coverage_date: str = None) -> list:
+    """读摘要。coverage_date 给了就按天筛——它不再只是标题装饰：以前
+    "--coverage-date X 出 X 日的报告"这句 CLI 承诺下，实际渲染的却是全部
+    历史摘要拼盘，日期只写进了页面文案，静默给用户一份错报告。
+    缺 coverage_date 字段的旧条目不属于任何"某天"，同样不放进按日过滤的
+    结果里（全量出报请用 --all）。"""
     d = SUMMARIES_DIR / subdir
     if not d.exists():
         return []
@@ -29,6 +34,9 @@ def load_summaries(subdir: str) -> list:
                 summaries.append(json.load(f))
         except (json.JSONDecodeError, OSError) as e:
             print(f"[render_report] 跳过无法解析的摘要文件 {path}: {e}")
+    if coverage_date is not None:
+        summaries = [s for s in summaries
+                     if str(s.get("coverage_date") or "")[:10] == coverage_date]
     return summaries
 
 
@@ -106,9 +114,13 @@ def render_web_card(s: dict) -> str:
     """
 
 
-def render_report(coverage_date: str) -> str:
-    pdf_summaries = load_summaries("pdf")
-    web_summaries = load_summaries("web")
+def render_report(coverage_date: str, all_entries: bool = False) -> str:
+    """渲染报告。默认只收 coverage_date 当天的条目——"出 X 日的报告"必须
+    真是 X 日的内容。all_entries=True（--all）时出全部历史，日期仅作标题/
+    落盘目录名，这是老行为，显式旗标才拿得到。"""
+    date_filter = None if all_entries else coverage_date
+    pdf_summaries = load_summaries("pdf", date_filter)
+    web_summaries = load_summaries("web", date_filter)
 
     pdf_cards = "".join(render_pdf_card(s) for s in pdf_summaries)
     web_cards = "".join(render_web_card(s) for s in web_summaries)
@@ -152,17 +164,27 @@ code{{background:#0b1829;padding:1px 6px;border-radius:4px}}
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--coverage-date", default=str(date.today()))
+    parser.add_argument("--coverage-date", default=str(date.today()),
+                        help="只收这一天的条目出报告；配 --all 时仅作标题/目录名")
+    parser.add_argument("--all", action="store_true",
+                        help="出全部历史摘要，不按 coverage-date 过滤（老行为）")
     args = parser.parse_args()
 
-    html_content = render_report(args.coverage_date)
-
+    html_content = render_report(args.coverage_date, all_entries=args.all)
     out_dir = OUTPUT_DIR / args.coverage_date
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "report.html"
     out_path.write_text(html_content, encoding="utf-8")
 
-    print(f"报告已生成: {out_path}")
+    # 过滤后归零要出声：静默交一份"0 篇"的报告正是这工具以前最误导的行为，
+    # 现在它至少还知道自己是空的——但只有页面上那行"共 0 篇"，命令行里
+    # 必须同样看得见。
+    counts = load_summaries("pdf", None if args.all else args.coverage_date)
+    counts_w = load_summaries("web", None if args.all else args.coverage_date)
+    if not counts and not counts_w and not args.all:
+        print(f"⚠️  {args.coverage_date} 没有匹配到任何摘要条目——报告为空；"
+              "要么这天确实没入库，要么需要 --all 出全部历史")
+    print(f"报告已生成: {out_path}（pdf {len(counts)} / web {len(counts_w)}）")
 
 
 if __name__ == "__main__":

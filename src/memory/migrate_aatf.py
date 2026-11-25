@@ -168,8 +168,15 @@ def _upstream_is_the_owner() -> bool:
     归属已定之后再跑它，就等于**绕过路由**往一个不该再有记忆的库里写记忆。
     所以我们不改它的逻辑（迁移本身还是合法的运维工具），只在真要写的时候
     问一句：现在还是你说了算吗？
+
+    注意两处判定合在一起才算数：`MEMORY_STORE_MODE=local` 是用户对"这轮
+    留在本地"的**显式表态**（kill switch），它压过连通性——设了 local 还
+    说"上游才是归属"是语义倒挂；local 下本脚本与路由同向，直接放行。
     """
-    from src.memory.upstream import upstream_available_sync  # 函数级 import：--dry-run 不该拖上游内核
+    from src.memory.config import get_memory_store_mode  # 函数级 import：--dry-run 不该拖上游内核
+    from src.memory.upstream import upstream_available_sync
+    if get_memory_store_mode() == "local":
+        return False
     return bool(upstream_available_sync())
 
 

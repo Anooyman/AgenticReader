@@ -222,3 +222,31 @@ def test_config_accepts_the_new_value_and_still_rejects_garbage():
             assert config.get_memory_store_mode() == want, raw
         finally:
             os.environ.pop("MEMORY_STORE_MODE", None)
+
+
+def test_hard_mode_read_failure_falls_back_loudly_and_never_writes(upstream_live,
+                                                                   monkeypatch,
+                                                                   caplog):
+    """硬档锁的是"路由选择 + 写"，不是"读永远不许看旧账"。
+
+    上游可达、路由开着，但这一次 browse 的调用作废——读路按既有政策
+    回落本地，与 search() 完全同构；这是文档明说的语义，不是"硬档失守"。
+    钉这条是为了下轮 review 别再把它当 bug"修"成 raise；顺带钉死
+    回落只许读、不许哪怕顺手写本地一笔。
+    """
+    import logging
+
+    client, sink = upstream_live
+
+    def boom(**kw):
+        raise OSError("上游 browse 面这次没跑成")
+
+    monkeypatch.setattr(client, "all_rows", boom)
+    with caplog.at_level(logging.WARNING):
+        rows = gateway.browse_all_rows("ai-research")
+
+    assert [r["id"] for r in rows] == ["l1"], "读路应回落到本地"
+    assert any("browse" in r.getMessage() for r in caplog.records), \
+        "回落了却没留 warning——这正是'悄悄读旧库'的定义"
+    assert not any(".delete" in s or ".ingest" in s or ".add" in s for s in sink), \
+        f"这次只该是读，不该碰本地写面：{sink}"

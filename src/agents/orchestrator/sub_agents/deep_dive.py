@@ -14,8 +14,11 @@ DocumentRegistry + LLMBase 的成本。
   实例本身不累积这些结果 —— 因此同 doc 并发两问各自独立、互不污染。
 - 实例级共享的只有 LLM 会话历史与 RetrievalAgent 池：会话历史用查询前 + 查询后
   各调一次 reset_history() 双向防脏（reset_history 已覆盖 answer 自身的
-  tool_planning / rewrite_query_session / generate_answer 会话）；RetrievalAgent 池
-  本就是实例自持的检索缓存，复用即收益。
+  tool_planning / rewrite_query_session / generate_answer 会话）。**并发防脏
+  靠 per-(doc,provider) 的 asyncio.Lock 串行化查询段**——gather 并行的两路
+  deep_dive 若共用一个实例，光靠双向 reset 挡不住交错；锁住之后 reset 的
+  "脏"只剩顺序问题，不再有并发互抹。RetrievalAgent 池本就是实例自持的
+  检索缓存，复用即收益。
 - current_doc 是实例属性，但缓存 key 含 doc_name，同一实例的所有查询都指向同一
   doc_name，query() 里的赋值是幂等的，无并发竞态。
 - 缓存 key 不含"文档存在"语义，复用的 DocumentRegistry 可能读到过期记录。查询
@@ -23,6 +26,7 @@ DocumentRegistry + LLMBase 的成本。
   下次调用重建实例、重新走一遍 registry 校验。
 """
 from collections import OrderedDict
+import asyncio
 from typing import Any, Dict
 
 from src.agents.orchestrator.sub_agents.base import ProgressCallback, SubAgent
@@ -30,12 +34,39 @@ from src.config.settings import resolve_provider
 
 
 # ==================== AnswerAgent 实例缓存（有界 LRU）====================
-# 单事件循环内访问，无需加锁；超出容量淘汰最久未使用项。
+# 实例按 (doc_name, provider) 有界复用；**同 key 的查询由一把 asyncio.Lock
+# 串行化**：reset_history 是实例级状态清理，Orchestrator 一轮内多个
+# deep_dive tool_call 走 asyncio.gather 并行，同一缓存实例被并发复用时
+# 前后两次 reset 会互相抹掉中间态——串行化保证"实例复用"和"历史隔离"
+# 不再是二选一的矛盾（缓存收益保住，正确答案的代价是一次排队）。
+# 锁本身也是 LRU 有界池，只淘汰未持有的锁，避免"新来者与持锁者各拿一把"。
 _ANSWER_AGENT_CACHE: "OrderedDict[tuple, Any]" = OrderedDict()
 _ANSWER_AGENT_CACHE_MAX = 32
+_CACHE_LOCKS: "OrderedDict[tuple, asyncio.Lock]" = OrderedDict()
+_CACHE_LOCKS_MAX = 128
 
 # 供观测 / 测试：命中、未命中计数。
 _CACHE_STATS = {"hits": 0, "misses": 0}
+
+
+def _cache_lock(key: tuple) -> asyncio.Lock:
+    lock = _CACHE_LOCKS.get(key)
+    if lock is not None:
+        _CACHE_LOCKS.move_to_end(key)
+        return lock
+    lock = asyncio.Lock()
+    _CACHE_LOCKS[key] = lock
+    while len(_CACHE_LOCKS) > _CACHE_LOCKS_MAX:
+        # 只在没被持有的锁里挑最久未用的淘汰
+        evicted = False
+        for k in list(_CACHE_LOCKS.keys()):
+            if not _CACHE_LOCKS[k].locked():
+                _CACHE_LOCKS.pop(k)
+                evicted = True
+                break
+        if not evicted:
+            break  # 全部在手里：宁可临时超一把，也不拆别人的锁
+    return lock
 
 
 def _get_or_create_agent(doc_name: str, provider: str):
@@ -119,25 +150,28 @@ class DeepDiveAgent(SubAgent):
         provider = resolve_provider(kwargs.get("provider"))
 
         try:
-            agent = _get_or_create_agent(doc_name, provider)
+            # per-key 锁：同 (doc,provider) 的查询排队执行，实例级
+            # reset_history 不会再被并发的另一路抹掉中间态。
+            async with _cache_lock((doc_name, provider)):
+                agent = _get_or_create_agent(doc_name, provider)
 
-            # 查询前重置：复用实例时防止上一次查询残留的会话历史串入本次。
-            agent.reset_history()
-            try:
-                result_state = await agent.query(
-                    user_query=question,
-                    enabled_tools=["retrieve_documents"],
-                    selected_docs=[doc_name],
-                )
-            finally:
-                # 查询后重置：双向防脏，令实例回到干净态供下次复用。
+                # 查询前重置：复用实例时防止上一次查询残留的会话历史串入本次。
+                agent.reset_history()
                 try:
-                    agent.reset_history()
-                except Exception:  # noqa: BLE001
-                    pass
+                    result_state = await agent.query(
+                        user_query=question,
+                        enabled_tools=["retrieve_documents"],
+                        selected_docs=[doc_name],
+                    )
+                finally:
+                    # 查询后重置：双向防脏，令实例回到干净态供下次复用。
+                    try:
+                        agent.reset_history()
+                    except Exception:  # noqa: BLE001
+                        pass
 
-            if _should_evict(result_state):
-                _evict_cached_agent(doc_name, provider)
+                if _should_evict(result_state):
+                    _evict_cached_agent(doc_name, provider)
 
             return {"doc_name": doc_name, "answer": result_state.get("final_answer", "")}
         except Exception as e:  # noqa: BLE001
