@@ -590,9 +590,11 @@ def upstream_delete_where(namespace: Optional[str] = None, source_id: Optional[s
     上游在这里比它的存储层更严：**namespace 必填且必须具体**——空串与 "*"
     一律 ValueError("refusing to delete '*'/empty: pass one exact namespace
     name")，`source_id="*"` 同样拒。这不是啰嗦：source_id 是个项目内字符串
-    （"main" 之类的都可能撞上），不带 ns 就等于跨机器全库删。探针
-    (tools/upstream-patches/verify_ar_faces.py) 测的就是这四种坏输入都要
-    被拒，措辞归上游，我们原样转达，别自己另写一套拒绝话。
+    （"main" 之类的都可能撞上），不带 ns 就等于跨机器全库删。这四种坏输入
+    都由上游拒，措辞归上游，我们原样转达，不自己另写一套拒绝话——原先那支
+    AR 侧的手动探针已经不在了，现在盯这件事的是上游的
+    `scripts/tests/api/test_memory_browse_facade.py` 与本仓的
+    `tests/test_delete_guard_precedes_route.py`。
     """
     client, failure = _client_sync()
     if failure is not None:

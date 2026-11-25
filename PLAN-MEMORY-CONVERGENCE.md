@@ -58,8 +58,10 @@
   `aatf-<date>-<kind>`，AR 现为每卡一行——"是否已入库"的比对与 memory-status
   日期聚合要换口径，先做双读兼容再切换。
   代价声明：轻量入库不再是零 LLM（上游 ingest 是 agentic 管线）。
-- 补丁放在 `AgenticReader/tools/upstream-patches/`（.patch + README 应用步骤），
-  应用方式二选一：用户点头给 LLM-Memory 仓开写权限直接落，或用户自行 git apply。
+- 上游补丁**已经全部落在 LLM-Memory 的 main 里**，AR 侧不再留一份 `.patch` 副本
+  （原先那个 `tools/upstream-patches/` 目录连同 `verify_ar_faces.py` 手动探针已删除：
+  它做的事后来由上游自己的测试面接管，见 LLM-Memory `scripts/tests/api/`——
+  "跑的时候才想起来"的探针不是联动，落在哪一侧有 CI 才算）。
 
 ## 阶段 3 · 存量重灌（补丁落地后，跑 destructive 操作前须用户点一次头）
 
