@@ -18,12 +18,12 @@ Both differences from the POSIX original are stated rather than smoothed over:
 
 * POSIX `flock()` is an advisory whole-file lock held by the open file
   description; it does not stop a process that chose to ignore it.
-* Windows `msvcrt.locking()` locks one byte at offset zero (a byte-range lock),
-  and the blocking form retries for roughly ten seconds before raising instead of
-  waiting forever. Every critical section in this repo is a read-modify-write of
-  a small JSON file or a LanceDB append, so ten seconds is a generous ceiling —
-  and the two properties callers rely on hold either way: a blocked writer
-  eventually proceeds, a non-blocking writer is refused immediately.
+* Windows `msvcrt.locking()` locks one byte at offset zero (a byte-range lock).
+  Its blocking form (`LK_LOCK`) gives up after roughly ten seconds — which on
+  POSIX would read as "queued behind a long writer", but here as "your write
+  failed". Since 2026-11-25 the blocking path is a wait-then-retry loop with an
+  explicit budget (see `LOCK_WAIT_BUDGET_S`) that mirrors POSIX semantics: a
+  blocked writer waits, and only a genuinely stuck one surfaces an error.
 
 Callers should not assume the lock is mandatory. It is the coordination point,
 not a guarantee against a process that declined to coordinate.
@@ -36,16 +36,35 @@ IS_WINDOWS = os.name == "nt"
 
 if IS_WINDOWS:  # pragma: no cover - exercised only on Windows hosts
     import msvcrt
+    import time
+
+    # Windows 阻塞锁语义对齐 POSIX（2026-11-25，review 尾巴⑥）：msvcrt 的
+    # LK_LOCK 阻塞形态只试 ~10s 就 raise——在 POSIX 上这只是"排队"，在
+    # Windows 上却是"锁被占用 ⇒ 你的写失败"。indexer 的 update_stage_status
+    # 这类调用点都是直接记账失败，一次并发注册表写者就能把整次索引判死。
+    # 改法不靠 LK_LOCK 的黑盒重试，自己排：NBLCK 轮询、间隔数秒、预算给足
+    # （300s——本仓库的关键区都是一次 JSON 读写，等这个数还没等到，问题
+    # 就不是"等等就好"了），预算耗尽才把最后一个 OSError 原样递出去。
+    LOCK_RETRY_WAIT_S = 5.0
+    LOCK_WAIT_BUDGET_S = 300.0
 
     def _lock(fd: int, non_blocking: bool) -> None:
-        try:
-            msvcrt.locking(fd, msvcrt.LK_NBLCK if non_blocking else msvcrt.LK_LOCK, 1)
-        except OSError as exc:
-            # A held lock must look like the POSIX result: BlockingIOError on a
-            # non-blocking attempt, otherwise let the real error surface.
-            if non_blocking:
+        if non_blocking:
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                # A held lock must look like the POSIX result: refused now.
                 raise BlockingIOError(str(exc)) from exc
-            raise
+            return
+        deadline = time.monotonic() + LOCK_WAIT_BUDGET_S
+        while True:
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(min(LOCK_RETRY_WAIT_S, max(0.1, deadline - time.monotonic())))
 
     def _unlock(fd: int) -> None:
         try:

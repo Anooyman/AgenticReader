@@ -9,13 +9,13 @@ embed -> 写入 VectorStore。
 同一来源重复 ingest 是幂等的：已写入的 chunk 按内容 hash 跳过（不重复付出
 LLM 抽取成本），source-summary 行（整篇摘要）每次重新生成替换旧的。
 """
+import asyncio
 import hashlib
 import json
 import os
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.core.llm import LLMBase
@@ -105,7 +105,8 @@ async def ingest_source(
     vs = VectorStore(MEMORY_DB_DIR, dimensions)
 
     with _source_lock(namespace, sid):
-        existing_rows = vs.rows_for_source(namespace, sid)
+        # 本地路的 vs.* 一律经 to_thread——上游路早就是这个纪律（2026-11-25 补齐：本地 LanceDB/嵌入同为网络与磁盘 IO，直跑循环线程会让同进程的一切响应卡住，未配上游的 dev/CI 形态下这条更热）。
+        existing_rows = await asyncio.to_thread(vs.rows_for_source, namespace, sid)
         plan = adapter.update_plan(existing_rows, chunks)
         fresh = plan.fresh
         report["chunks_skipped"] = len(chunks) - len(fresh)
@@ -113,11 +114,11 @@ async def ingest_source(
 
         for stale_id in plan.stale_ids:
             try:
-                vs.delete(stale_id)
+                await asyncio.to_thread(vs.delete, stale_id)
             except Exception as e:
                 report.setdefault("delete_failed", []).append({"id": stale_id, "error": str(e)})
 
-        pool_set = set(vs.keyword_pool(namespace))
+        pool_set = set(await asyncio.to_thread(vs.keyword_pool, namespace))
         now = _now()
         file_fallback = _file_mtime_iso(path)
 
@@ -151,12 +152,12 @@ async def ingest_source(
                 "chunk_hash": c.meta["chunk_hash"],
                 "occurred_at": occurred_at,
             }
-            vs.add(record)
+            await asyncio.to_thread(vs.add, record)
             pool_set.update(meta["keywords"])
             report["chunks_added"] += 1
 
         # ---- 重新生成整篇摘要行（chunk_hash == ""）----
-        rows = vs.rows_for_source(namespace, sid)
+        rows = await asyncio.to_thread(vs.rows_for_source, namespace, sid)
         chunk_rows = sorted(
             (r for r in rows if r.get("chunk_hash")),
             key=lambda r: r.get("occurred_at") or r.get("created_at", ""),
@@ -179,7 +180,7 @@ async def ingest_source(
                 min_imp = 0.7
                 svector = await _embed(llm, smeta["abstract"])
                 summary_id = str(uuid.uuid4())
-                vs.add({
+                await asyncio.to_thread(vs.add, {
                     "id": summary_id,
                     "vector": svector,
                     "namespace": namespace,
@@ -196,7 +197,7 @@ async def ingest_source(
                     "occurred_at": source_occurred_at,
                 })
                 for r in old_summaries:
-                    vs.delete(r["id"])
+                    await asyncio.to_thread(vs.delete, r["id"])
                 report["summary_id"] = summary_id
 
         return report

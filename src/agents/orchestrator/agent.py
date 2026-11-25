@@ -16,8 +16,9 @@ bind_tools 惯例（与 src/memory/search.py 的 agentic_search 用同一套模�
 """
 import asyncio
 import json
+import logging
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -27,6 +28,8 @@ from src.agents.orchestrator.sub_agents import ALWAYS_ON_TOOLS, SUB_AGENTS
 from src.config.model_overrides import AGENT_MODEL_OVERRIDES
 from src.config.settings import resolve_provider
 from src.core.llm import LLMBase
+
+logger = logging.getLogger(__name__)
 
 # 反复调用工具往往不是死循环，而是真的没检索到关键信息、换个说法再试一次，
 # 这是合理行为，所以轮次给得宽松。真正需要防的是下面两件事：上下文无限
@@ -44,6 +47,11 @@ OVERALL_DEADLINE = 900
 # finalize 是一次"超预算时刻"的收尾 LLM 调用，给它一个远小于整轮预算的
 # 硬超时——超时就直接交兜底答案，不再拖住墙钟。
 FINALIZE_TIMEOUT = 120
+# finalize 的收尾调用不必背着整轮的原始账：预算取 MAX_CONTEXT_CHARS
+# 的一半——主流大窗口完全够用，小窗口 provider（Ollama 本地类）也
+# 不会被 400 挡在门外。只裁内容，绝不删消息：tool_calls/ToolMessage
+# 的配对关系动了就会撞 API 校验。
+FINALIZE_CONTEXT_BUDGET = 60_000
 
 ProgressCallback = Optional[Callable[[str, str], Awaitable[None]]]
 
@@ -200,6 +208,59 @@ def _context_chars(messages: List[Any]) -> int:
     return total
 
 
+def _compact_messages_for_finalize(messages: List[Any],
+                                   budget: int = FINALIZE_CONTEXT_BUDGET,
+                                   keep_tail: int = 12) -> List[Any]:
+    """finalize 前的消息瘦身——120k 护栏只在迭代边界检查，而 finalize 恰恰
+    是在"刚超预算"的时刻触发：原样发出去，在大窗口上只是偏贵，在窗口小
+    的 provider 上直接 400，被兜底 except 接住就只剩空答案——明明全有
+    上下文，却交给用户一句"答不上来"。
+
+    策略不删任何一条消息（tool_calls 配对必须原样），只做三件事：
+      头：首条 SystemMessage + 首条 HumanMessage 原样（系统提示与原始问题）；
+      尾：最近 keep_tail 条原样（本轮工具刚吐的东西都在里面）；
+      中部：其余内容换成标注了原长度的占位 stub。
+    裁完仍超预算，就把尾部的工具结果也截到 4k——那通常才是体积大头。
+    """
+    if _context_chars(messages) <= budget:
+        return messages
+    keep_idx = set()
+    i_sys = next((i for i, m in enumerate(messages) if isinstance(m, SystemMessage)), None)
+    i_human = next((i for i, m in enumerate(messages) if isinstance(m, HumanMessage)), None)
+    if i_sys is not None:
+        keep_idx.add(i_sys)
+    if i_human is not None:
+        keep_idx.add(i_human)
+    tail_start = max(len(messages) - keep_tail, 0)
+
+    out: List[Any] = []
+    for i, m in enumerate(messages):
+        if i in keep_idx or i >= tail_start:
+            out.append(m)
+            continue
+        original = str(getattr(m, "content", "") or "")
+        stub = (f"[中段消息已略去——{type(m).__name__}，原 {len(original)} 字，"
+                "内容见尾部的本轮结果]")
+        try:
+            out.append(m.model_copy(update={"content": stub}))
+        except Exception:  # noqa: BLE001 — 复制不动就留着原样，总比丢了强
+            out.append(m)
+
+    if _context_chars(out) > budget:
+        for j, m in enumerate(out):
+            if not isinstance(m, ToolMessage):
+                continue
+            body = str(m.content or "")
+            if len(body) > 4000:
+                try:
+                    out[j] = m.model_copy(update={"content": body[:4000] + "…[截断]"})
+                except Exception:  # noqa: BLE001
+                    pass
+            if _context_chars(out) <= budget:
+                break
+    return out
+
+
 async def ask(
     question: str,
     doc_name: str = None,
@@ -303,7 +364,8 @@ async def ask(
         # 整轮还贵。
         try:
             response = await asyncio.wait_for(
-                model.ainvoke(messages), timeout=FINALIZE_TIMEOUT)
+                model.ainvoke(_compact_messages_for_finalize(messages)),
+                timeout=FINALIZE_TIMEOUT)
         except asyncio.TimeoutError:
             response = None
         except Exception as e:  # noqa: BLE001 — finalize 的职责是"无论如何交出答案"

@@ -70,9 +70,29 @@ async def process_one(path: Path, provider: str) -> None:
         return
 
     print(f"  [{summary['item_id']}] 生成简明摘要...")
-    summary["qa_brief"] = await generate_brief_for_summary(summary, provider)
+    generated = await generate_brief_for_summary(summary, provider)
 
-    write_json_atomic(path, summary)
+    # 写回不是快照覆写，而是"对当前盘上内容合并 qa_brief 字段"：
+    # 摘要文件的权威写者是 job_runner 的 process_*（内联生成走同一 key 空间），
+    # 本 CLI 的 LLM 生成耗时以十秒计，从旧快照整文件回写会把期间内联更新的
+    # 其它字段连灰抹掉。锁跨不了生成（那等于持锁做 LLM），所以关键操作
+    # 收窄到写前一瞬：拿锁重读、只把盘上还没有的键补进去、原子落盘。
+    from src.core import filelock
+    lock_path = Path(str(path) + ".lock")
+    with open(lock_path, "w") as lock_file:
+        try:
+            filelock.acquire(lock_file.fileno())
+            try:
+                current = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                current = summary  # 文件读不回就用我们的生成源打底，别丢内容
+            qa = dict(current.get("qa_brief") or {})
+            for key, value in generated.items():
+                qa.setdefault(key, value)
+            current["qa_brief"] = qa
+            write_json_atomic(path, current)
+        finally:
+            filelock.release(lock_file.fileno())
     print(f"  [{summary['item_id']}] ✅ 完成")
 
 

@@ -28,13 +28,17 @@ def _is_allowed_origin(origin: str) -> bool:
     return host in LOCAL_WS_HOSTS
 
 
-def _cleanup_progress_callbacks(chat_service, session_ids) -> None:
-    """连接断开时注销本连接注册过的所有进度回调（chat_service 为共享单例）"""
-    if not chat_service or not session_ids:
+def _cleanup_progress_callbacks(chat_service, registrations) -> None:
+    """连接断开时注销本连接注册过的进度回调（chat_service 为共享单例）。
+
+    registrations 是 {session_id: token}——按 token 精确摘除：同一会话
+    还有别的连接在跑时，断开的这条只该带走它自己注册的那份，不能
+    把会话键整个抹掉。"""
+    if not chat_service or not registrations:
         return
-    for session_id in list(session_ids):
+    for session_id, token in list(registrations.items()):
         try:
-            chat_service.unregister_progress_callback(session_id)
+            chat_service.unregister_progress_callback(session_id, token)
         except Exception:
             pass
 
@@ -54,9 +58,9 @@ async def websocket_chat(websocket: WebSocket):
     
     # 连接状态标志
     is_connected = True
-    # 本连接注册过进度回调的会话ID，连接断开时统一注销，避免残留到共享的
-    # chat_service 单例上影响其它会话。
-    registered_session_ids = set()
+    # 本连接注册过进度回调的会话 → token，连接断开时按 token 统一注销，
+    # 避免残留到共享的 chat_service 单例上，也不误伤同会话其它连接。
+    progress_registrations = {}
     chat_service = None
 
     try:
@@ -137,9 +141,13 @@ async def websocket_chat(websocket: WebSocket):
                 try:
                     # 进度回调按会话注册到 chat_service（断开时统一注销），
                     # 这样多个会话并行时进度只会发到各自的连接/会话。
-                    if msg_session_id:
-                        chat_service.register_progress_callback(msg_session_id, progress_callback)
-                        registered_session_ids.add(msg_session_id)
+                    # 每连接每会话只注册一次；chat() 内部还会幂等地
+                    # 递同一个闭包，条目按 token 去重，不会叠加重复广播。
+                    if msg_session_id and msg_session_id not in progress_registrations:
+                        _token = chat_service.register_progress_callback(
+                            msg_session_id, progress_callback)
+                        if _token is not None:
+                            progress_registrations[msg_session_id] = _token
 
                     # 调用聊天服务（传递进度回调、会话ID和工具/文档选择）
                     response = await chat_service.chat(
@@ -194,16 +202,17 @@ async def websocket_chat(websocket: WebSocket):
                     # 本轮结束（正常或异常）都注销该会话的进度回调，
                     # 防止悬挂的回调继续往本连接里推送进度。
                     if msg_session_id:
-                        chat_service.unregister_progress_callback(msg_session_id)
-                        registered_session_ids.discard(msg_session_id)
+                        _token = progress_registrations.pop(msg_session_id, None)
+                        if _token is not None:
+                            chat_service.unregister_progress_callback(msg_session_id, _token)
 
     except WebSocketDisconnect:
         is_connected = False
-        _cleanup_progress_callbacks(chat_service, registered_session_ids)
+        _cleanup_progress_callbacks(chat_service, progress_registrations)
         print("🔌 WebSocket 连接已断开")
     except Exception as e:
         is_connected = False
-        _cleanup_progress_callbacks(chat_service, registered_session_ids)
+        _cleanup_progress_callbacks(chat_service, progress_registrations)
         error_trace = traceback.format_exc()
         print(f"❌ WebSocket 顶层错误: {type(e).__name__}: {e}")
         print(f"详细错误堆栈:\n{error_trace}")
