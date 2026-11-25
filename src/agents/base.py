@@ -46,7 +46,7 @@ class AgentBase:
     def __init__(
         self,
         name: str,
-        provider: str = 'openai',
+        provider: Optional[str] = None,
         model: Optional[str] = None
     ):
         """
@@ -54,13 +54,21 @@ class AgentBase:
 
         Args:
             name: Agent名称
-            provider: LLM提供商 ('azure', 'openai', 'ollama')
+            provider: LLM提供商 ('azure', 'openai', 'ollama', 'gemini')。
+                缺省 None 交给 settings.resolve_provider 解析（显式传参 >
+                app_config.json > env PROVIDER > openai）——这就是"provider
+                决定权统一收在 resolve_provider"那句话落到构造点上的形态：
+                任何没传 provider 的入口（CLI main.py、延迟构造、测试）都
+                自动跟上配置，而不是吃一个写死的 'openai' 字面量。
             model: 覆盖该 provider 默认使用的模型名（可选）。省略时按
                 src.config.model_overrides.AGENT_MODEL_OVERRIDES 里以 name
                 为键查找配置好的覆盖值；两者都没有则沿用 provider 的
                 环境变量默认模型。显式传入的 model 优先于配置表。
         """
         self.name = name
+
+        from src.config.settings import resolve_provider
+        provider = resolve_provider(provider)
 
         if model is None:
             from src.config.model_overrides import AGENT_MODEL_OVERRIDES

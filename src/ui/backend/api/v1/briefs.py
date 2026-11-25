@@ -8,14 +8,12 @@ GET 是纯读（解析 HTML，不写任何状态），POST 才会登记 queue �
 任务——任务本身由 job_runner 串行执行。
 """
 import asyncio
-import ipaddress
 import logging
 import os
 import re
-import socket
 import threading
 import uuid
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException
@@ -98,19 +96,30 @@ async def get_memory_status(include_meta: bool = False):
     """各日期的真实入库计数：{"dates": {"2026-11-12": {"aatf": 37, "heavy_done": 2}, ...}}
 
     供 /briefs 页区分"有 HTML 未入库 / 有 HTML 已入库 / 无 HTML"三种状态
-    （无 HTML 的日期根本不会出现在列表里）。数据来源是 A 自库行 + queue
-    事实，**不是任务账本**——bridge 时代的 done ≠ A 自库有数据，按账本
-    显示只会造出满屏"已入库"的假象（state-auditor 审计实锤）。
+    （无 HTML 的日期根本不会出现在列表里）。数据来源是**行** + queue 事实，
+    **不是任务账本**——bridge 时代的 done ≠ 库里有数据，按账本显示只会造出
+    满屏"已入库"的假象（state-auditor 审计实锤）。这里的"行"走的是
+    `gateway.browse_*` 那条 auto 路由：上游可用时算的是上游库，落不动才回本地
+    并留一条 warning——所以 2026-11-24 实跑一次，这一屏的总数就是上游那
+    5204 行，而不是 A 自库里那几十行。
     纯读，LanceDB 全行扫描是函数级 to_thread，不阻塞事件循环。
 
     include_meta=True（opt-in）时额外返回 meta 对象（storage_mode、上游
     AATF/ai-research 行数、各日期 HTML 存在性、重管线排队/失败计数）；
     默认 False 保持响应结构向后兼容。"""
+    # 先抹掉上一轮的记号再动手读——不然一次故障会永久挂成 "degraded"，
+    # 之后每一次正常读取都会被读成还在坏着。
+    briefs_data.clear_read_errors()
     counts = await asyncio.to_thread(briefs_data.date_memory_counts)
-    if not include_meta:
-        return {"dates": counts}
-    meta = await _build_memory_meta()
-    return {"dates": counts, "meta": meta}
+    if include_meta:
+        body = {"dates": counts, "meta": await _build_memory_meta()}
+    else:
+        body = {"dates": counts}
+    errors = briefs_data.read_errors()
+    if errors:
+        body["degraded"] = True
+        body["read_errors"] = errors
+    return body
 
 
 @router.get("/dates")
@@ -213,84 +222,19 @@ def _tmp_name(target):
     )
 
 
-# SSRF 护栏：拒绝指向内网/保留地址的目标。信任级别与 SearchAgent 的网页
-# 抓取面同级——本应用按本地无鉴权设计，但 fetch-pdf 是"拿一个由模型/外部
-# 内容给出的 URL 去拉字节"，属于本端点里唯一真正的入站请求发起点，所以
-# 有意比 SearchAgent 那侧多加一层地址限制：只挡内网，不做白名单，
-# arxiv 等公网镜像照常可用。
-#
-# 覆盖：loopback(127/8, ::1)、RFC1918、link-local 含 169.254.169.254 元数据、
-# 运营商级 NAT 100.64/10、ULA、文档/保留段、IPv4-mapped IPv6。
-#
-# 两个已知边界，写清楚免得被当成完整实现：
-#   * DNS 重绑定：解析后到真正建连之间有时间窗，若攻击者控制的 DNS 记录
-#     在这中间翻成内网 IP，这里挡不住（要堵需要连接时按解析结果直接
-#     建连，代价明显大于本端点的威胁面）。
-#   * 逐跳校验：重定向是我们自己跟的，每一跳都重新过这里，不会"第一跳
-#     公网、第二跳跳进 127.0.0.1"。
-_BLOCKED_NETS = tuple(ipaddress.ip_network(n) for n in (
-    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
-    "169.254.0.0/16", "100.64.0.0/10", "0.0.0.0/8", "240.0.0.0/4",
-    "::1/128", "fc00::/7", "fe80::/10", "192.0.0.0/24", "198.18.0.0/15",
-    "198.51.100.0/24", "203.0.113.0/24",
-))
-
-
-def _address_is_public(ip) -> bool:
-    """单个地址是否允许抓取——私有/回环/链路本地/保留/组播一律拒绝。"""
-    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
-        ip = ip.ipv4_mapped  # ::ffff:127.0.0.1 这类映射地址按 IPv4 判
-    if isinstance(ip, ipaddress.IPv4Address):
-        return not (ip.is_private or ip.is_loopback or ip.is_link_local
-                    or ip.is_reserved or ip.is_multicast or ip.is_unspecified
-                    or any(ip in n for n in _BLOCKED_NETS if n.version == 4))
-    return not (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast
-                or any(ip in n for n in _BLOCKED_NETS if n.version == 6))
-
-
-def _resolve_and_check(host: str) -> None:
-    """解析主机名并逐地址校验；解析失败按拒绝处理（宁挡错不误放）。"""
-    try:
-        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-    except (socket.gaierror, socket.herror, UnicodeError, OSError) as exc:
-        # getaddrinfo 的失败面比 gaierror 宽（herror / UnicodeError / 其它
-        # OSError），一律按"拒绝"处理：解析不通的主机没有理由放它过去。
-        raise HTTPException(status_code=400,
-                            detail=f"主机 {host} 解析失败，拒绝下载：{exc}") from exc
-    addrs = {info[4][0].split("%", 1)[0] for info in infos}
-    if not addrs:
-        raise HTTPException(status_code=400, detail=f"主机 {host} 没有可用地址")
-    for addr in addrs:
-        if not _address_is_public(ipaddress.ip_address(addr)):
-            raise HTTPException(status_code=400,
-                                detail=f"目标 {host} 指向内网/保留地址 {addr}，已拒绝")
+# SSRF 护栏：规则单源住在 src/utils/ssrf_guard.py——/fetch-pdf 与
+# process_pdf_queue 的下载面共用同一套"只挡内网"的黑名单，避免两个入口
+# 各自漂移（覆盖范围、6to4/Teredo 兜底、DNS-TOCTOU 的已知边界都在那边写明）。
+# 这里只保留 HTTP 适配层。
+from src.utils import ssrf_guard
 
 
 def _guard_url(url: str) -> None:
-    """URL 的 scheme + 主机地址双重校验（同步，调用方放 to_thread）。"""
+    """scheme + 主机地址双重校验；违规转成 400。"""
     try:
-        parts = urlsplit(url)
-        host = parts.hostname
-    except ValueError as exc:  # 畸形 IPv6 字面量等
-        raise HTTPException(status_code=400, detail=f"URL 无法解析：{exc}") from exc
-    if parts.scheme not in ("http", "https"):
-        raise HTTPException(status_code=400, detail="url 的协议必须是 http(s)")
-    if not host:
-        raise HTTPException(status_code=400, detail="URL 里没有主机名")
-    if _is_ip_literal(host):
-        if not _address_is_public(ipaddress.ip_address(host)):
-            raise HTTPException(status_code=400, detail=f"目标 {host} 是内网/保留地址，已拒绝")
-        return
-    _resolve_and_check(host)
-
-
-def _is_ip_literal(host: str) -> bool:
-    try:
-        ipaddress.ip_address(host)
-        return True
-    except ValueError:
-        return False
+        ssrf_guard.ensure_public_url(url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 def _pdf_doc_name_from_url(url: str) -> str:

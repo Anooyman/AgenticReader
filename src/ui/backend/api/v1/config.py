@@ -303,6 +303,17 @@ async def update_models(update: ModelRegistryUpdate) -> Dict[str, Any]:
                     detail=f"app_config.json 当前不可读（{e}），为避免抹掉其余配置键已拒绝本次写入")
             if isinstance(loaded, dict):
                 cfg = loaded
+            else:
+                # 合法 JSON 但不是 dict（数组/标量/null）同样是"坏文件"：
+                # 空 dict 起盘回写照样抹掉 provider 等键，坏文件必须
+                # 在两个入口前都站不住，否则"拒绝回写"这条纪律只守了
+                # 解析失败那一半。
+                logging.getLogger(__name__).warning(
+                    "app_config.json 是合法 JSON 但不是对象（%s），拒绝以空配置为底回写",
+                    type(loaded).__name__)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"app_config.json 内容不是配置对象（{type(loaded).__name__}），已拒绝本次写入")
 
         models = cfg.get("models") if isinstance(cfg.get("models"), dict) else {}
         models[provider] = {

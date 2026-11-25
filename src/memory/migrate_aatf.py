@@ -4,6 +4,17 @@
 store（AATF namespace 数百行、覆盖几十个日期）。本地 driver 实装后
 所有读写都收在 A 自库，这批历史数据成了"在应用里看不见"的孤儿
 （/memory 页与 /api/v1/llmmemory/* 已退役，A 侧读 B 库的通路为零）。
+
+    NOTE（2026-11-24，只记现状不改行为）：这段"往 A 自库搬"的方向和后来的
+    记忆收敛正好**相反**——收敛之后写路是 A→B（`gateway.ingest(source_type=
+    "brief")` 递上游），A 自库 `data/memory_db` 本身也在退役名单上。所以这个
+    脚本现在是一台**倒着开的车**：它不会自己启动（一次性 CLI，没人自动调它），
+    但谁真跑一次，就会把一批 1536 维的旧行塞进一个"已经不该存在"的库里，
+    还顺手把 `LLM_MEMORY_STORE_DIR` / `MEMORY_DATA_DIR` 这两个本该由上游
+    决定的存储位置又读了一遍。有存量要动之前先看
+    LLM-Memory 仓库的 `MEMORY-OWNERSHIP-AGENTICREADER.md` §6——那套走的是
+    "从事实源重灌"，不是从这里搬。
+
 本脚本把 B 库 namespace=AATF 的行**原样搬家**进 A 自库同名 namespace：
 
 * 字段逐列映射到 A 的 memories 表形状（vector + 文本列 + importance，
@@ -150,7 +161,20 @@ async def _reembed_all(rows: List[Dict[str, Any]]) -> List[str]:
     return errors
 
 
-async def _migrate(source: Optional[str], dry_run: bool, reembed: bool) -> None:
+def _upstream_is_the_owner() -> bool:
+    """这台机器上是不是已经把 LLM-Memory 定成了记忆的归属地。
+
+    这个脚本比收敛早，它只会写 A 侧本地库——在归属未定之前那是它的全部职责，
+    归属已定之后再跑它，就等于**绕过路由**往一个不该再有记忆的库里写记忆。
+    所以我们不改它的逻辑（迁移本身还是合法的运维工具），只在真要写的时候
+    问一句：现在还是你说了算吗？
+    """
+    from src.memory.upstream import upstream_available_sync  # 函数级 import：--dry-run 不该拖上游内核
+    return bool(upstream_available_sync())
+
+
+async def _migrate(source: Optional[str], dry_run: bool, reembed: bool,
+                   force_local: bool = False) -> None:
     b_dir = _resolve_b_dir(source)
     dimensions = get_embedding_dimensions(resolve_provider(None))
     b_rows = _read_b_rows(b_dir)
@@ -222,6 +246,15 @@ async def _migrate(source: Optional[str], dry_run: bool, reembed: bool) -> None:
             print("❌ 全部重算失败，未写入任何行——先检查 embedding 凭据/模型。")
             return
 
+    if not dry_run and not force_local and _upstream_is_the_owner():
+        print("❌ 已拒绝写入：这台机器上记忆的归属地已经是 LLM-Memory 的库，"
+              "而这个脚本只会写 AR 自己的 data/memory_db。\n"
+              "   要么先 unset LLM_MEMORY_REPO 再跑，要么确认你确实是在做一次性"
+              "本地迁移并加 --force-local。\n"
+              "   需要走「把存量递进上游」那条路的话，用 src/memory/converge.py"
+              "——那才是收敛认的通道。")
+        return
+
     tbl = store_a._table()
     for i in range(0, len(todo), _BATCH):
         tbl.add(todo[i:i + _BATCH])
@@ -235,5 +268,9 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true", help="只报数不写入")
     parser.add_argument("--reembed", action="store_true",
                         help="两侧 embedding 模型不同时，按 A 侧模型重算向量")
+    parser.add_argument("--force-local", action="store_true",
+                        help="明知 LLM-Memory 已被配成记忆归属地，仍坚持写 AR 本地库")
     args = parser.parse_args()
-    sys.exit(0 if asyncio.run(_migrate(args.source, args.dry_run, args.reembed)) is None else 1)
+    rc = 0 if asyncio.run(_migrate(args.source, args.dry_run, args.reembed,
+                                   force_local=args.force_local)) is None else 1
+    sys.exit(rc)

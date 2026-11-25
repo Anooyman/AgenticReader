@@ -44,6 +44,7 @@ TOP_LEVEL_MODULES = [
     "src.agents.search",
     "src.services",
     "src.utils",
+    "src.utils.ssrf_guard",
     "src.pipeline",
     "src.ui.backend.app",
 ]

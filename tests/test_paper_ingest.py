@@ -184,7 +184,7 @@ def dns(monkeypatch):
             raise OSError(f"no address for {host}")
         return [(0, 1, 6, "", (ip, 0))]
 
-    monkeypatch.setattr(briefs.socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(briefs.ssrf_guard.socket, "getaddrinfo", fake_getaddrinfo)
     return table
 
 
@@ -562,7 +562,7 @@ async def test_concurrent_fetch_of_same_doc_writes_intact_file(monkeypatch, tmp_
     完整 PDF。旧写法在这里会交错出半截文件——那是唯一一种"没人报错、东西
     却坏了"的失败模式。"""
     monkeypatch.setattr(briefs, "PDF_DIR", tmp_path)
-    monkeypatch.setattr(briefs.socket, "getaddrinfo",
+    monkeypatch.setattr(briefs.ssrf_guard.socket, "getaddrinfo",
                         lambda *a, **kw: [(0, 1, 6, "", ("157.166.208.18", 0))])
     body = (b"%PDF-1.7", b"A" * 4096, b"B" * 4096, b"%%EOF")
     _mock_http(monkeypatch, chunks=body, yield_sleep=True)
@@ -584,7 +584,7 @@ async def test_concurrent_one_failing_other_ok_keeps_good_file(monkeypatch, tmp_
     import httpx
 
     monkeypatch.setattr(briefs, "PDF_DIR", tmp_path)
-    monkeypatch.setattr(briefs.socket, "getaddrinfo",
+    monkeypatch.setattr(briefs.ssrf_guard.socket, "getaddrinfo",
                         lambda *a, **kw: [(0, 1, 6, "", ("157.166.208.18", 0))])
 
     good = (b"%PDF-1.7", b"payload" * 500)

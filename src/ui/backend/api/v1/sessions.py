@@ -7,6 +7,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
+import asyncio
 from ...services.chat_service import chat_service
 
 router = APIRouter()
@@ -55,7 +56,12 @@ async def delete_session(session_id: str):
         session_id: 会话ID
     """
     try:
-        chat_service.delete_session(session_id)
+        # delete_session 是同步方法，内部"删文件→清记忆→清水位线"的顺序
+        # 由它自己保证；清记忆段在 upstream 可用时是一次 gateway.delete_source
+        # 网络调用（线程池硬封顶 ~30s）。这条路由是 async def，直接调就会
+        # 在事件循环里做阻塞网络 IO——与 /memory 页 delete 的 to_thread
+        # 口径一致，整体 offload 到线程池。
+        await asyncio.to_thread(chat_service.delete_session, session_id)
         return {"success": True, "message": "会话已删除"}
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

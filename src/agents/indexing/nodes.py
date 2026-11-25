@@ -962,7 +962,10 @@ class IndexingNodes:
 
         except Exception as e:
             logger.error(f"❌ [BriefSummary] 简要摘要生成失败: {e}")
-            state["brief_summary"] = f"文档 {state['doc_name']} 的简要摘要（生成错误: {str(e)}）"
+            # 置空而不是写"生成错误: ..."的占位文本：占位文案会顺着 registry
+            # 的 brief_summary 流进 UI 列表和文档选择器，被当成正经摘要消费；
+            # 空值只是"这里缺一个摘要"，是诚实的缺失，不误导下游。
+            state["brief_summary"] = ""
 
             # 更新阶段状态为失败
             self.agent.doc_registry.update_stage_status(

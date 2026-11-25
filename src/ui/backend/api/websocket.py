@@ -65,7 +65,20 @@ async def websocket_chat(websocket: WebSocket):
         while True:
             # 接收消息
             data = await websocket.receive_text()
-            message_data = json.loads(data)
+            try:
+                message_data = json.loads(data)
+            except json.JSONDecodeError as e:
+                # 一条坏消息 ≠ 连接错误：只拒绝这条，连接继续活着。
+                # 此前它直接抛到顶层 except 把整条 WS 打挂，前端看起来
+                # 就是"聊到一半断线"，根因却是一条拼坏的 JSON。
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"消息不是合法 JSON，已跳过本条: {e}",
+                    })
+                except Exception:  # noqa: BLE001 — 发送失败就让它随断连自然收场
+                    pass
+                continue
 
             message_type = message_data.get("type")
             user_message = message_data.get("message")

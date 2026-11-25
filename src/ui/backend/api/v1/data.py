@@ -31,7 +31,7 @@ from src.config.constants import (
     get_summary_paths,
     get_vector_db_path,
 )
-from src.utils.path_guard import safe_path
+from src.utils.path_guard import safe_path, normalize_doc_name
 from .data_common import get_dir_size
 
 router = APIRouter()
@@ -117,7 +117,7 @@ def get_document_data_sizes(doc_name: str, doc_info: Dict) -> Dict[str, float]:
         各部分大小字典（MB）
     """
     # Strip .pdf extension once at the beginning for all path lookups
-    doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
+    doc_name_base = normalize_doc_name(doc_name)  # 与 delete_service 同一口径（只在结尾剥一次）
 
     sizes = {
         "json_size_mb": 0.0,

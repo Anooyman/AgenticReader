@@ -3,10 +3,13 @@
 一、本仓记忆内核（src/memory/{ingest,search,vector_store}）：
   * 读：search()            —— D-B 三态作用域解析的唯一实现处 **+ 选路决策点**
   * 写：ingest()            —— 摘要/对话入库 **+ 选路决策点**
-  * 浏览/删：browse_* / delete_* —— /data Memory tab 的 rows 原语（**恒为本地
-    路**：上游 delete facade 属 Phase 2，落地前不接、也不造假）
-  * DA 槽位：load_brief_date() —— 恒为 local（写 A 自库 AATF，见
-    brief_ingest）；外部桥 driver 已退役，白名单只剩 {"local"}。
+  * 浏览/删：browse_* / delete_* —— /data Memory tab 的 rows 原语，**与
+    ingest() 同一条 auto 路由**（上游 delete facade 与整行浏览面都已在
+    上游 main 落地；读路不可达时才回落本地并留 warning，写路不回落）
+  * DA 槽位：load_brief_date() —— 同样在这条路由上：上游可用就递
+    `ingest(source_type=brief)`，不可用才走 brief_ingest 的本地写法。
+    外部桥 driver 已退役，白名单只剩 {"local"} 那半句说的还是 driver，
+    不是路由。
 二、上游 LLM-Memory 门面（transport 住在 upstream.py）：
   * 选路：search()/ingest() 的 auto 路由（下面"路由"段）
   * 形状：上游 33 列行 → 本地 14 列形状（下面"形状映射层"段）
@@ -36,6 +39,7 @@ from src.memory.config import (
     EXTERNAL_SEARCH_NAMESPACES,
     MEMORY_DB_DIR,
     MEMORY_MODE_AUTO,
+    MEMORY_MODE_UPSTREAM,
     MEMORY_STORE_MODE_ENV,
     NAMESPACE_AATF,
     NAMESPACE_AI_RESEARCH,
@@ -244,16 +248,30 @@ def _note_once(key: str, message: str) -> None:
 
 async def _route_is_upstream(where: str) -> bool:
     """auto 路由的唯一答案：
-      * MEMORY_STORE_MODE=local → False（kill switch，上游再可用也不写上游）
+      * `MEMORY_STORE_MODE=upstream` → 上游不可达就**抛错**，不回退本地
+      * `MEMORY_STORE_MODE=local` → False（kill switch，上游再可用也不写上游）
       * 上游不可达（repo 未设/无效、client 构造失败）→ False + 一句 warning
       * 否则 True
 
     "False 之后要不要回落本地"由调用方自己定：读可以回落，**写不能**——
     见 ingest() 的注释。这条函数只回答"上游这条路开不开"。
+
+    `upstream` 档在这里拦，而不是在每个调用点拦：回落是一件**每个调用点都可能
+    被忘记**的事，写成一 处 抛错才算"旧 workflow 真的被放弃了"，写成八处
+    if 就一定会漏掉第八处。
     """
     mode = get_memory_store_mode()
+    if mode == MEMORY_MODE_UPSTREAM:
+        if not await _upstream_available():
+            raise RuntimeError(
+                f"{MEMORY_STORE_MODE_ENV}=upstream：{where} 需要上游 LLM-Memory，"
+                f"但上游此刻不可达，按策略不回退本地旧库。上游寻址来自 "
+                f"LLM_MEMORY_REPO（shell 或 .env），可达性与失败原因看 "
+                f"GET /api/v1/memory/upstream；要临时回本地旧路请用 "
+                f"{MEMORY_STORE_MODE_ENV}=local。")
+        return True
     if mode != MEMORY_MODE_AUTO:
-        # 今天白名单里只有 local 会走到这，措辞不写死取值：将来加模式也不用改话。
+        # 今天白名单里除 auto/upstream 外只有 local，措辞不写死取值。
         _note_once(f"mode:{mode}",
                    f"记忆读写按 {MEMORY_STORE_MODE_ENV}={mode} 走本地旧路，"
                    f"上游即使可用也不走（kill switch）")
@@ -361,11 +379,24 @@ async def ingest(
             raise RuntimeError(f"上游 memory ingest 失败（{source_type}/{namespace}）：{note}")
         logger.debug("gateway.ingest 走上游路：ns=%s src=%s", namespace, source_type)
         return _map_upstream_ingest_report(payload, requested_source_id=source_id)
-    return await _ingest_source(
+    report = await _ingest_source(
         path, source_type=source_type, namespace=namespace,
         provider=resolve_provider(provider),
         source_id=source_id,
     )
+    # 本地路的"假成功"守卫，与上游路的 raise 同一条纪律。`ingest.ingest_source`
+    # 把逐 chunk 的 condense/embed 异常记进 chunks_failed 后照常返回——三个
+    # 调用方都按"没抛即成功"记账（common.py 直接置 memory_ingested=True、
+    # chat_ingest 照推水位线），端点抖动时会把一次真实失败记成"已入库"，
+    # 而水位线一推，这个会话的记忆就再也没人回来补了。已落盘的 chunk 有
+    # 内容 hash 幂等兜着，重试只会补失败的那些，不是重写一遍。
+    failed = report.get("chunks_failed") if isinstance(report, dict) else None
+    if failed:
+        raise RuntimeError(
+            f"本地 memory ingest 部分失败（{source_type}/{namespace}）："
+            f"{len(failed)} 个 chunk 未写入（成功 {report.get('chunks_added', 0)} 个）"
+            "——重试只会补失败的那些；此处返回成功会让水位线/任务账本把这次记成已入库")
+    return report
 
 
 
@@ -376,11 +407,60 @@ def _store(provider: Optional[str] = None) -> VectorStore:
     return VectorStore(MEMORY_DB_DIR, get_embedding_dimensions(resolve_provider(provider)))
 
 
-def browse_all_rows(namespace: Union[str, List[str]] = "*") -> List[Dict[str, Any]]:
+def browse_all_rows(namespace: Union[str, List[str]] = "*", columns=None) -> List[Dict[str, Any]]:
+    """整片浏览，内含 auto 路由：上游可用就走上游的整行面，否则本地旧库。
+
+    这是收敛里最后一格没接上的地方——`search()` / `ingest()` / `delete_*`
+    早就按同一条规则选路了，只有浏览原语恒本地。看着无害，实际后果是
+    "哪些行还没入库"这类问题会**一半走上游一半走本地**，而两边答案本来就不
+    同：`/data` 的行列表画出一个 66 行的世界、`/briefs` 的日期格说"今日尚未
+    入库"、`sync_memory_ingest` 把已经灌过的条目整批再递一遍（上游靠 hash
+    把它们吞成 0 新增，日志里一片"已存在"，没人看得出是重复劳动）。
+    这层不一起接，前两阶段的收敛就只是接了半截。
+
+    读路**允许**回落本地，口径与 `search()` 一致：少看的只是几行，不会造成
+    写侧那种"同一份内容两处落库、水位线还照推"的账；回落必留 warning，
+    不静默。
+    """
+    if _route_is_upstream_sync("browse_all_rows"):
+        payload = _upstream.upstream_browse_all_rows(namespace, columns)
+        if payload.get("available"):
+            rows = payload.get("rows")
+            return [_map_upstream_row(r) for r in rows] if isinstance(rows, list) else []
+        logger.warning("上游 browse 未成，本次浏览回落本地旧库：%s",
+                       payload.get("note") or payload.get("error") or "无 note")
+    # `columns` 只在上游这条路生效：本地旧库本来就是毫秒级整行，
+    # 在这里给本地也做投影只会多一条会漂移的分支，没有收益。
+    return _store().all_rows(namespace)
+
+
+def browse_all_rows_local(namespace: Union[str, List[str]] = "*") -> List[Dict[str, Any]]:
+    """纯本地浏览原语：**不碰上游、不做路由**。
+
+    `browse_all_rows` 上了 auto 路由之后，行级浏览拿的是"上游可用就是上游
+    行"——这对 `/data` 的命名空间视图是对的（那里要的就是"实际存在哪看哪"），
+    但 `memory_browse.fetch_overview` 的设计是**两账并列不是同源相加**
+    （本地 total + 上游 upstream_total），用路由版数行等于把同一份上游行数
+    报两遍：`total` 谎称本地行数，"只在上游有的 ns"那条分支也永远走不到。
+    计数层要"本地这本账"，就得显式拿本地原语，别让路由替它决定"本地"指什么。
+    """
     return _store().all_rows(namespace)
 
 
 def browse_rows_for_source(namespace: Union[str, List[str]], source_id: str) -> List[Dict[str, Any]]:
+    """一个 source 的全部行，路由与回落口径同 `browse_all_rows`。
+
+    上游的整行面把 `chunk_hash` 一并带出来，所以这条路上的 `is_summary_row`
+    拿的是**真值**——而不是 `search()` 那条路上"keywords 空 + detail 长"的
+    启发式；摘要行的展示位和"已加载"计数靠的正是这一列。
+    """
+    if _route_is_upstream_sync("browse_rows_for_source"):
+        payload = _upstream.upstream_browse_rows_for_source(namespace, source_id)
+        if payload.get("available"):
+            rows = payload.get("rows")
+            return [_map_upstream_row(r) for r in rows] if isinstance(rows, list) else []
+        logger.warning("上游 browse_rows_for_source 未成，回落本地旧库：%s",
+                       payload.get("note") or payload.get("error") or "无 note")
     return _store().rows_for_source(namespace, source_id)
 
 
@@ -391,6 +471,16 @@ def browse_rows_for_source(namespace: Union[str, List[str]], source_id: str) -> 
 # 两套实现共享同一条规则，规则改了必须两边一起改——见下面的成对注释。
 def _route_is_upstream_sync(where: str) -> bool:
     mode = get_memory_store_mode()
+    if mode == MEMORY_MODE_UPSTREAM:
+        # 与 async 版同一条策略，别在这里留一个"只有异步才硬失败"的缺口：
+        # browse/delete 这几条原语本来就是同步函数。
+        if not _upstream_available_sync():
+            raise RuntimeError(
+                f"{MEMORY_STORE_MODE_ENV}=upstream：{where} 需要上游 LLM-Memory，"
+                f"但上游此刻不可达，按策略不回退本地旧库。上游寻址来自 "
+                f"LLM_MEMORY_REPO（shell 或 .env），要临时回本地旧路请用 "
+                f"{MEMORY_STORE_MODE_ENV}=local。")
+        return True
     if mode != MEMORY_MODE_AUTO:
         _note_once(f"mode:{mode}",
                    f"记忆读写按 {MEMORY_STORE_MODE_ENV}={mode} 走本地旧路，"
@@ -452,37 +542,43 @@ def delete_source(namespace: str, source_id: str) -> int:
     """按 (namespace, source_id) 删一片，返回删除条数。
 
     本地路：取行 + 逐删（策略住这里，SDK 替换只改本函数一处）。
-    上游路：交给 delete_where 的一次提交，并把 namespace 先过护栏——
-    上游的 namespace 是**必填且必须具体**的，空串或 "*" 直接被拒。
+    上游路：交给 delete_where 的一次提交。
+
+    护栏**放在路由之前**，不是之后：`_guard_scoped_namespace` 挡的是"顺手
+    清空全库"这类输入，而这道闸如果只在上游那条分支里，本地分支就会对同样
+    的入参一声不响——同一条请求因为路由不同而一次报错一次动手，正是最难查
+    的那种不一致，而且它违背的是这条函数自己写下的说法（"空串或 * 直接被拒"
+    不分哪条路）。
     """
+    name = _guard_scoped_namespace(namespace, "source")
     if _route_is_upstream_sync("delete_source"):
-        name = _guard_scoped_namespace(namespace, "source")
         payload = _upstream.upstream_delete_where(namespace=name, source_id=source_id)
         if not payload.get("available"):
             raise RuntimeError(f"上游 delete_where 失败（ns={name} source_id={source_id}）："
                                f"{payload.get('note') or payload.get('error') or '无 note'}")
         return int(payload.get("deleted") or 0)
     store = _store()
-    rows = store.rows_for_source(namespace, source_id)
+    rows = store.rows_for_source(name, source_id)
     return _delete_rows(store, rows, "delete_source")
 
 
 def delete_namespace(namespace: str) -> int:
     """清空一个 namespace。
 
-    上游路上这是**整个 ns 级别**的删除，护栏先挡住空串与 "*"（挡住的是
-    "顺手清空全库"，本地那条取行逐删的路今天也不该拿 "*" 当输入跑）；
-    剩下的语义与本地一致：删掉多少行报多少，失败就 raise 不回落。
+    护栏与 `delete_source` 同一条，也挡在路由之前：空串和 `"*"` 在这里
+    **一定**得到同一句拒绝，不管最后走的是哪条路——本地那条是"取行逐删"，
+    拿 `"*"` 当输入去跑一次扫描就已经是一次不该发生的遍历了，而拿空串跑一次
+    就更接近"清库"而不是"清空某个 ns"。
     """
+    name = _guard_scoped_namespace(namespace, "namespace")
     if _route_is_upstream_sync("delete_namespace"):
-        name = _guard_scoped_namespace(namespace, "namespace")
         payload = _upstream.upstream_delete_where(namespace=name)
         if not payload.get("available"):
             raise RuntimeError(f"上游 delete_where 失败（ns={name}）："
                                f"{payload.get('note') or payload.get('error') or '无 note'}")
         return int(payload.get("deleted") or 0)
     store = _store()
-    return _delete_rows(store, store.all_rows(namespace), "delete_namespace")
+    return _delete_rows(store, store.all_rows(name), "delete_namespace")
 
 
 def _delete_rows(store: VectorStore, rows: List[Dict[str, Any]],
@@ -592,6 +688,13 @@ async def upstream_status(namespace: Optional[Union[str, List[str]]] = None) -> 
 async def upstream_namespaces() -> List[Dict[str, Any]]:
     """上游 namespace 清单 [{name, rows}]；不可用返回 []（形状稳定优先）。"""
     return await _upstream.upstream_namespaces()
+
+
+async def upstream_capabilities() -> Dict[str, Any]:
+    """上游自述的纯转发。**gateway 在这里一个字都不改**——改写就等于把
+    "配置归上游决定"这句话悄悄收回 AR 手里，那正是整个收敛要消掉的东西。
+    """
+    return await _upstream.upstream_capabilities()
 
 
 async def upstream_search(query: str,

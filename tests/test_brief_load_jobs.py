@@ -114,7 +114,7 @@ def test_date_memory_counts_merges_aatf_rows_and_queue(tmp_path, monkeypatch):
     from src.ui.backend.services import briefs_data
     from src.memory import gateway
 
-    monkeypatch.setattr(gateway, "browse_all_rows", lambda ns: [
+    monkeypatch.setattr(gateway, "browse_all_rows", lambda ns, columns=None: [
         {"occurred_at": "2026-11-12T00:00:00+00:00"},
         {"occurred_at": "2026-11-12T09:30:00+00:00"},
         {"occurred_at": "2026-11-10T08:00:00+00:00"},
@@ -133,7 +133,7 @@ def test_date_memory_counts_survives_db_failure(tmp_path, monkeypatch):
     from src.ui.backend.services import briefs_data
     from src.memory import gateway
 
-    def boom(ns):
+    def boom(ns, columns=None):
         raise RuntimeError("memory db 不可用")
 
     monkeypatch.setattr(gateway, "browse_all_rows", boom)

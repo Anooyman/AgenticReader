@@ -41,6 +41,9 @@ MAX_CONSECUTIVE_TOOL_ERRORS = 2
 
 # 整轮问答的墙钟预算，到点就用已有信息强制收尾。
 OVERALL_DEADLINE = 900
+# finalize 是一次"超预算时刻"的收尾 LLM 调用，给它一个远小于整轮预算的
+# 硬超时——超时就直接交兜底答案，不再拖住墙钟。
+FINALIZE_TIMEOUT = 120
 
 ProgressCallback = Optional[Callable[[str, str], Awaitable[None]]]
 
@@ -295,8 +298,21 @@ async def ask(
     async def finalize(reason: str) -> Dict[str, Any]:
         """强制关闭工具调用，逼模型基于已有信息给出结论。"""
         model = llm.chat_model  # 不 bind 任何 tool，模型物理上无法再发起 tool_call
-        response = await model.ainvoke(messages)
-        answer = (response.content or "").strip()
+        # finalize 自己也要有超时：它跑在"已经超了预算"的时刻，一次没有
+        # 上限的 ainvoke 能把 900s 墙钟变成无限——收尾调用不该比它收尾的
+        # 整轮还贵。
+        try:
+            response = await asyncio.wait_for(
+                model.ainvoke(messages), timeout=FINALIZE_TIMEOUT)
+        except asyncio.TimeoutError:
+            response = None
+        except Exception as e:  # noqa: BLE001 — finalize 的职责是"无论如何交出答案"
+            # 最常见的是历史形状不合 API 校验（AIMessage.tool_calls 后面缺
+            # 配对的 ToolMessage）——收尾调用不该把整次提问带崩。
+            logger.warning("finalize 的收尾调用失败，改用兜底答案：%s: %s",
+                           type(e).__name__, e)
+            response = None
+        answer = ((response.content or "").strip() if response is not None else "")
         if not answer:
             answer = EMPTY_ANSWER_FALLBACK
         return {"answer": answer, "sources_used": sources_used,
@@ -306,11 +322,18 @@ async def ask(
     deadline = time.monotonic() + OVERALL_DEADLINE
 
     for _ in range(MAX_ITERATIONS):
-        if time.monotonic() > deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             return await finalize("deadline")
 
         model = llm.get_chat_model_with_tools(tools=tools)
-        response = await model.ainvoke(messages)
+        # 墙钟的约束对象是所有在途的 await，不只是迭代开头那一瞬：以前
+        # 只在循环顶部查 deadline，一次超过剩余预算的模型调用或工具轮
+        # （deep_dive 单文档曾配到 1200s > 900s 整轮）能把护栏变成摆设。
+        try:
+            response = await asyncio.wait_for(model.ainvoke(messages), timeout=remaining)
+        except asyncio.TimeoutError:
+            return await finalize("deadline")
 
         tool_calls = getattr(response, "tool_calls", None) or []
         if not tool_calls:
@@ -321,9 +344,25 @@ async def ask(
 
         messages.append(response)
 
-        tool_messages, round_sources, round_hits = await _run_tool_calls(
-            tool_calls, on_progress, namespaces, provider=resolved_provider,
-            allowed=allowed)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return await finalize("deadline")
+        try:
+            tool_messages, round_sources, round_hits = await asyncio.wait_for(
+                _run_tool_calls(
+                    tool_calls, on_progress, namespaces, provider=resolved_provider,
+                    allowed=allowed),
+                timeout=remaining)
+        except asyncio.TimeoutError:
+            # 工具轮超掉了剩余预算：给这轮每个 tool_call 补一条超时观测，
+            # 否则 finalize 的对话历史里会留着"有 tool_calls 没响应"的
+            # 非法形状，收尾调用反而先撞 API 校验。
+            for tc in tool_calls:
+                messages.append(ToolMessage(
+                    content="工具调用超时（已超出本轮时间预算）。",
+                    tool_call_id=tc.get("id") or ""))
+            # 已收集到的 sources/memory_hits 照常带出去。
+            return await finalize("deadline")
         messages.extend(tool_messages)
         sources_used.extend(round_sources)
         _note_hits(round_hits)

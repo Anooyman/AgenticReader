@@ -377,11 +377,16 @@ def test_aatf_brief_channel_follows_route(upstream_on, monkeypatch, tmp_path):
     assert not local_calls, "上游路还顺手跑了本地直写——那是双写"
 
 
-def test_browse_stays_local_delete_follows_route(upstream_on, monkeypatch):
-    """Phase 2 裁决改写本用例：browse_* 不在三条路线里，仍走本地
-    （这半边从 Phase 1 原样保留）；delete_* 已接上游——这里守的是
-    "browse 没被顺手捎进上游、delete 没再静默落本地"，完整 scope
-    守卫与失败语义由 test_memory_routing_phase2 钉死。"""
+def test_browse_and_delete_both_follow_the_route(upstream_on, monkeypatch):
+    """Phase 3 改写本用例：`browse_*` 不再"留在本地"，它和 delete_* 一样上路由
+    ——行级浏览留在本地会让"哪些行已入库"一半走上游一半走本地，那比谁都没接
+    更糟（完整断言见 tests/test_memory_browse_routes.py）。
+
+    这个用例现在守的是另一件事：这里的假 SDK 故意**没有** all_rows /
+    rows_for_source（模拟一个还没有浏览面的旧 upstream checkout），于是 browse
+    应当"试着走 → 这面不存在 → 响亮地回落本地"，而不是撞 AttributeError，
+    也不是悄悄当无事发生。
+    """
     deleted_locally = []
 
     class _S:
@@ -395,7 +400,7 @@ def test_browse_stays_local_delete_follows_route(upstream_on, monkeypatch):
             deleted_locally.append(row_id)
 
     monkeypatch.setattr(gateway, "_store", lambda provider=None: _S())
-    # browse：纯本地，一次不许碰上游
+    # browse：上路由了，但这个旧 checkout 没有这一面 → 回落本地（带 warning）
     assert len(gateway.browse_all_rows("ai-research")) == 1
     assert not upstream_on.ingest_calls and not upstream_on.search_calls
     # delete：Phase 2 起转上游，本地库不该再被动

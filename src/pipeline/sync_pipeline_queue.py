@@ -15,7 +15,7 @@ import argparse
 from pathlib import Path
 
 from src.pipeline.briefs_parser import parse_paper_cards, parse_signal_cards
-from src.pipeline.queue_store import load_queue, new_queue_item, save_queue
+from src.pipeline.queue_store import new_queue_item, queue_transaction
 
 
 def to_queue_items(cards: list) -> list:
@@ -56,21 +56,24 @@ def main():
 
     briefs_dir = Path(args.briefs_dir) / args.coverage_date
 
-    queue = load_queue()
-
+    # 解析先做——它不碰 queue，放锁外没问题；真正要命的是写回：以前这里是
+    # load_queue → 内存改 → save_queue 一把裸快照，与正在运行的 job_runner
+    # （process_* 的 claim/finish/fail 都在 queue_transaction 里）并发时，
+    # 后写的整文件回写会把对方期间的状态推进整体抹掉。改走同一个事务原语，
+    # queue_store 对 queue 文件的"唯一写者"纪律才真正没有漏网入口。
     pdf_items = to_queue_items(
         parse_paper_cards(briefs_dir / "research-paper-radar.html", args.coverage_date))
     web_items = to_queue_items(
         parse_signal_cards(briefs_dir / "daily-signals.html", args.coverage_date))
 
-    pdf_added, pdf_skipped = upsert(queue, pdf_items)
-    web_added, web_skipped = upsert(queue, web_items)
-
-    save_queue(queue)
+    with queue_transaction() as queue:
+        pdf_added, pdf_skipped = upsert(queue, pdf_items)
+        web_added, web_skipped = upsert(queue, web_items)
+        queue_total = len(queue)
 
     print(f"pdf_arxiv: found {len(pdf_items)}, added {pdf_added}, already existed {pdf_skipped}")
     print(f"web_article: found {len(web_items)}, added {web_added}, already existed {web_skipped}")
-    print(f"queue total: {len(queue)} items")
+    print(f"queue total: {queue_total}")
 
 
 if __name__ == "__main__":

@@ -37,7 +37,7 @@ class RetrievalAgent(AgentBase):
     - 多文档检索：doc_name=None
     """
 
-    def __init__(self, doc_name: str = None, provider: str = 'openai', progress_callback=None):
+    def __init__(self, doc_name: str = None, provider: Optional[str] = None, progress_callback=None):
         super().__init__(name="RetrievalAgent", provider=provider)
 
         # 当前文档上下文

@@ -48,7 +48,7 @@ class IndexingAgent(AgentBase):
     - 注册文档到文档库
     """
 
-    def __init__(self, provider: str = "openai", pdf_preset: str = "high"):
+    def __init__(self, provider: Optional[str] = None, pdf_preset: str = "high"):
         """
         初始化 IndexingAgent
 

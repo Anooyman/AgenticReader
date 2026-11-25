@@ -104,9 +104,11 @@ class SimpleMCPClient:
                 f"❌ [SimpleMCP] {self.service_name} 初始化超时"
                 f"（>{self.INITIALIZE_TIMEOUT}s，MCP 子进程可能未正常响应）"
             )
+            await self._close_and_reset("init")
             raise
         except Exception as e:
             logger.error(f"❌ [SimpleMCP] 初始化失败: {e}", exc_info=True)
+            await self._close_and_reset("init")
             raise
 
     async def call_tool(self, tool_name: str, arguments: Dict) -> List:
@@ -140,10 +142,28 @@ class SimpleMCPClient:
                 f"❌ [SimpleMCP] 调用工具 {tool_name} 超时"
                 f"（>{self.CALL_TOOL_TIMEOUT}s，MCP 子进程可能卡死）"
             )
+            # 一次超时之后这个 session 的状态就不可信了：继续留在缓存里
+            # 只会让同轮后续节点接着踩一个僵尸连接。当场拆掉，
+            # init_mcp_client 的复用条件会把它重新建起来。
+            await self._close_and_reset("timeout")
             raise
         except Exception as e:
             logger.error(f"❌ [SimpleMCP] 调用工具 {tool_name} 失败: {e}", exc_info=True)
+            await self._close_and_reset("error")
             raise
+
+    async def _close_and_reset(self, why: str):
+        """关掉 transport、session 归 None、换一把新的 exit_stack。
+
+        初始化和运行期两处失败共用：半开连接的清理动作是一样的——
+        "失败一次 = 资源上等于零"，区别只在日志怎么说。
+        """
+        try:
+            await self.exit_stack.aclose()
+        except Exception as e:  # noqa: BLE001 — 收尾自身失败只 debug，外层错误优先
+            logger.debug(f"[SimpleMCP] {self.service_name} 失败收尾（{why}）: {e}")
+        self.session = None
+        self.exit_stack = AsyncExitStack()
 
     async def disconnect(self):
         """断开连接"""
@@ -184,10 +204,21 @@ class SearchUtils:
         Returns:
             SimpleMCPClient 实例，失败返回 None
         """
-        # 检查缓存
-        if service_name in self.mcp_clients:
-            logger.info(f"🔌 [MCP] 复用已有的 {service_name} client")
-            return self.mcp_clients[service_name]
+        # 检查缓存——但只有"session 还活着"的 client 才算数。一次失败
+        # （超时/异常）把 session 拆掉过的 client 不能继续当复用对象，
+        # 否则后面每个工具调用都在僵尸连接上撞墙。
+        cached = self.mcp_clients.get(service_name)
+        if cached is not None:
+            if getattr(cached, "session", None) is not None:
+                logger.info(f"🔌 [MCP] 复用已有的 {service_name} client")
+                return cached
+            logger.warning(f"🔌 [MCP] {service_name} 的缓存 client 已失效，重连")
+            try:
+                if hasattr(cached, "disconnect"):
+                    await cached.disconnect()
+            except Exception:  # noqa: BLE001 — 拆旧的失败也要继续重建
+                pass
+            self.mcp_clients.pop(service_name, None)
 
         try:
             from src.config.settings import MCP_CONFIG

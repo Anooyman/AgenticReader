@@ -6,41 +6,79 @@ src.memory 向量库的内容。改自 ai-research-pipeline 的 webapp/api/memor
 的说明），这里的路由/错误处理逻辑基本不变。
 """
 import json
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
 from src.ui.backend.services import memory_browse
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+async def _run_read(fn, *args):
+    """读端点的失败形状，与下面 `_run_delete` 同一条规矩。
+
+    分得清"这个库里没有行"和"这个库今天读不出来"是本 API 最要紧的一件事：
+    空结果可以 200 交差，那本来就是状态查询的诚实答案；**故障**不行——
+    故障必须让 body 里带一句话，否则前端显示"暂无记忆"就等于替一次真实故障
+    撒谎。`MEMORY_STORE_MODE=upstream` 这一档现在会让路由直接抛错，那种错
+    在这里必须看得见，不能落回一个空列表。
+    """
+    try:
+        return await fn(*args)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("记忆读取出错：%s: %s", type(exc).__name__, exc)
+        raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}") from exc
 
 
 @router.get("/overview")
 async def get_overview():
-    return await memory_browse.fetch_overview()
+    return await _run_read(memory_browse.fetch_overview)
 
 
 @router.get("/namespace/{namespace}")
 async def get_namespace(namespace: str):
-    return await memory_browse.fetch_namespace(namespace)
+    return await _run_read(memory_browse.fetch_namespace, namespace)
+
+
+async def _run_delete(fn, *args):
+    """删除类操作的失败形状：把原因带出来，而不是让它变成一句"Internal Server Error"。
+
+    分两类是因为它们**本来就不是一回事**：`ValueError` 是调用方给错了 scope
+    （空 namespace / `*`），那是 400，写日志也不需要堆栈；其余的是"上游或库
+    自己出问题了"，那是 5xx，而且理由必须进 body——UI 上一句"删除失败"和一句
+    "上游 delete_where 没成：namespace 未注册"之差，就是用户要不要再点一遍的差别。
+    """
+    try:
+        return await fn(*args)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("记忆删除失败：%s: %s", type(exc).__name__, exc)
+        raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}") from exc
 
 
 @router.delete("/item/{memory_id}")
 async def delete_item(memory_id: str):
-    return await memory_browse.delete_memory(memory_id)
+    return await _run_delete(memory_browse.delete_memory, memory_id)
 
 
 @router.delete("/namespace/{namespace}/source/{source_id}")
 async def delete_source(namespace: str, source_id: str):
     """删掉一个来源（一篇论文/一段对话）在该 namespace 下的全部记忆行——
     对应 UI 上"删除整组"按钮，一次删掉一张 group 卡片的所有 chunk。"""
-    return await memory_browse.delete_source(namespace, source_id)
+    return await _run_delete(memory_browse.delete_source, namespace, source_id)
 
 
 @router.delete("/namespace/{namespace}")
 async def delete_namespace(namespace: str):
     """清空一个 namespace 下的全部记忆。"""
-    return await memory_browse.delete_namespace(namespace)
+    return await _run_delete(memory_browse.delete_namespace, namespace)
 
 
 @router.post("/search")
@@ -89,6 +127,16 @@ async def get_upstream(namespace: Optional[str] = None):
     from src.memory import gateway  # 函数级：api 层不往模块级拖记忆内核
     status = await gateway.upstream_status(namespace)
     status["decision"] = await gateway.upstream_decision_status()
+    # 配置自述：库在哪个目录、几维、用什么模型、认哪些 source_type。这些
+    # 一律由上游回答，AR 只搬运不解释——缺这个面就写一句"读不到"，绝不拿
+    # AR 自己的常量凑一个像样的答案（凑出来的那份迟早会跟上游说的不一样）。
+    if status.get("available"):
+        caps = await gateway.upstream_capabilities()
+        if caps.get("available"):
+            status["config"] = {k: v for k, v in caps.items()
+                                if k not in ("available", "read_only")}
+        else:
+            status["config_note"] = caps.get("note") or caps.get("error") or "上游未提供配置自述"
     return status
 
 

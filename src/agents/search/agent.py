@@ -39,7 +39,7 @@ class SearchAgent(AgentBase):
                         call_indexing_agent → 基于索引对话
     """
 
-    def __init__(self, provider: str = 'openai', progress_callback=None):
+    def __init__(self, provider: Optional[str] = None, progress_callback=None):
         """
         初始化 SearchAgent
 
@@ -90,8 +90,15 @@ class SearchAgent(AgentBase):
 
         # ========== 添加边 ==========
 
-        # 初始化流程
-        workflow.add_edge("initialize", "analyze_query")
+        # 初始化流程。initialize 的 except 会把 error + is_complete 一起置上，
+        # 这里立刻短路：出错就不该再让 analyze/scrape 去烧 LLM/MCP 调用，
+        # 等最后一跳才靠 "error in final_state" 翻 success——失败要在还没
+        # 花钱之前就该停下来。
+        workflow.add_conditional_edges(
+            "initialize",
+            lambda state: END if state.get("error") else "analyze_query",
+            {"end": END, "continue": "analyze_query"},
+        )
 
         # 根据 use case 路由
         workflow.add_conditional_edges(

@@ -71,3 +71,33 @@ def skip_without_llm_credentials(request):
     module = nodeid.split("::")[0].split("/")[-1]
     if module[:-3] in LLM_DEPENDENT_STEMS and not has_llm_credentials():
         pytest.skip("缺少 LLM 凭据环境变量，跳过依赖真实 LLM 的用例")
+
+
+@pytest.fixture(autouse=True)
+def _memory_upstream_off_by_default(monkeypatch):
+    """测试期**默认**把上游 LLM-Memory 的寻址掐掉，除非这条用例自己把它接上。
+
+    起因很实际：有人在 shell 里 `export LLM_MEMORY_REPO=...` 之后跑测试，
+    那一轮就从"离线跑逻辑"变成"读写你机器上那个真库"——慢是真慢（一次
+    `all_rows` 就是五千多行），更糟的是失败原因长得像被测代码有 bug，其实
+    只是运行环境和别人共用了一个存储。路由测试自己会 `setenv`，那是它们的
+    自由；剩下的用例一个都不该被卷进去。
+
+    这里三件事一起做，少一件都还不算离线：
+      * 掐 `LLM_MEMORY_REPO` —— 没有寻址就没有客户端
+      * 掐 `LLM_MEMORY_MCP_ENABLED` —— 决策面也不该在测试里拉起子进程
+      * 把 `upstream._client` 归零 —— 它是进程级单例，前面某个用例留下的
+        真客户端会让这一条测试哪怕 env 已经没了还在用它
+
+    想要上游的用例请自己显式 `monkeypatch.setenv(...)` + 假 `_client`，
+    顺序上它们在这个 fixture 之后跑，覆盖了这里掐掉的东西——这正是要的
+    默认：**离线是默认值，接上游是个要写明白的选择。**
+    """
+    monkeypatch.delenv("LLM_MEMORY_REPO", raising=False)
+    monkeypatch.delenv("LLM_MEMORY_MCP_ENABLED", raising=False)
+    try:
+        from src.memory import upstream
+
+        monkeypatch.setattr(upstream, "_client", None, raising=False)
+    except Exception:  # noqa: BLE001 —— 记忆层根本没装上的环境里也别拦测试
+        pass

@@ -346,6 +346,10 @@ async def run_forever() -> None:
             finally:
                 _running_job_id = None
                 _running_task = None
+                # 任务无论如何收尾都要把取消标志清掉：只在 CancelledError
+                # 分支复位，就会留下"cancel 落在正常完成之后"的窗口——
+                # 标志 True 残留，下一轮把一次正常结束误读成用户取消。
+                _job_cancel_requested = False
 
             if "error" in outcome:
                 await _update_job(job_id, status="failed", finished_at=_now(), error=outcome["error"])

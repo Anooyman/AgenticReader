@@ -59,20 +59,30 @@ EXTERNAL_SEARCH_NAMESPACES: List[str] = []
 # 名字（ai-research / webapp-chat / AATF）还是上面的常量，路由只决定"走哪条
 # 路"，不决定"写哪个 ns"。
 MEMORY_STORE_MODE_ENV = "MEMORY_STORE_MODE"
-MEMORY_MODE_AUTO = "auto"    # 缺省：上游可用走上游，否则本地旧路
-MEMORY_MODE_LOCAL = "local"  # kill switch：即使上游可用也强制本地旧路
-MEMORY_MODES = (MEMORY_MODE_AUTO, MEMORY_MODE_LOCAL)
+MEMORY_MODE_AUTO = "auto"        # 缺省：上游可用走上游，否则本地旧路
+MEMORY_MODE_LOCAL = "local"      # kill switch：即使上游可用也强制本地旧路
+# "放弃旧 workflow"这件事需要一个能硬切干净的档位：auto 在上游不可达时仍然
+# 会退回本地库，那对开发机是便利、对"记忆只应该有一个家"这条要求是漏洞——
+# 差口就是从这里长出来的。upstream 档把这条退路明着关掉：不可达就报错，
+# 报错里带上游失败原因，让人去修上游而不是让记忆悄悄落到第二个库里。
+MEMORY_MODE_UPSTREAM = "upstream"
+MEMORY_MODES = (MEMORY_MODE_AUTO, MEMORY_MODE_LOCAL, MEMORY_MODE_UPSTREAM)
 
 # 非法取值只 warning 一次，别每次 search/ingest 都刷屏（同 _DIMENSION_CHECK_LOGGED 的口径）。
 _BAD_MODE_LOGGED: set = set()
 
 
 def get_memory_store_mode() -> str:
-    """读 MEMORY_STORE_MODE，返回 "auto" 或 "local"。
+    """读 MEMORY_STORE_MODE，返回 `"auto"` / `"local"` / `"upstream"`。
 
-    未设 / 空 / 取值不在白名单 → "auto"（缺省行为＝上游可用就走上游）。这是
+    未设 / 空 / 取值不在白名单 → `"auto"`（缺省行为＝上游可用就走上游）。这是
     纯 env 读取，不碰 settings 也不碰上游——路由决策链上唯一允许在 gateway
     之外读的 env 开关，其它上游可用性判断一律走 upstream.upstream_available()。
+
+    `"upstream"` 是反向的硬档（不是"更高级的默认"）：gateway 在选不到上游时
+    抛错而不是回落本地，所以这档要求"记忆只有一个家"这条要求真的被守住；
+    选它的人同时该知道 `local` 那把 kill switch 仍然有效，别把两种开关混用成
+    "既想走上游又想留在本地"。
     """
     raw = (os.environ.get(MEMORY_STORE_MODE_ENV) or "").strip().lower()
     if not raw:
