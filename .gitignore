@@ -120,3 +120,6 @@ scraped_data/
 
 # Agent skill artifacts (operating guides, not source)
 skill/
+
+# 本地运行日志（server 输出等），非仓库内容
+logs/

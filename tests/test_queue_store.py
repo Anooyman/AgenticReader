@@ -584,3 +584,12 @@ def test_queue_file_is_the_only_writer_path_and_stays_valid_json(store):
         store.fail_item("b", "反复")
     assert isinstance(store.load_queue(), dict)
     assert list(Path(store.QUEUE_PATH).parent.glob("*.tmp*")) == []
+
+
+def test_reset_stale_bumps_attempts_so_killed_processes_cant_loop_forever(store):
+    """进程反复被杀（不走 fail_item）的条目以前会在 pending↔in_progress
+    之间无限循环，永远够不到 MAX_ATTEMPTS=3——超时回炉也记一次 attempt。"""
+    q = {"x": {"type": "pdf", "pipeline_status": "in_progress", "attempts": 1}}
+    assert qs.reset_stale_in_progress(q) == 1
+    assert q["x"]["pipeline_status"] == "pending"
+    assert q["x"]["attempts"] == 2

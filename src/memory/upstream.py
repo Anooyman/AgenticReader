@@ -145,10 +145,19 @@ def _store_root_note() -> str:
         if not src:
             return "store 根算不出：LLM_MEMORY_REPO 未配置"
         _ensure_src_on_path(src)
+        # 先问那张嘴自己：能问到就用**上游报出来的**路径和它的来路，
+        # 自己拿 paths 现算是最后一条退路——理由和这整件事一样：规则在上游手里，
+        # 我在诊断串里重算一遍它的规则，规则一变这里就开始替上游编答案。
+        if _client is not None:
+            try:
+                cap = _client.capabilities()
+                if cap.get("store_dir"):
+                    return (f"store 根={cap['store_dir']}"
+                            f"（上游自报，source={cap.get('store_source', 'unknown')}）")
+            except Exception:  # noqa: BLE001——自报失败就退回下面那条现算
+                pass
         from llm_memoryd.common import paths  # noqa: PLC0415——纯诊断，失败可弃
-        rule = ("MEMORY_DATA_DIR 已设，data_dir 取该值" if os.environ.get("MEMORY_DATA_DIR")
-                else "MEMORY_DATA_DIR 未设，data_dir 取机根 ~/.llm-memory")
-        return f"store 根={paths.store_dir()}（{rule}）"
+        return f"store 根={paths.store_dir()}（未经 client 自报，按上游 paths 现算）"
     except Exception as exc:  # noqa: BLE001
         return f"store 根算不出（{type(exc).__name__}）"
 
@@ -218,14 +227,24 @@ async def upstream_status(namespace: Optional[str] = None) -> Dict[str, Any]:
                                "store_dir": stats.get("store_dir"),
                                "version": version or None,
                                "read_only": True}
-        # "无此 ns" vs "空库"的可判别位：交叉一次 store 级视图
+        # "无此 ns" vs "空库"的可判别位：交叉一次 store 级视图。
+        # ns_present 只能由 store 级清单回答：`namespace in seen`。**不能**先
+        # 无条件写 False 再等着修饰——"ns 存在但恰好 0 行"是最常见的一种空，
+        # 拿 False 说它"清单里没有"就是撒谎，note 也会把排查往错方向带。
         if namespace and out["total"] == 0:
-            out["ns_present"] = False
             try:
                 store = await asyncio.to_thread(client.status)
                 seen = {str(n) for n in (store.get("namespaces") or {})}
+                present = namespace in seen
+                out["ns_present"] = present
                 if int(store.get("total") or 0) == 0:
-                    out["note"] = "store 为空（0 行）——上游库未接入/未入库，非该 ns 独有"
+                    out["note"] = ("store 为空（0 行）——上游库未接入/未入库，"
+                                   "非该 ns 独有"
+                                   + ("（ns 清单里有它，只是没行）" if present else ""))
+                elif present:
+                    out["note"] = (f"该 ns 在此 store 中存在，但当前 0 行："
+                                   f"store 共 {store.get('total')} 行"
+                                   f"（可选：{sorted(seen) or '空'}）")
                 else:
                     out["note"] = (f"该 ns 在此 store 中无行：store 共 "
                                    f"{store.get('total')} 行、ns 清单里没有 "
@@ -237,6 +256,31 @@ async def upstream_status(namespace: Optional[str] = None) -> Dict[str, Any]:
         return out
     except Exception as exc:  # noqa: BLE001
         return _fail("status", exc)
+
+
+async def upstream_capabilities() -> Dict[str, Any]:
+    """上游的**自述**：这个库在哪个目录、多少维、embedding/chat/insert 各用
+    什么模型、认哪些 source_type、开了哪些 MCP 工具、版本号多少。
+
+    这是"记忆配置不归 AR 管"这句话唯一能被程序化引用的地方，所以这里的纪律
+    比 status/search 还严：**不做任何本地加工**，也不拿 AR 自己的常量去补一个
+    "看起来一样"的默认值——上游没这个面就按 `_fail` 折叠，缺哪个键就是缺哪个。
+    上游那份白名单刻意不含 API key 之类的东西，但我们这边同样只当它是文本，
+    原样转发，别在这里替前端做"哪些看起来敏感"的判断。
+    """
+    client, failure = await _client_for()
+    if failure is not None:
+        return failure
+    if client is None:
+        return _unavailable()
+    try:
+        _require_method(client, "capabilities")
+        payload = await asyncio.to_thread(client.capabilities)
+        if not isinstance(payload, dict):
+            raise TypeError(f"capabilities 返回了 {type(payload).__name__}")
+        return {"available": True, **payload, "read_only": True}
+    except Exception as exc:  # noqa: BLE001 —— 折叠成 {available:false,...}，不外抛
+        return _fail("capabilities", exc)
 
 
 async def upstream_namespaces() -> List[Dict[str, Any]]:
@@ -573,6 +617,84 @@ def upstream_delete_where(namespace: Optional[str] = None, source_id: Optional[s
     return _fold_call("delete_where", _call_with_cap(fn, kwargs, "delete_where"))
 
 
+# ------------------------------------------------- 整片浏览（gateway.browse_* 的上面那层）
+
+def _scope_kwargs(namespace: Any) -> Dict[str, Any]:
+    """把 gateway 已经收敛好的作用域翻译成上游 `all_rows` 的参数形状。
+
+    `"*"` / `None` → **不传作用域**：上游把 "*" 当作"这里没有 scope 这回事"，
+    返回 `scoped=False`，这正是浏览面要的语义；`browse_all_rows("*")` 是
+    memory_browse 的默认调用，别在这里把它翻成一个真实的名字。
+    单个字符串 → `namespace=`（走上游那条会校验形状/在册的窄路）；
+    列表 → `namespaces=[...]`（上游那条目前不逐个校验，与 search 复数路同形）。
+    """
+    if namespace is None:
+        return {}
+    if isinstance(namespace, str):
+        text = namespace.strip()
+        return {} if not text or text == "*" else {"namespace": text}
+    if isinstance(namespace, (list, tuple, set)):
+        names = [str(n) for n in namespace
+                 if n is not None and str(n).strip() and str(n).strip() != "*"]
+        return {"namespaces": names} if names else {}
+    return {"namespace": str(namespace)}
+
+
+def _browse(tag: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """同步调一次上游浏览面，折叠形状与 delete_* 完全同构。
+
+    `limit` 一律显式传 `None`：`MemoryClient.all_rows` 有个默认封顶
+    （`MAX_ROWS_PER_CALL`）用来防"一个字没点就先把机器库搬进内存"，但
+    `browse_*` 的既有契约是"这个 namespace 里有什么就给我什么"——AATF 单库
+    五千行出头，照默认走就会在计数上静默少算，而 /briefs 的日期格和卡片上的
+    "已入简报速览库"恰恰都是拿 browse 的行数当答案的。所以这里宁可让上游把
+    `truncated` 说给我们听，也不接一个悄悄截过的分页；真被截了，日志会喊。
+    """
+    client, failure = _client_sync()
+    if failure is not None:
+        return failure
+    if client is None:
+        return _unavailable()
+    try:
+        fn = _require_method(client, tag)
+    except Exception as exc:  # noqa: BLE001 —— 没有这面的旧 checkout 要说人话
+        return _fail(tag, exc)
+    kwargs.setdefault("limit", None)
+    out = _fold_call(tag, _call_with_cap(fn, kwargs, tag))
+    if out.get("available") and out.get("truncated"):
+        logger.warning("上游 %s 返回被截断：%s/%s 行——浏览面板能画，但拿它做"
+                       "入库计数会偏少", tag, out.get("returned"), out.get("total"))
+    return out
+
+
+def upstream_browse_all_rows(namespace: Any = "*", columns=None) -> Dict[str, Any]:
+    """整片浏览，形状 `{available, rows, total, returned, truncated,
+    namespaces, store_dir, scoped}`。同步入口，折叠形状同 `upstream_delete*`。
+
+    这面存在的原因是 gateway 的 `browse_*` 一直是"行级"原语，而它原先只认
+    本地库：搜索/写/删都接了上游之后，"哪些行还没入库"这种问题就会一半走上游
+    一半走本地，两半的答案还不一样——那比谁都没接更糟。
+    """
+    kwargs = dict(_scope_kwargs(namespace))
+    # 投影：像"每天各多少条"这种计数只要 `occurred_at` 一列，却要付整行的钱。
+    # 上游的整行面认 `columns=`，所以这里给它一条明路——少拿的不是"大概"，
+    # 是"计数根本不需要的那些列"，返回的行数与口径一个字都不变。
+    if columns:
+        kwargs["columns"] = list(columns)
+    return _browse("all_rows", kwargs)
+
+
+def upstream_browse_rows_for_source(namespace: Any, source_id: str) -> Dict[str, Any]:
+    """一个 source 的全部行（每个 chunk + 那条 summary 行）。折叠形状同上。
+
+    `source_id="*"` 由上游拒（它的删除面也拒这个），我们原样转达，不自建一套
+    拒绝话——理由在 `upstream_delete_where` 的注释里说过了。
+    """
+    kwargs = _scope_kwargs(namespace)
+    kwargs["source_id"] = str(source_id or "")
+    return _browse("rows_for_source", kwargs)
+
+
 # ----------------------------------------------------- MCP 决策面（可选，默认关）
 
 def _decision_gate() -> Dict[str, Any]:
@@ -592,27 +714,45 @@ def _decision_gate() -> Dict[str, Any]:
     return {"enabled": True, "available": None, "store_root": _store_root_note()}
 
 
+_MCP_PIN_WARNED = False
+
+
 def _mcp_server_params():
     """从 settings.MCP_CONFIG["llm_memory"] 单源构建 stdio 参数——本文件
     不拼第二份 command/args/env。env 以 os.environ 为底再叠 config env
-    （mcp 库的默认环境合并丢 API key，必须显式并表）；MEMORY_DATA_DIR 与
-    上游 install.py 挂载块同形：父 env 有则已随 os.environ 带入，没有则
-    钉一个派生等价形状——注意我们**显式钉**它，而不是赌子进程继承到一个
-    恰好正确的 shell。"""
+    （mcp 库的默认环境合并会丢 API key，所以必须显式并表）。
+
+    这里**刻意不钉 MEMORY_DATA_DIR**：数据根由上游那套 paths 决定，一个消费者
+    替它选路，结局就是两套存储被悄悄并成一套——上游 README/AGENT-SETUP 里也是
+    同一条禁令。子进程照样继承 os.environ：用户真设了这个变量，上游认它；
+    没设，上游落回它自己的机器默认根，效果与"猜一个等价形状钉死"一样，
+    差别只在我们不必把那句话写进自己的代码。AR 递出去的是代码位置
+    （`_repo_src` 那条链），不是数据位置——这本来就是收敛的第一条边界。
+    """
     from mcp import StdioServerParameters
     from src.config.settings import MCP_CONFIG
     cfg = MCP_CONFIG.get("llm_memory") or {}
     command = cfg.get("command") or sys.executable
     args = list(cfg.get("args") or ["-m", "llm_memoryd.mcp", "--tools",
                                     ",".join(DECISION_TOOLS)])
-    env = {**os.environ, **(cfg.get("env") or {})}
+    cfg_env = dict(cfg.get("env") or {})
+    # 归属的那一句话在这里有个很安静的外科伤口：AR 递出去的是"代码在哪"，
+    # 而不是"数据在哪"。要是有人把 MEMORY_DATA_DIR / MEMORY_CONFIG 塞进这段
+    # config env，子进程就被钉到某个自定的根上——和 SDK 面各读一套还不吭声。
+    # 我们不悄悄删掉它（那是运维的选择），但要让它说出来：一次性的 warning，
+    # 比在注释里写一句"别忘了这条禁令"管用。
+    pinned = sorted(k for k in ("MEMORY_DATA_DIR", "MEMORY_CONFIG") if k in cfg_env)
+    if pinned:
+        global _MCP_PIN_WARNED
+        if not _MCP_PIN_WARNED:
+            _MCP_PIN_WARNED = True
+            logger.warning(
+                "MCP config env 里钉了 %s：决策面的子进程会按这个根找库，"
+                "可能和 SDK 面走的不是同一个存储——数据根的归属在上游，不在这里。",
+                "、".join(pinned))
+    env = {**os.environ, **cfg_env}
     if not env.get("PYTHONPATH"):
         env["PYTHONPATH"] = _repo_src() or ""
-    if not os.environ.get("MEMORY_DATA_DIR"):
-        # 等价形状：上游未设 MEMORY_DATA_DIR 时 data_dir()==~/.llm-memory
-        # （common/paths.py 实测）；显式钉死，脱离子 shell 的子进程与父进程
-        # 看同一个库，note 里也会把这个根显示出来。
-        env["MEMORY_DATA_DIR"] = os.path.join(os.path.expanduser("~"), ".llm-memory")
     return StdioServerParameters(command=command, args=args, env=env)
 
 

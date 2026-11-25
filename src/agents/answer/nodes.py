@@ -520,7 +520,10 @@ class AnswerNodes:
         logger.info("💬 [Generate] ========== 生成最终答案 ==========")
         logger.info("=" * 80)
 
-        user_query = state["user_query"]
+        # generate 与 plan 同源用改写后的查询：追问场景里 rewrite_query 已
+        # 把上下文补进问题里，以前这里直接取原始 user_query 等于把改写
+        # 成果在最后一跳丢掉——plan 选对了文档，答案却按没改写的原话生成。
+        user_query = state.get("rewritten_query") or state["user_query"]
         tool_results = state.get("tool_results", [])
 
         await self._send_progress(
@@ -535,6 +538,13 @@ class AnswerNodes:
             context_parts = []
             for tr in tool_results:
                 if not tr.get("success", False):
+                    # 失败工具不再静默跳过：聚合进答案前至少让日志里有
+                    # 一条"检索/搜索没成"，否则"全靠工具却一条没成"的
+                    # 答案看着和正常答案一模一样，只有用户蒙在鼓里。
+                    logger.warning(
+                        "⚠️ [Generate] 工具 %s 未成功，本段上下文已跳过: %s",
+                        tr.get("tool", "?"),
+                        str(tr.get("result", ""))[:200])
                     continue
                 result = tr.get("result", {})
                 if isinstance(result, dict):

@@ -30,9 +30,13 @@ class ChatService:
         self.current_session: Optional[Dict] = None
         self.progress_callback = None
 
-        # 按 session_id 注册的进度回调：多会话共享本单例时，避免回调被后到
-        # 的连接/请求覆写（websocket 侧注册/注销，chat 调用时查表取用）。
-        self._progress_callbacks: Dict[str, Any] = {}
+        # 按 session_id 注册的进度回调：值为 {token: callback} 而非单一
+        # 回调。连接才是回调的拥有者，不是消息——同一会话开着两个连接
+        # （双标签页很常见）时，键为 session 的旧"后到覆盖"写法会把先
+        # 注册的连接顶掉；任一连接断线注销又会把另一条还活着的连接
+        # 需要的整键抹掉。token 用 callback 的 id：同一回调对象重复
+        # 注册幂等，不同连接各自的闭包互不相干。
+        self._progress_callbacks: Dict[str, Dict[int, Any]] = {}
 
         # 仅用于校验手动选择的文档是否存在（AnswerAgent 实例缓存池，避免
         # 重复创建）；真正的问答走 Orchestrator，见 chat()。
@@ -306,23 +310,58 @@ class ChatService:
             traceback.print_exc()
             return {"answer": f"处理失败: {str(e)}", "references": [], "memory_hits": []}
 
-    def register_progress_callback(self, session_id: Optional[str], callback) -> None:
-        """按会话ID注册进度回调（websocket 连接建立/收到带会话ID的消息时调用）"""
-        if not session_id or callback is None:
-            return
-        self._progress_callbacks[str(session_id)] = callback
+    def register_progress_callback(self, session_id: Optional[str], callback):
+        """按会话注册进度回调，返回可摘除的 token（id(callback)）。
 
-    def unregister_progress_callback(self, session_id: Optional[str]) -> None:
-        """注销某个会话的进度回调（websocket 断开时调用）"""
-        if session_id:
-            self._progress_callbacks.pop(str(session_id), None)
+        同一回调对象重复注册幂等——websocket 每条消息都可能再递一遍
+        同一个闭包，若每次都是新条目，进度事件会被重复 fan-out 到同一
+        条连接。"""
+        if not session_id or callback is None:
+            return None
+        token = id(callback)
+        self._progress_callbacks.setdefault(str(session_id), {})[token] = callback
+        return token
+
+    def unregister_progress_callback(self, session_id: Optional[str], token=None) -> None:
+        """注销进度回调。带 token：只摘这条连接自己的那份；不带：整键
+        清空——那是 delete_session 这类"会话没了"的批量清理用的旧语义。"""
+        if not session_id:
+            return
+        key = str(session_id)
+        if token is None:
+            self._progress_callbacks.pop(key, None)
+            return
+        entries = self._progress_callbacks.get(key)
+        if entries:
+            entries.pop(token, None)
+            if not entries:
+                self._progress_callbacks.pop(key, None)
 
     def _resolve_progress_callback(self, session_id: Optional[str]):
-        """取该会话的进度回调；查不到时回退到全局 progress_callback"""
-        cb = None
+        """取该会话的进度回调；多条连接并存时返回 fan-out 广播，
+        查不到时回退到全局 progress_callback。"""
+        callbacks = []
         if session_id:
-            cb = self._progress_callbacks.get(str(session_id))
-        return cb or self.progress_callback
+            entries = self._progress_callbacks.get(str(session_id))
+            callbacks = list(entries.values()) if entries else []
+        if not callbacks:
+            return self.progress_callback
+        if len(callbacks) == 1:
+            return callbacks[0]
+
+        async def _fan_out(data):
+            # 一条连接的发送失败不许废掉其它连接；也不该把异常再抛回
+            # 事件源头——chat() 只是在"通知有人看进度"，不是事务的一部分。
+            for cb in callbacks:
+                try:
+                    res = cb(data)
+                    if res is not None:
+                        await res
+                except Exception:  # noqa: BLE001
+                    pass
+            return None
+
+        return _fan_out
 
     def reset(self, session_id: Optional[str] = None):
         """重置指定会话的消息历史

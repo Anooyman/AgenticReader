@@ -79,7 +79,7 @@ class AnswerAgent(AgentBase):
     - current_doc/manual_selected_docs 作为上下文提示传给 generate
     """
 
-    def __init__(self, doc_name: str = None, provider: str = 'openai', progress_callback=None):
+    def __init__(self, doc_name: str = None, provider: Optional[str] = None, progress_callback=None):
         super().__init__(name="AnswerAgent", provider=provider)
 
         # 当前文档上下文

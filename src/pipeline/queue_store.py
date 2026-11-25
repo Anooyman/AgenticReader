@@ -105,6 +105,10 @@ def reset_stale_in_progress(queue: dict, item_type: str = None) -> int:
         if item_type is not None and item.get("type") != item_type:
             continue
         item["pipeline_status"] = "pending"
+        # 每次"处理中→超时回炉"也记一次 attempt：进程反复被杀（不经过
+        # fail_item）的条目以前会在 pending↔in_progress 之间无限循环，
+        # 永远够不到 MAX_ATTEMPTS=3 的 failed_permanent 门槛。
+        item["attempts"] = int(item.get("attempts") or 0) + 1
         count += 1
     return count
 

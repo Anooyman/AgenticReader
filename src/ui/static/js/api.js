@@ -411,6 +411,11 @@ const API = (function () {
             async action(jobId, act, options = {}) {
                 return request('/api/v1/jobs/' + encodeURIComponent(jobId) + '/' + act,
                     withDefaults({ method: 'POST', useDetailError: true }, options));
+            },
+
+            async remove(jobId, options = {}) {
+                return request('/api/v1/jobs/' + encodeURIComponent(jobId),
+                    withDefaults({ method: 'DELETE', useDetailError: true }, options));
             }
         },
 

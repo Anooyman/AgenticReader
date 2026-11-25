@@ -125,7 +125,7 @@ def check_already_indexed(doc_name: str) -> bool:
 async def index_pdf_document(
     pdf_name: str,
     force_reindex: bool = False,
-    provider: str = 'openai',
+    provider: Optional[str] = None,
     pdf_preset: str = 'high',
     agent_factory=None
 ) -> bool:
@@ -135,7 +135,10 @@ async def index_pdf_document(
     Args:
         pdf_name: PDF 文件名（包含 .pdf 扩展名）
         force_reindex: 是否强制重新索引
-        provider: LLM 提供商 ('azure', 'openai', 'ollama', 'gemini')
+        provider: LLM 提供商 ('azure', 'openai', 'ollama', 'gemini')。缺省
+            None 走 settings.resolve_provider 链（显式 > app_config.json >
+            env PROVIDER > openai）——这里以前写死 'openai'，等于 CLI 索引
+            一条路无视配置；统一入口的纪律在构造点上也要成立。
         pdf_preset: PDF 转图片质量预设 ('fast', 'balanced', 'high', 'ultra')
         agent_factory: 可选的 agent 工厂，形如 factory(provider=..., pdf_preset=...)
             -> agent 实例。为 None 时在函数体内延迟 import 默认的 IndexingAgent，
@@ -148,8 +151,15 @@ async def index_pdf_document(
         logger.error("❌ DATA_ROOT 未定义")
         return False
 
-    # 提取文档名（不含扩展名）
-    doc_name = pdf_name.replace(".pdf", "")
+    # provider 归一交给 resolve_provider：None/空 → 配置链，显式值原样采纳
+    from src.config.settings import resolve_provider  # 函数级：与 agents 解耦的纪律一致
+    provider = resolve_provider(provider)
+
+    # 提取文档名（不含扩展名）。用 normalize_doc_name 与 delete_service /
+    # path_guard 同一口径：只在结尾剥一次 .pdf——replace 会把名字中间的
+    # ".pdf" 也吃掉，索引名和删除名就分叉了。
+    from src.utils.path_guard import normalize_doc_name
+    doc_name = normalize_doc_name(pdf_name)
 
     # 检查是否已索引
     if not force_reindex and check_already_indexed(doc_name):
@@ -243,9 +253,10 @@ def select_pdf_interactive() -> Optional[str]:
 
     # 显示 PDF 文件列表
     print("可用的 PDF 文件：\n")
+    from src.utils.path_guard import normalize_doc_name
     for idx, pdf_file in enumerate(pdf_files, 1):
-        # 检查是否已索引
-        doc_name = pdf_file.replace(".pdf", "")
+        # 检查是否已索引（与 delete_service 同一口径的基名）
+        doc_name = normalize_doc_name(pdf_file)  # 统一口径
         indexed_status = "✓ 已索引" if check_already_indexed(doc_name) else "  未索引"
         print(f"  [{idx}] {pdf_file} {indexed_status}")
 

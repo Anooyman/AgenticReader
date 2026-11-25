@@ -14,6 +14,7 @@ bind_tools）驱动工具调用循环，而不是像 LLM-Memory 那样直接用 
 的裸 dict 工具调用格式——复用本项目已有的 LLM 抽象层（src/agents/search/
 utils.py 的 SimpleMCPClient 是同一个模式的先例）。
 """
+import asyncio
 import logging
 import re
 from typing import Any, Dict, List, Optional
@@ -277,7 +278,10 @@ async def agentic_search(
 
         for call in tool_calls:
             tool_calls_made += 1
-            result = dispatch_tool_call(call["name"], call.get("args") or {}, vs, llm, namespace, all_seen)
+                        # 同步检索/嵌入经 to_thread 出循环线程（与 ingest 本地路同纪律）。
+            result = await asyncio.to_thread(
+                dispatch_tool_call, call["name"], call.get("args") or {},
+                vs, llm, namespace, all_seen)
             messages.append(ToolMessage(content=_to_json(result), tool_call_id=call["id"]))
 
         # ---- 强制的自我评估步骤：本轮结果是否足以回答问题 ----

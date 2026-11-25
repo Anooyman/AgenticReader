@@ -25,3 +25,13 @@ async def post_cancel(job_id: str):
     if not outcome.get("ok"):
         raise HTTPException(status_code=400, detail=outcome.get("error", "取消失败"))
     return outcome
+
+
+@router.delete("/{job_id}")
+async def remove_job(job_id: str):
+    """删除一条已结束的任务记录——失败/中断的任务不该在侧栏里长住。
+    运行中的拒绝（400），要先走 cancel，避免"记录删了、活还在跑"。"""
+    outcome = await job_runner.delete_job(job_id)
+    if not outcome.get("ok"):
+        raise HTTPException(status_code=400, detail=outcome.get("error", "删除失败"))
+    return outcome

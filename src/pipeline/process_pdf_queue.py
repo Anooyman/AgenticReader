@@ -20,7 +20,6 @@ process_web_queue 共用，抽在 src/pipeline/common.py；本文件只留 pdf �
 import argparse
 import asyncio
 import json
-import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -71,10 +70,14 @@ def find_registered_doc(registry: dict, doc_name: str):
 
 
 def download_pdf(pdf_url: str, dest_path: Path) -> None:
+    # SSRF 护栏与 briefs /fetch-pdf 一侧同规则（src/utils/ssrf_guard.py 单源）：
+    # scheme 限 http(s)、主机解析后过内网黑名单、重定向逐跳复验、响应体上限。
+    # 以前这里是 urllib 默认跟随重定向 + 无地址校验 + 无大小上限——批处理
+    # 入口被投喂恶意 pdf_url 时可打内网/无上限拉流，与 UI 侧加固面不一致
+    # （2026-11-25 审计对齐）。失败抛 ValueError，由逐条记账层接住。
+    from src.utils.ssrf_guard import fetch_to_file
     dest_path.parent.mkdir(parents=True, exist_ok=True)
-    req = urllib.request.Request(pdf_url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=60) as resp, open(dest_path, "wb") as out:
-        out.write(resp.read())
+    fetch_to_file(pdf_url, str(dest_path), timeout=60)
 
 
 async def index_document(doc_name: str, pdf_path: Path, provider: str):

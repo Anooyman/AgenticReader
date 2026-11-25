@@ -167,6 +167,10 @@ async def scrape_url_tool(
     # 只在提供了 user_agent 时才添加
     if user_agent:
         config_kwargs["user_agent"] = user_agent
+    # proxy 以前在这里被静默丢弃——签名收了它，config 却没拿到，
+    # 用户以为走了代理实际是直连。字段现已在 ScraperConfig 上补齐。
+    if proxy:
+        config_kwargs["proxy"] = proxy
 
     config = ScraperConfig(**config_kwargs)
 

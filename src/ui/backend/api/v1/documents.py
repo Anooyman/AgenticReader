@@ -16,7 +16,7 @@ from src.core.document_management.delete_service import (
     DeleteItem,
     delete_document_service,
 )
-from src.utils.path_guard import safe_path
+from src.utils.path_guard import safe_path, normalize_doc_name
 
 router = APIRouter()
 
@@ -227,7 +227,7 @@ async def _index_document_task(doc_name: str, provider: str, pdf_preset: str):
         from src.agents.indexing import IndexingAgent
 
         # 去掉 .pdf 后缀
-        doc_name_clean = doc_name.replace('.pdf', '')
+        doc_name_clean = normalize_doc_name(doc_name)  # 统一口径：只在结尾剥一次，不吞名字中间的 .pdf
         pdf_path = PDF_DIR / doc_name
 
         # 创建索引代理

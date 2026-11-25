@@ -7,7 +7,15 @@ from .constants import PathConstants, PDFConstants, get_data_root
 
 logger = logging.getLogger(__name__)
 
-load_dotenv()
+# 把 .env 的位置**算**出来，而不是让 dotenv 去找。
+#
+# `load_dotenv()` 靠调用栈的源文件往上摸，这在一半的启动方式下会摸空：
+# 摸空之后它一声不响，进程里就是"没有这个变量"，于是寻址悄悄退成本地——
+# 屏幕上什么都不会发生，测试也照样全绿（测试进程里 env 常常是手动设的）。
+# 项目根在 import 的时候就能定下来，所以这里直接指到它下面那份 .env。
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PROJECT_ENV_FILE = os.path.join(_PROJECT_ROOT, ".env")
+load_dotenv(PROJECT_ENV_FILE)
 
 # ---- 上游 LLM-Memory 的连接层配置（env 的唯一读取点）----
 # LLM_MEMORY_REPO 取代了退役 webui 桥的旧地址常量：它不再是"一个 webui
@@ -315,6 +323,6 @@ PDF_IMAGE_CONFIG = {
 # ==================== 跨文档检索配置 ====================
 CROSS_DOC_CONFIG = {
     "max_parallel_retrievals": 3,      # 最大并行检索数
-    "retrieval_timeout": 1200,          # 单个检索超时（秒）
+    "retrieval_timeout": 600,           # 单个检索超时（秒）：须小于 Orchestrator 900s 整轮预算，否则墙钟护栏被单文档内层超时反向击穿
     "max_iterations": 10,              # 每个Retrieval Agent的最大迭代次数
 }

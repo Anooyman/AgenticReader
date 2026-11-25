@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ...config import JSON_DATA_DIR, PDF_DIR, DATA_DIR
 from src.utils.json_io import write_json_atomic
-from src.utils.path_guard import safe_path
+from src.utils.path_guard import safe_path, normalize_doc_name
 from src.config.settings import resolve_provider
 from ...services.task_service import task_manager
 
@@ -40,7 +40,7 @@ async def get_structure(doc_name: str) -> Dict[str, Any]:
         except ValueError as guard_e:
             raise HTTPException(status_code=400, detail=f"非法文档名: {guard_e}")
 
-        doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
+        doc_name_base = normalize_doc_name(doc_name)  # 与 delete_service 同一口径（只在结尾剥一次）
 
         # 构建 structure.json 路径
         structure_path = JSON_DATA_DIR / doc_name_base / "structure.json"
@@ -121,7 +121,7 @@ async def update_structure(
         except ValueError as guard_e:
             raise HTTPException(status_code=400, detail=f"非法文档名: {guard_e}")
 
-        doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
+        doc_name_base = normalize_doc_name(doc_name)  # 与 delete_service 同一口径（只在结尾剥一次）
 
         # 构建路径
         doc_json_folder = JSON_DATA_DIR / doc_name_base
@@ -266,7 +266,7 @@ async def rebuild_from_structure(
         except ValueError as guard_e:
             raise HTTPException(status_code=400, detail=f"非法文档名: {guard_e}")
 
-        doc_name_base = doc_name.replace('.pdf', '') if doc_name.endswith('.pdf') else doc_name
+        doc_name_base = normalize_doc_name(doc_name)  # 与 delete_service 同一口径（只在结尾剥一次）
 
         # 验证文档存在
         structure_path = JSON_DATA_DIR / doc_name_base / "structure.json"

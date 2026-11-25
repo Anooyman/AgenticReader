@@ -15,6 +15,7 @@ from pathlib import Path
 from ...config import PDF_DIR
 from src.config.settings import resolve_provider
 from src.core.document_management import DocumentRegistry
+from src.utils.path_guard import safe_path, normalize_doc_name
 from ...services.task_service import task_manager
 
 router = APIRouter()
@@ -35,7 +36,7 @@ async def _index_pdf_background(task_id: str, filename: str, pdf_path: Path):
         from src.agents.indexing import IndexingAgent
         from .config import load_config
 
-        doc_name_base = filename.replace('.pdf', '') if filename.endswith('.pdf') else filename
+        doc_name_base = normalize_doc_name(filename)  # 与 delete_service 同一口径（只在结尾剥一次）
 
         # 更新任务进度
         task_manager.update_task(task_id, progress=10, status="running")
@@ -103,14 +104,22 @@ async def index_pdf(filename: str, background_tasks: BackgroundTasks):
         任务信息
     """
     try:
-        # 检查PDF文件是否存在
-        pdf_path = PDF_DIR / filename
-        if not pdf_path.exists():
+        # 检查PDF文件是否存在。与 documents.py 的 /index 同一套守卫：
+        # safe_path 先做目录越界校验（它校验时会剥掉尾部 .pdf，所以只用来
+        # 验证，开文件仍用原文件名拼），挡住越界面之后再拼路径——此前这里
+        # 是 PDF_DIR / filename 裸拼，整个仓库"doc_name 必过 safe_path"的
+        # 纪律就数这个入口漏了。
+        try:
+            guarded = safe_path(PDF_DIR, filename)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"非法文件名: {e}")
+        pdf_path = guarded.parent / filename
+        if not pdf_path.exists() or not pdf_path.is_file():
             raise HTTPException(status_code=404, detail=f"PDF文件不存在: {filename}")
 
         # 检查是否已经索引
         registry = DocumentRegistry()
-        doc_name_base = filename.replace('.pdf', '') if filename.endswith('.pdf') else filename
+        doc_name_base = normalize_doc_name(filename)  # 与 delete_service 同一口径（只在结尾剥一次）
         if registry.get_by_name(doc_name_base):
             raise HTTPException(status_code=400, detail=f"文档已索引: {filename}")
 

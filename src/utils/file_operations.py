@@ -387,7 +387,10 @@ class AdvancedFileOperations(SafeFileOperations):
             with open(validated_path, 'rb') as f:
                 raw_data = f.read(10240)  # 读取前10KB
                 encoding_result = chardet.detect(raw_data)
-                detected_encoding = encoding_result.get('encoding', 'utf-8')
+                # chardet 认不出来时 encoding 键存在但值是 None——直接
+                # 拿来 open(encoding=None) 会 TypeError，比"没装 chardet"
+                # 那条降级路更糟。认不出就等于默认 UTF-8。
+                detected_encoding = encoding_result.get('encoding') or 'utf-8'
                 confidence = encoding_result.get('confidence', 0)
 
             logger.debug(f"检测到文件编码: {detected_encoding} (置信度: {confidence:.2f})")

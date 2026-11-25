@@ -100,14 +100,23 @@ def create_mcp_server() -> Server:
         """
         result = None
 
-        if name == "scrape_url":
-            result = await scrape_url_tool(**arguments)
-        elif name == "scrape_batch":
-            result = await scrape_batch_tool(**arguments)
-        elif name == "download_resources":
-            result = await download_resources_tool(**arguments)
-        else:
-            result = {"success": False, "error": f"Unknown tool: {name}"}
+        try:
+            if name == "scrape_url":
+                result = await scrape_url_tool(**arguments)
+            elif name == "scrape_batch":
+                result = await scrape_batch_tool(**arguments)
+            elif name == "download_resources":
+                result = await download_resources_tool(**arguments)
+            else:
+                result = {"success": False, "error": f"Unknown tool: {name}"}
+        except TypeError as e:
+            # 未知参数键、构造 config 前的参数形状错误都会从这里冒出来。
+            # 工具层的契约是"错误走 success:false + error 字段"，dispatcher
+            # 必须兜住最后一道——否则 MCP 侧看到的是一条没有正文的
+            # internal error，模型和 UI 都拿不到可行动的原因。
+            result = {"success": False, "error": f"Invalid arguments for {name}: {e}"}
+        except Exception as e:  # noqa: BLE001 — 同上：归一成 error 字段而非崩 server
+            result = {"success": False, "error": f"{type(e).__name__}: {e}"}
 
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
 

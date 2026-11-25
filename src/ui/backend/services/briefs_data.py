@@ -19,6 +19,37 @@ from src.pipeline.queue_store import load_queue, new_queue_item, queue_transacti
 
 logger = logging.getLogger(__name__)
 
+# 读取记忆时的失败要留个记号。理由和 memory API 里那条分界一样：一次存储故障
+# 被界面读成"这里没有记忆"，比一次干脆的报错贵得多——但这一层不能直接抛，
+# 因为日期格只是这半个信息，`heavy_done` 那半边还指望这个函数活着返回。
+# 折中是把"我读失败了"记下来交给上层去说，而不是在这里替页面决定沉默还是报警。
+#
+# 语义钉在"进程级尽力报告"（2026-11-25 尾巴⑧定案，别再当并发安全的数据看）：
+# 这是全局表 + 每请求开头 clear，两个请求同时在读就可能互抹记号或互相顶锅。
+# 它只喂 /memory-status 的 degraded 旗标这一个展示字段，数据读写路径不受
+# 牵连；单用户场景就是准确的，并发并发误报一次"坏了/好了"属于可接受代价。
+# 真要升级成请求级传参，改法是把 dict 当参数从 get_memory_status 一路递到
+# date_memory_counts——现在没人付这个改动成本，就别把它写成"线程安全的
+# 错误账本"。
+_READ_ERRORS: dict = {}
+
+
+def _note_read_error(where: str, exc: Exception) -> None:
+    _READ_ERRORS[where] = f"{type(exc).__name__}: {exc}"
+
+
+def read_errors() -> dict:
+    """本轮进程里已知的记忆读取失败（键是位置，值是原因）。成功一次就清掉
+    对应那条——不能让它留成一个永久的"degraded"，否则第一次故障之后的每次
+    成功都会被误读成还在坏着。"""
+    return dict(_READ_ERRORS)
+
+
+def clear_read_errors() -> None:
+    _READ_ERRORS.clear()
+
+
+
 # 卡片状态。not_loaded 之外的都意味着这条已经进过 queue。
 STATUS_NOT_LOADED = "not_loaded"      # 还没点过加载
 STATUS_QUEUED = "queued"              # 在 queue 里等待/正在处理
@@ -38,17 +69,23 @@ def date_memory_counts() -> dict:
     把 65 天全标成"已入库"的假状态（审计实锤：23 个 done ↔ 0 行 AATF，
     教训随桥一起留下）。
     AATF 行读取失败只 warning + 跳过，不拖垮整个接口（heavy_done 仍要
-    给出）。两处都是小表/字典扫描，不解析 HTML。
+    给出）。**"这里只是扫个小表"这句曾经是真的，现在已经不改口就会骗人**：
+    接上上游之后这条 browse 一次要过 5200 多行，整行捞一遍实测 5.6 s，
+    而这段循环只用到 `occurred_at` 一列——所以按列投影走，实测降到约 1.9 s。
+    本地那条路仍按整行走（本来就快），投影只在上游生效，见 gateway.browse_all_rows。
     """
     counts = {}
     try:
         from src.memory import gateway  # 函数级 import：UI 服务层不往模块级拖记忆内核
-        for row in gateway.browse_all_rows("AATF"):
+        for row in gateway.browse_all_rows("AATF", columns=("source_id", "occurred_at", "chunk_hash")):
             day = str(row.get("occurred_at") or "")[:10]
             if day:
                 counts.setdefault(day, {"aatf": 0, "heavy_done": 0})["aatf"] += 1
-    except Exception:  # noqa: BLE001 - 库缺失/损坏不该让简报页报错
+    except Exception as exc:  # noqa: BLE001 - 库缺失/损坏不该让简报页报错
         logger.warning("date_memory_counts: 读取 AATF 行失败，该维度按 0 计", exc_info=True)
+        _note_read_error("date_memory_counts", exc)
+    else:
+        _READ_ERRORS.pop("date_memory_counts", None)
     for item in load_queue().values():
         day = str(item.get("coverage_date") or "")
         if day and item.get("pipeline_status") == "done":
@@ -134,13 +171,20 @@ def _lookup_doc_state(item_id: str, exact: dict, siblings: dict) -> dict:
 def _local_memory_source_ids(namespace: str) -> set:
     try:
         from src.memory import gateway
-        return {
-            str(r.get("source_id") or "")
-            for r in gateway.browse_all_rows(namespace)
-            if r.get("source_id")
-        }
-    except Exception:  # noqa: BLE001
+        rows = gateway.browse_all_rows(namespace, columns=("source_id",))
+    except Exception as exc:  # noqa: BLE001 - 页面还能开，但得留下记录
+        logger.warning("source_id 集合取不到（ns=%s）：%s: %s", namespace,
+                       type(exc).__name__, exc)
+        _note_read_error(f"local_memory_source_ids:{namespace}", exc)
         return set()
+    # 读成功就把这一格的记号撤掉——否则一次故障之后，所有成功读取都会继续
+    # 被这行代码以外的地方读成"还在坏着"。
+    _READ_ERRORS.pop(f"local_memory_source_ids:{namespace}", None)
+    return {
+        str(r.get("source_id") or "")
+        for r in rows
+        if r.get("source_id")
+    }
 
 
 def _summary_exists(item_id: str, item_type: str) -> bool:

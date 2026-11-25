@@ -220,8 +220,11 @@ def preflight(probe: bool = True) -> Tuple[bool, List[str]]:
 
     `probe=False` 是给 dry-run 用的"只看配置面"版本：只核 env 有没有配、
     路径指得对不对，**不构造 MemoryClient**。构造 client 看着无害，其实会
-    让上游按自己的规矩把 store 目录撑开（`~/.llm-memory/` 下多出
-    ingest_state 之类的空脚手架，mtime 也跟着动）。dry-run 既然写明零写入，
+    让上游按自己的规矩把 store 目录撑开——注意**副作用的准确位置**：构造
+    MemoryClient 本身什么都不留（实测指到不存在的路径后目录还不存在），是第一个
+    读面调用（status / namespaces / all_rows）会 connect 过去，于是
+    `~/.llm-memory/` 下多出 ingest_state 之类的空脚手架，mtime 也跟着动；表不会被
+    建出来，建表是 ensure_ready 的权限。dry-run 既然写明零写入，
     就不该留下"上游被谁碰过"的痕迹；真要跑 --apply 时自然会去探一次。
     """
     reasons: List[str] = []

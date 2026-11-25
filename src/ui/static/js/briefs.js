@@ -1020,6 +1020,17 @@
             btn.type = 'button';
             btn.addEventListener('click', () => jobAction(job.job_id, 'retry', btn, '重排队…'));
             actions.appendChild(btn);
+            const del = dom('button', 'btn btn-ghost btn-xs job-delete-btn', '删除');
+            del.type = 'button';
+            del.addEventListener('click', () => jobDelete(job.job_id, del));
+            actions.appendChild(del);
+        } else if (job.status === 'done' || job.status === 'cancelled') {
+            // 已结束的都给删——侧栏不是历史档案，攒着旧条目只会让人以为
+            // 系统在积压什么；删除只动账本行，不碰已入库的数据。
+            const del = dom('button', 'btn btn-ghost btn-xs job-delete-btn', '删除');
+            del.type = 'button';
+            del.addEventListener('click', () => jobDelete(job.job_id, del));
+            actions.appendChild(del);
         }
 
         card.appendChild(top);
@@ -1028,6 +1039,20 @@
         else if (job.detail) card.appendChild(dom('div', 'job-card-detail', job.detail));
         if (actions.children.length) card.appendChild(actions);
         return card;
+    }
+
+    async function jobDelete(jobId, btn) {
+        btn.disabled = true;
+        btn.textContent = '删除中…';
+        try {
+            await API.jobs.remove(jobId);
+            toast('任务记录已删除', 'success');
+        } catch (err) {
+            btn.disabled = false;
+            btn.textContent = '删除';
+            toast(`删除任务失败：${err.message}`, 'error');
+        }
+        await loadJobs(false);
     }
 
     async function jobAction(jobId, action, btn, busyText) {
@@ -1175,12 +1200,16 @@
             renderEverything();
             return;
         }
+        // 首屏只要卡片本身：它是本地文件，本来就该是毫秒级的东西。
+        // `include_state` 会把"这条进没进简报库/文档库状态"一并算出来——那是
+        // 一次要过记忆库的查询，放在这里就等于让整页等它。所以拆成两遍：
+        // 先画出来，再补状态徽章。补不到也不算失败，屏幕上的东西不能倒回去。
         let data = null;
         try {
-            data = await API.briefs.cards(state.currentDate, { includeState: true, compact: true, checkOk: false });
+            data = await API.briefs.cards(state.currentDate, { compact: true, checkOk: false });
         } catch (err) {
             try {
-                data = await API.briefs.cards(state.currentDate, { checkOk: false });
+                data = await API.briefs.cards(state.currentDate, { includeState: true, compact: true, checkOk: false });
             } catch (err2) {
                 state.loadError = `加载 ${state.currentDate} 简报内容失败：${err2.message || err2}`;
                 toast(state.loadError, 'error');
@@ -1200,6 +1229,26 @@
         state.activeMonthAnchor = toDateObj(state.currentDate);
         state.monthOffset = 0;
         renderEverything();
+
+        // 第二遍：状态。不 await——这一屏已经算出来了，剩下的活儿放后台补。
+        const dateForState = state.currentDate;
+        (async () => {
+            let withState = null;
+            try {
+                withState = await API.briefs.cards(dateForState, { includeState: true, compact: true, checkOk: false });
+            } catch (err) {
+                return;   // 状态拿不到就维持现状：没有徽章也比把卡片弄没了强
+            }
+            if (state.currentDate !== dateForState) return;   // 用户已经翻页了，这趟就不必再改
+            const byId = new Map();
+            (withState.pdf || []).concat(withState.web || []).forEach((c) => byId.set(c.id || c.item_id, c));
+            let touched = false;
+            (state.cards || []).forEach((c) => {
+                const hit = byId.get(c.id || c.item_id);
+                if (hit && c.doc_state !== hit.doc_state) { c.doc_state = hit.doc_state; touched = true; }
+            });
+            if (touched) renderEverything();
+        })();
     }
 
     async function loadJobs(updateCardsIfTransition = true) {

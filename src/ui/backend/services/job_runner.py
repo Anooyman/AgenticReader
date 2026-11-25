@@ -57,10 +57,15 @@ TIMEOUTS = {
     "process_web": 15 * 60,
     "sync_memory": 30 * 60,
     "render_report": 5 * 60,
-    # 轻量入库直写 A 自库：解析 HTML + 串行 embedding，一天几分钟；
-    # 原 bridge 时代留的 20min 网络兜底余量随桥退役收紧——超 10min 基本
-    # 就是本机磁盘/网络 embedding 端点的问题，不是"慢"。
-    "load_brief_date": 10 * 60,
+    # 轻量入库：一天 ≈ 数十张卡片，每张递一次上游 `ingest(source_type=brief)`
+    # 走 agentic 抽取（实测单份摘要级文档 ~94s，卡片量级同阶）。
+    # 这里曾是 10min——那是"零 LLM 本地直写，解析 HTML+串行 embedding，一天
+    # 几分钟"旧口径的遗产；收敛把这张卡的真实成本抬到小时级，预算却没跟上，
+    # 2026-11-25 用户按 22/23/24 三天全部精确 600s 撞超时（任务标 failed、
+    # 而超时前已递出去的卡片已落库，memory 里看得到内容——正是这条脱节的
+    # 直接证据）。按 57 卡/天 × ~60-90s 给到 60min；上游 hash-dedup 幂等，
+    # 真超了也只是断点续跑的问题，重试自动续上。
+    "load_brief_date": 60 * 60,
 }
 
 ACTIVE_STATUSES = ("queued", "running", "cancelling")
@@ -207,6 +212,26 @@ async def cancel_job(job_id: str) -> dict:
     return {"ok": True}
 
 
+async def delete_job(job_id: str) -> dict:
+    """从账本删除一条已结束的任务（done/failed/interrupted/cancelled）。
+
+    还在排队/运行中的不收——先取消。不是洁癖：账本行没了，那条任务照跑，
+    跑完再想改状态就只能靠"找不到行就什么都不做"兜底，而用户在任务侧
+    栏看到的就是"任务消失了但活还在干"。想清空就先取消再删，一步都不许跳。
+    """
+    async with _state_lock:
+        data = _load_jobs()
+        job = next((j for j in data["jobs"] if j["job_id"] == job_id), None)
+        if job is None:
+            return {"ok": False, "error": f"任务不存在: {job_id}"}
+        if job["status"] in ACTIVE_STATUSES:
+            return {"ok": False,
+                    "error": "任务还在排队/运行中，请先取消再删除"}
+        data["jobs"] = [j for j in data["jobs"] if j["job_id"] != job_id]
+        _save_jobs(data)
+    return {"ok": True}
+
+
 # ---- 各类任务的执行 ----
 
 async def _run_job(job: dict) -> dict:
@@ -269,10 +294,11 @@ async def _run_job(job: dict) -> dict:
         return {"ok": True}
 
     if kind == "load_brief_date":
-        # 把一天的简报灌进 A 自库 memory（namespace AATF）。
-        # target 就是一个 YYYY-MM-DD；gateway.load_brief_date 恒走
-        # local→brief_ingest 直写自库（外部桥 driver 已退役，白名单只剩
-        # local，env 旧值 warning→local）。
+        # 把一天的简报灌进记忆（namespace AATF）。
+        # target 就是一个 YYYY-MM-DD；driver 白名单只剩 local（桥已退役），
+        # 但"写进哪个库"仍由 gateway 的 auto 路由决定：上游可用→逐卡递
+        # upstream ingest(source_type=brief)（agentic，这就是下面预算的由来），
+        # 否则本地直写。
         from src.memory import gateway
 
         try:
@@ -281,7 +307,9 @@ async def _run_job(job: dict) -> dict:
             )
         except asyncio.TimeoutError:
             return {"error": f"加载简报 {target} 超时"
-                             f"（>{TIMEOUTS['load_brief_date']}s）"}
+                             f"（>{TIMEOUTS['load_brief_date']}s）"
+                             "——已递出的卡片已入库，重试会续上未入库的"
+                             "（幂等，不重复）"}
         except Exception as e:  # noqa: BLE001
             return {"error": f"加载简报 {target} 失败: {e}"}
 
@@ -346,6 +374,10 @@ async def run_forever() -> None:
             finally:
                 _running_job_id = None
                 _running_task = None
+                # 任务无论如何收尾都要把取消标志清掉：只在 CancelledError
+                # 分支复位，就会留下"cancel 落在正常完成之后"的窗口——
+                # 标志 True 残留，下一轮把一次正常结束误读成用户取消。
+                _job_cancel_requested = False
 
             if "error" in outcome:
                 await _update_job(job_id, status="failed", finished_at=_now(), error=outcome["error"])

@@ -2,6 +2,7 @@
 """Configuration dataclass for the web scraper"""
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 from scraper.exceptions import InvalidConfigException
 
 
@@ -27,6 +28,11 @@ class ScraperConfig:
     )
     max_retries: int = 3
     retry_delay: float = 2.0
+    # 浏览器代理地址（"http://host:port"）。BrowserManager.launch_browser
+    # 本就按 config.proxy 接线了 launch_options，缺的是这个字段本身——
+    # 没有它，工具层传下来的 proxy 要么 TypeError（download 面），
+    # 要么静默丢弃（scrape 面）。
+    proxy: Optional[str] = None
 
     def __post_init__(self):
         """Validate configuration values"""

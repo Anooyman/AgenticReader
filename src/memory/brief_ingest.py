@@ -24,8 +24,10 @@
 两条路都**不 import src.ui**：本模块住记忆内核侧，卡片解析复用
 pipeline.briefs_parser（与批处理同一 item_id 推导，两边算出的 ID 恒一致）。
 """
+import asyncio
 import hashlib
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -257,6 +259,24 @@ def _card_summary_json(card: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _brief_concurrency() -> int:
+    """卡片并发度：env MEMORY_BRIEF_CONCURRENCY，默认 3，钳位 1–8。
+    非法值按默认跑并留 warning——配置面的事说一声就好，不许让一天入库
+    因为一个打错的数字整批停摆。"""
+    raw = (os.environ.get("MEMORY_BRIEF_CONCURRENCY") or "").strip()
+    if not raw:
+        return 3
+    try:
+        n = int(raw)
+    except ValueError:
+        logger.warning("MEMORY_BRIEF_CONCURRENCY=%r 不是整数，按默认 3 跑", raw)
+        return 3
+    clamped = max(1, min(8, n))
+    if clamped != n:
+        logger.warning("MEMORY_BRIEF_CONCURRENCY=%d 越界，钳到 %d", n, clamped)
+    return clamped
+
+
 def _stage_brief_card(card: Dict[str, Any]) -> str:
     """把一张卡片写成中转 JSON，返回路径。
 
@@ -299,6 +319,18 @@ async def load_brief_date_upstream(
         ——那还是双写。
 
     返回契约与 local 版逐字相同 {"loaded","skipped","errors"}。
+
+    **卡片并发**（2026-11-25）：一天 ~57 张卡、每张一轮 agentic 抽取，
+    串行意味着冷的一天要 1–2 小时——那是任务侧栏"running 转一小时"的直接
+    原因。这里改成最多 N 张同时在飞：
+      * N 由 env `MEMORY_BRIEF_CONCURRENCY` 控制，默认 3，钳位 1–8
+        （调成 1 就是原串行行为，留一条无代码回退）；
+      * 并发只是把 N 张卡的请求同时递出去，逐卡语义一字不变：每卡仍各自
+        一次 ingest、各记各的 chunks_added/失败、幂等仍归上游 hash-dedup、
+        写失败仍不回落本地；
+      * 错误收集按卡片原顺序落账，并发不影响"这天进没进"的判据。
+    并发打的是同一个上游端点，N 路抽取共享它的 LLM 通道——快慢最终由
+    端点侧的吞吐决定，端点要是扛不住，调 N 比改代码更有用。
     """
     from src.pipeline.paths import BRIEFS_DIR
     from src.pipeline.briefs_parser import parse_briefs_dir
@@ -313,31 +345,34 @@ async def load_brief_date_upstream(
         logger.info("上游轻量入库 %s：这一天没有解析到卡片，跳过", date)
         return {"loaded": False, "skipped": True, "errors": []}
 
-    loaded_any = False
-    errors: List[str] = []
+    sem = asyncio.Semaphore(_brief_concurrency())
 
-    for card in cards:
+    async def one(card):
+        """一张卡的全部事务：staging → ingest → 记账。返回值
+        (新增没, 该卡的错误列表)，错误留在自己的返回值里，聚合时按序。"""
         item_id = str(card.get("item_id") or "")
         if not item_id:
-            errors.append("跳过一张缺 item_id 的卡片")
-            continue
-        try:
-            payload = await upstream.upstream_ingest(
-                _stage_brief_card(card), "brief", NAMESPACE_AATF, item_id)
-            if not payload.get("available"):
-                # 上游可用但这一单没写成：如实记一笔，不去写本地。
-                errors.append(f"{item_id}: {payload.get('note') or payload.get('error') or '无 note'}")
-                continue
-            report = payload.get("report") if isinstance(payload.get("report"), dict) else payload
-            added = int(report.get("chunks_added") or 0)
-            if added > 0:
-                loaded_any = True
-            logger.info("上游轻量入库 %s：%s 新增 %s / 跳过 %s",
-                        item_id, NAMESPACE_AATF, added,
-                        int(report.get("chunks_skipped") or 0))
-        except Exception as e:  # noqa: BLE001 —— 单卡失败不打断整天
-            errors.append(f"{item_id}: {e}")
-            logger.warning("上游轻量入库 %s 失败: %s", item_id, e)
+            return False, ["跳过一张缺 item_id 的卡片"]
+        async with sem:
+            try:
+                payload = await upstream.upstream_ingest(
+                    _stage_brief_card(card), "brief", NAMESPACE_AATF, item_id)
+            except Exception as e:  # noqa: BLE001 —— 单卡失败不打断整天
+                logger.warning("上游轻量入库 %s 失败: %s", item_id, e)
+                return False, [f"{item_id}: {e}"]
+        if not payload.get("available"):
+            # 上游可用但这一单没写成：如实记一笔，不去写本地。
+            return False, [f"{item_id}: {payload.get('note') or payload.get('error') or '无 note'}"]
+        report = payload.get("report") if isinstance(payload.get("report"), dict) else payload
+        added = int(report.get("chunks_added") or 0)
+        logger.info("上游轻量入库 %s：%s 新增 %s / 跳过 %s",
+                    item_id, NAMESPACE_AATF, added,
+                    int(report.get("chunks_skipped") or 0))
+        return added > 0, []
+
+    outcomes = await asyncio.gather(*(one(card) for card in cards))
+    loaded_any = any(added for added, _ in outcomes)
+    errors = [err for _, errs in outcomes for err in errs]
 
     return {"loaded": loaded_any, "skipped": not loaded_any and not errors,
             "errors": errors}

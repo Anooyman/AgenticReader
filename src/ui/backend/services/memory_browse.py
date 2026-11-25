@@ -22,8 +22,14 @@ from src.memory import gateway
 
 
 def _build_overview() -> Dict[str, Any]:
-    """全库统计：总量 + 每个 namespace 的条数/来源类型分布。"""
-    rows = gateway.browse_all_rows("*")
+    """全库统计：总量 + 每个 namespace 的条数/来源类型分布。
+
+    行计数走 `gateway.browse_all_rows_local`（本地库原语），**不走 auto 路由**：
+    fetch_overview 的口径是两账并列，这里若走路由版，本地那本账会被上游行数
+    冒充、上游计数再叠一层，同一份数报两遍。行级明细（`_build_namespace_list`）
+    才是走路由的"实际存在哪看哪"。
+    """
+    rows = gateway.browse_all_rows_local("*")
     by_ns: Dict[str, Dict[str, Any]] = {}
     for row in rows:
         ns = row.get("namespace") or "default"
@@ -119,7 +125,8 @@ def _delete_namespace(namespace: str) -> Dict[str, Any]:
 
 
 async def fetch_overview() -> Dict[str, Any]:
-    """总览：本地数一遍行，上游那一侧只借 `namespaces()` 的计数。
+    """总览：本地数一遍行（显式本地原语，不经 auto 路由），上游那一侧只借
+    `namespaces()` 的计数。
 
     收敛期两边各有自己的一份账，这里的口径是**并列不是相加**：
       * 两边都有的 ns → 本地 `total` 不动，多一个 `upstream_total`；
