@@ -76,7 +76,7 @@ AgenticReader 是基于大语言模型（LLM）的智能文档分析与问答工
 调用点各自小心。`local` 仍是有效的逃生口：这不是不许有备用方案，是不许没有备用
 方案却装作有。
 
-上游那侧需要的三个改动（delete facade、`source_type=brief` 枚举、`ingest` 的 `source_id` 透传）**现在都已在上游 main 里**：用户侧自己把它们提交了（`888f966` 把三件全部纳入、`f181999` 补 docs，已推 github/main，HEAD `f181999`；AR 侧探针对着新 HEAD 跑也是 15/15 过）。**这是用户侧的提交动作，不是本仓的**——本仓一条都没往上游合。`tools/upstream-patches/` 里那三片保留下来作**历史参照**：当初的路径是"先在 `/tmp` 干净克隆里叠 01 → 02 → 03 验一遍"（各自 `git apply --check` 干净通过、叠满后上游全量套件 2114 passed / 4 skipped 全绿，pyflakes 门与"不广告破坏性工具"那条 MCP 纪律都没被碰坏），验证完才由用户落进 main，所以现在没有"还得自己打补丁"这回事，也别把这三片当成待办清单。此前那句"三片还停在主干之外、要不要打上由用户自己定"的旧口径一并作废。怎么验的、验到了什么、没验到什么，仍记在 [tools/upstream-patches/README.md](tools/upstream-patches/README.md)；阶段划分与裁决记录在 [PLAN-MEMORY-CONVERGENCE.md](PLAN-MEMORY-CONVERGENCE.md)。
+上游那侧需要的三个改动（delete facade、`source_type=brief` 枚举、`ingest` 的 `source_id` 透传）**现在都已在上游 main 里**：用户侧自己把它们提交了（`888f966` 把三件全部纳入、`f181999` 补 docs，已推 github/main，HEAD `f181999`；AR 侧探对着新 HEAD 跑也是 15/15 过）。**这是用户侧的提交动作，不是本仓的**——本仓一条都没往上游合。`tools/upstream-patches/` 的副本已删——三件在上游既有，仓内留着没有继续存在的理由，需要回看当年的 diff 时 git 历史里捞。当时的路径是"先在 `/tmp` 干净克隆里叠 01 → 02 → 03 验一遍"（各自 `git apply --check` 干净通过、叠满后上游全量套件 2114 passed / 4 skipped 全绿，pyflakes 门与"不广告破坏性工具"那条 MCP 纪律都没被碰坏），验证完才由用户落进 main，所以现在没有"还得自己打补丁"这回事，也别把这三片当成待办清单。此前那句"三片还停在主干之外、要不要打上由用户自己定"的旧口径一并作废。阶段划分与裁决记录在 [PLAN-MEMORY-CONVERGENCE.md](PLAN-MEMORY-CONVERGENCE.md)。
 
 ### ♻️ 存量重灌（Phase 3 · `python -m src.memory.converge`）
 
