@@ -57,10 +57,15 @@ TIMEOUTS = {
     "process_web": 15 * 60,
     "sync_memory": 30 * 60,
     "render_report": 5 * 60,
-    # 轻量入库直写 A 自库：解析 HTML + 串行 embedding，一天几分钟；
-    # 原 bridge 时代留的 20min 网络兜底余量随桥退役收紧——超 10min 基本
-    # 就是本机磁盘/网络 embedding 端点的问题，不是"慢"。
-    "load_brief_date": 10 * 60,
+    # 轻量入库：一天 ≈ 数十张卡片，每张递一次上游 `ingest(source_type=brief)`
+    # 走 agentic 抽取（实测单份摘要级文档 ~94s，卡片量级同阶）。
+    # 这里曾是 10min——那是"零 LLM 本地直写，解析 HTML+串行 embedding，一天
+    # 几分钟"旧口径的遗产；收敛把这张卡的真实成本抬到小时级，预算却没跟上，
+    # 2026-11-25 用户按 22/23/24 三天全部精确 600s 撞超时（任务标 failed、
+    # 而超时前已递出去的卡片已落库，memory 里看得到内容——正是这条脱节的
+    # 直接证据）。按 57 卡/天 × ~60-90s 给到 60min；上游 hash-dedup 幂等，
+    # 真超了也只是断点续跑的问题，重试自动续上。
+    "load_brief_date": 60 * 60,
 }
 
 ACTIVE_STATUSES = ("queued", "running", "cancelling")
@@ -269,10 +274,11 @@ async def _run_job(job: dict) -> dict:
         return {"ok": True}
 
     if kind == "load_brief_date":
-        # 把一天的简报灌进 A 自库 memory（namespace AATF）。
-        # target 就是一个 YYYY-MM-DD；gateway.load_brief_date 恒走
-        # local→brief_ingest 直写自库（外部桥 driver 已退役，白名单只剩
-        # local，env 旧值 warning→local）。
+        # 把一天的简报灌进记忆（namespace AATF）。
+        # target 就是一个 YYYY-MM-DD；driver 白名单只剩 local（桥已退役），
+        # 但"写进哪个库"仍由 gateway 的 auto 路由决定：上游可用→逐卡递
+        # upstream ingest(source_type=brief)（agentic，这就是下面预算的由来），
+        # 否则本地直写。
         from src.memory import gateway
 
         try:
@@ -281,7 +287,9 @@ async def _run_job(job: dict) -> dict:
             )
         except asyncio.TimeoutError:
             return {"error": f"加载简报 {target} 超时"
-                             f"（>{TIMEOUTS['load_brief_date']}s）"}
+                             f"（>{TIMEOUTS['load_brief_date']}s）"
+                             "——已递出的卡片已入库，重试会续上未入库的"
+                             "（幂等，不重复）"}
         except Exception as e:  # noqa: BLE001
             return {"error": f"加载简报 {target} 失败: {e}"}
 
