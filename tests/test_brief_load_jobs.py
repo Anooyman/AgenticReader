@@ -194,3 +194,43 @@ def test_run_job_load_exception_maps_to_error(monkeypatch):
     out = _run_job(monkeypatch, boom=True)
     assert "失败" in out["error"]
     assert "轻量入库中途炸了" in out["error"]
+
+
+# ---- delete_job：终态才许删，运行中先取消 ----
+
+def _seed_ledger(tmp_path, monkeypatch, jobs):
+    import json as _json
+    path = tmp_path / "webapp_jobs.json"
+    path.write_text(_json.dumps({"jobs": jobs}), encoding="utf-8")
+    monkeypatch.setattr(job_runner, "JOBS_PATH", path)
+    monkeypatch.setattr(job_runner, "_state_lock", asyncio.Lock())
+
+
+async def test_delete_finished_job_gone_from_ledger(tmp_path, monkeypatch):
+    _seed_ledger(tmp_path, monkeypatch, [
+        {"job_id": "a", "kind": "load_brief_date", "target": "2026-11-22",
+         "status": "failed", "created_at": "x", "error": "超时"},
+        {"job_id": "b", "kind": "load_brief_date", "target": "2026-11-23",
+         "status": "done", "created_at": "y"},
+    ])
+    ok = await job_runner.delete_job("a")
+    assert ok.get("ok")
+    rest = job_runner._load_jobs()["jobs"]
+    assert [j["job_id"] for j in rest] == ["b"], "只该摘掉被删的那条"
+
+
+async def test_delete_running_job_refused_until_cancelled(tmp_path, monkeypatch):
+    _seed_ledger(tmp_path, monkeypatch, [
+        {"job_id": "a", "kind": "load_brief_date", "target": "d",
+         "status": "running", "created_at": "x"},
+    ])
+    ok = await job_runner.delete_job("a")
+    assert not ok.get("ok")
+    assert "取消" in ok.get("error", ""), "文案要把出路说清楚：先 cancel"
+    assert job_runner._load_jobs()["jobs"][0]["status"] == "running"
+
+
+async def test_delete_unknown_job_reports_not_found(tmp_path, monkeypatch):
+    _seed_ledger(tmp_path, monkeypatch, [])
+    ok = await job_runner.delete_job("ghost")
+    assert not ok.get("ok") and "不存在" in ok.get("error", "")

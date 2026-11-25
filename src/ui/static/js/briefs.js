@@ -1020,6 +1020,17 @@
             btn.type = 'button';
             btn.addEventListener('click', () => jobAction(job.job_id, 'retry', btn, '重排队…'));
             actions.appendChild(btn);
+            const del = dom('button', 'btn btn-ghost btn-xs job-delete-btn', '删除');
+            del.type = 'button';
+            del.addEventListener('click', () => jobDelete(job.job_id, del));
+            actions.appendChild(del);
+        } else if (job.status === 'done' || job.status === 'cancelled') {
+            // 已结束的都给删——侧栏不是历史档案，攒着旧条目只会让人以为
+            // 系统在积压什么；删除只动账本行，不碰已入库的数据。
+            const del = dom('button', 'btn btn-ghost btn-xs job-delete-btn', '删除');
+            del.type = 'button';
+            del.addEventListener('click', () => jobDelete(job.job_id, del));
+            actions.appendChild(del);
         }
 
         card.appendChild(top);
@@ -1028,6 +1039,20 @@
         else if (job.detail) card.appendChild(dom('div', 'job-card-detail', job.detail));
         if (actions.children.length) card.appendChild(actions);
         return card;
+    }
+
+    async function jobDelete(jobId, btn) {
+        btn.disabled = true;
+        btn.textContent = '删除中…';
+        try {
+            await API.jobs.remove(jobId);
+            toast('任务记录已删除', 'success');
+        } catch (err) {
+            btn.disabled = false;
+            btn.textContent = '删除';
+            toast(`删除任务失败：${err.message}`, 'error');
+        }
+        await loadJobs(false);
     }
 
     async function jobAction(jobId, action, btn, busyText) {

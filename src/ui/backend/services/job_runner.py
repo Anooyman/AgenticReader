@@ -212,6 +212,26 @@ async def cancel_job(job_id: str) -> dict:
     return {"ok": True}
 
 
+async def delete_job(job_id: str) -> dict:
+    """从账本删除一条已结束的任务（done/failed/interrupted/cancelled）。
+
+    还在排队/运行中的不收——先取消。不是洁癖：账本行没了，那条任务照跑，
+    跑完再想改状态就只能靠"找不到行就什么都不做"兜底，而用户在任务侧
+    栏看到的就是"任务消失了但活还在干"。想清空就先取消再删，一步都不许跳。
+    """
+    async with _state_lock:
+        data = _load_jobs()
+        job = next((j for j in data["jobs"] if j["job_id"] == job_id), None)
+        if job is None:
+            return {"ok": False, "error": f"任务不存在: {job_id}"}
+        if job["status"] in ACTIVE_STATUSES:
+            return {"ok": False,
+                    "error": "任务还在排队/运行中，请先取消再删除"}
+        data["jobs"] = [j for j in data["jobs"] if j["job_id"] != job_id]
+        _save_jobs(data)
+    return {"ok": True}
+
+
 # ---- 各类任务的执行 ----
 
 async def _run_job(job: dict) -> dict:
