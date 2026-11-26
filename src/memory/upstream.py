@@ -52,8 +52,51 @@ logger = logging.getLogger(__name__)
 # SDK 调用期护栏：soft deadline 走上游自己的 deadline_s（agent 循环在轮次
 # 边界检查），硬 cap 用 wait_for 兜底并联动 cancel——超时不是"等死了"，
 # 而是置位取消标志、线程自己收尾。
-_SEARCH_DEADLINE_S = 20.0
-_SEARCH_HARD_CAP_S = 90.0
+#
+# 2026-11-26 调参，根因是一条被当代码 bug 报了半天的"查不到"：上游
+# agent_search 缺省 6 轮、实测 133s 跑完 103 条命中，而 AR 的硬 cap 是
+# 90s——每次都在**注定能成功**的检索上到点，然后按读路回落本地旧库
+# （AATF 在那边是 0 行），chat 于是永远答"没找到"。三根旋钮各管一段：
+#   * max_rounds：掐上游的腿。缺省 3 轮（实测 ~22s/轮 ≈ 66s，留给硬 cap
+#     的余量翻倍）；MEMORY_SEARCH_MAX_ROUNDS 可调 1-8。
+#   * deadline_s：软门，让还在跑的循环在轮次边界自己收，60s。
+#   * hard cap：兜底等待 150s——仍在 retrieval 的 600s 预算与 chat 900s
+#     墙钟之内，但它只是最后一道，正常路径靠前两根就收敛了。
+_SEARCH_DEADLINE_S = 60.0
+_SEARCH_HARD_CAP_S = 150.0
+_SEARCH_MAX_ROUNDS_DEFAULT = 3
+
+
+def _search_env_float(name: str, default: float) -> float:
+    try:
+        v = float(os.environ.get(name, "") or default)
+    except ValueError:
+        logger.warning("%s 不是数字，用默认值 %s", name, default)
+        return default
+    return v if v > 0 else default
+
+
+def _search_deadline_s() -> float:
+    return _search_env_float("MEMORY_SEARCH_DEADLINE_S", _SEARCH_DEADLINE_S)
+
+
+def _search_hard_cap_s() -> float:
+    return _search_env_float("MEMORY_SEARCH_HARD_CAP_S", _SEARCH_HARD_CAP_S)
+
+
+def _search_max_rounds() -> int:
+    """上游检索允许烧几轮 agentic 循环。1-8 钳位，非法值回默认 3。"""
+    raw = os.environ.get("MEMORY_SEARCH_MAX_ROUNDS", "").strip()
+    if not raw:
+        return _SEARCH_MAX_ROUNDS_DEFAULT
+    try:
+        return max(1, min(8, int(raw)))
+    except ValueError:
+        logger.warning("MEMORY_SEARCH_MAX_ROUNDS=%r 不是整数，用默认 %d",
+                       raw, _SEARCH_MAX_ROUNDS_DEFAULT)
+        return _SEARCH_MAX_ROUNDS_DEFAULT
+
+
 _MCP_TIMEOUT_S = 15.0
 
 # MCP 决策面只读白名单——写工具（remember/ingest/chat）不在这里，也不该
@@ -328,21 +371,23 @@ async def upstream_search(query: str, *, namespace: Optional[str] = None,
 
     def _run():
         return client.search(query, namespace=namespace, namespaces=namespaces,
-                             deadline_s=_SEARCH_DEADLINE_S,
+                             deadline_s=_search_deadline_s(),
+                             max_iterations=_search_max_rounds(),
                              cancel_check=cancel.is_set)
 
     try:
         result = await asyncio.wait_for(asyncio.to_thread(_run),
-                                        timeout=_SEARCH_HARD_CAP_S)
+                                        timeout=_search_hard_cap_s())
     except asyncio.TimeoutError:
         # 硬 cap 到点：置位让线程下一轮自己收尾，这边走超时折叠（不是
         # _fail——没有异常可打，是"我们到点了"的语义）。
         cancel.set()
         logger.warning("上游 search 超过 %ss 硬上限，已置 cancel flag 等线程收尾",
-                       _SEARCH_HARD_CAP_S)
+                       _search_hard_cap_s())
         return {"available": False, "error": "TimeoutError",
-                "note": (f"上游 search 超 {int(_SEARCH_HARD_CAP_S)}s 未回，"
-                         f"已置取消标志（soft deadline {_SEARCH_DEADLINE_S}s），"
+                "note": (f"上游 search 超 {int(_search_hard_cap_s())}s 未回，"
+                         f"已置取消标志（soft deadline {int(_search_deadline_s())}s，"
+                         f"轮数上限 {_search_max_rounds()}），"
                          f"线程将在轮次边界自行收尾")}
     except Exception as exc:  # noqa: BLE001
         return _fail("search", exc)

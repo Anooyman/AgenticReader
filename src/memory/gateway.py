@@ -29,8 +29,10 @@ namespace/作用域语义不变。
     做别名暴露，将来"内核替换"只动本文件内部。路由开关的取值常量也在
     config（MEMORY_STORE_MODE），本层只消费不发明。
 """
+import asyncio
 import logging
 import os
+import re
 from typing import Any, Dict, List, Optional, Union
 
 from src.config.settings import resolve_provider
@@ -317,8 +319,12 @@ async def search(
         if payload.get("available"):
             logger.debug("gateway.search 走上游路（ns=%s）", "全局" if scoped is None else scoped)
             return _map_upstream_search_result(payload)
-        logger.warning("上游 search 未成，本次检索回落本地旧库：%s",
+        logger.warning("上游 search 未成，先试上游行扫描：%s",
                        payload.get("note") or payload.get("error") or "无 note")
+        scanned = await _upstream_rowscan_search(query, scoped)
+        if scanned is not None:
+            return scanned
+        logger.warning("行扫描也没接住，本次检索最终回落本地旧库")
     kwargs = {"provider": resolve_provider(provider)}
     if max_iterations is not None:
         kwargs["max_iterations"] = max_iterations
@@ -344,6 +350,121 @@ async def _upstream_search_scoped(query: str,
             return await _upstream.upstream_search(query, namespace=str(ns[0]))
         return await _upstream.upstream_search(query, namespaces=[str(n) for n in ns])
     return await _upstream.upstream_search(query, namespace=str(ns))
+
+
+# ---------------------------------------------------------- 读路兜底：行扫描
+#
+# 上游的 agentic search 是一条 LLM 循环，慢端点会把它拖过 soft deadline，
+# AR 侧的等待到点就只能按"读路允许失败"把这次检索丢掉。丢掉之前还有一步
+# 免费的：browse 面是快的——它不碰 LLM，几秒内就能把作用域内的行全捞回来
+# （2026-11-26 实测 482 行秒取，而 6 轮 search 循环 133s 还没出结果）。
+# 于是"上游 search 未成"和"回落到空本地库"之间补一层**确定性行扫描**：
+# 拿真行 + 在 AR 进程里打分，命中就照常给四键形状，一条都不写。
+#
+# 这层刻意不做任何语义理解：它救不了"换个说法再问"，它只救"数据就在那几行
+# 里、按日期/关键词一捞就有"——而这恰好是把 search 拖垮的那类查询的形状。
+
+_ROWSCAN_MAX_ROWS = 5000       # 上游 browse 默认不封顶，这里给硬护栏
+_ROWSCAN_TOP_K = 10
+_ROWSCAN_DATE_WEIGHT = 10.0
+# 中文疑问句的虚词表。打分时"虚词命中"只会让所有行同涨分——等于没有区分度，
+# 还白烧比较。表不求全，只挡"这天的/哪些/有没有"这类句式里必然出现的词。
+_ROWSCAN_STOPWORDS = frozenset({
+    "的", "了", "是", "在", "有", "和", "与", "或", "吗", "呢", "吧", "啊",
+    "我", "你", "他", "她", "它", "们", "什么", "怎么", "怎样", "哪", "哪个",
+    "哪些", "多少", "这", "那", "这个", "那个", "请", "帮忙", "一下", "比较",
+    "还", "就", "都", "也", "要", "可以", "能", "会", "看看", "告诉", "没有",
+})
+
+_FULL_DATE_RE = re.compile(r"(20\d{2})\s*[年\-/.]\s*(\d{1,2})\s*[月\-/.]\s*(\d{1,2})")
+_DAY_RE = re.compile(r"(\d{1,2})\s*[日号](?!\d)")
+
+
+def _rowscan_date(query: str) -> tuple:
+    """→ (完整日期 "YYYY-MM-DD" | "", 日号 "24" | "")，都拿不到就返回空串。"""
+    m = _FULL_DATE_RE.search(query)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}", ""
+    m = _DAY_RE.search(query)
+    if m:
+        day = int(m.group(1))
+        if 1 <= day <= 31:
+            return "", f"{day:02d}"
+    return "", ""
+
+
+def _rowscan_tokens(query: str) -> List[str]:
+    """query → 关键词表：ASCII 词照抄，CJK 段取整段 + 二字滑窗。"""
+    out: List[str] = []
+    for m in re.finditer(r"[A-Za-z][A-Za-z0-9.\-]{2,}|[\u4e00-\u9fff]{2,}", query):
+        t = m.group(0)
+        if t in _ROWSCAN_STOPWORDS:
+            continue
+        if re.fullmatch(r"[\u4e00-\u9fff]+", t):
+            if t not in _ROWSCAN_STOPWORDS:
+                out.append(t)
+            if len(t) > 2:
+                for i in range(len(t) - 1):
+                    bg = t[i:i + 2]
+                    if bg not in _ROWSCAN_STOPWORDS:
+                        out.append(bg)
+        else:
+            out.append(t.lower())
+    return sorted(set(out))
+
+
+def _rowscan_score(query: str, row: Dict[str, Any]) -> float:
+    full_date, day = _rowscan_date(query)
+    score = 0.0
+    day_str = str(row.get("occurred_at") or row.get("created_at") or "")
+    if full_date and day_str[:10] == full_date:
+        score += _ROWSCAN_DATE_WEIGHT
+    elif day and len(day_str) >= 10 and day_str[8:10] == day:
+        score += _ROWSCAN_DATE_WEIGHT
+    tokens = _rowscan_tokens(query)
+    if tokens:
+        blob = " ".join(
+            str(row.get(col) or "") for col in ("abstract", "keywords", "detail")
+        ).lower()
+        score += float(sum(1 for t in tokens if t.lower() in blob))
+    return score
+
+
+async def _upstream_rowscan_search(query: str, ns: Optional[Union[str, List[str]]]) -> Optional[Dict[str, Any]]:
+    """search 的确定性兜底：经 browse 面取上游真行，AR 侧打分，返回
+    agentic_search 的四键形状（iterations/tool_calls_made 记作 1 次取行）。
+
+    返回 None ＝ 这层接不住（browse 面也不可用、或一条都不匹配），
+    调用方继续它原来的动作——回落到本地旧库，与今天的语义一致。
+    """
+    scoped = ns or "*"
+    try:
+        payload = await asyncio.to_thread(_upstream.upstream_browse_all_rows, scoped)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("行扫描取上游行失败：%s: %s", type(exc).__name__, exc)
+        return None
+    if not isinstance(payload, dict) or not payload.get("available"):
+        logger.warning("行扫描不可用（上游 browse 面同样不通）：%s",
+                       (payload or {}).get("note") if isinstance(payload, dict) else "?")
+        return None
+
+    rows = payload.get("rows") or []
+    if len(rows) > _ROWSCAN_MAX_ROWS:
+        rows = rows[-_ROWSCAN_MAX_ROWS:]
+    scored = sorted(((_rowscan_score(query, r), r) for r in rows),
+                    key=lambda t: (t[0], str(t[1].get("occurred_at") or "")),
+                    reverse=True)
+    hits = [(s, r) for s, r in scored if s > 0][: _ROWSCAN_TOP_K]
+    if not hits:
+        return None
+    logger.warning("search 未成，行扫描兜底命中 %d/%d 行（确定性打分，非语义）",
+                   len(hits), len(rows))
+    return {
+        "answer": "",
+        "results": [dict(_map_upstream_row(r), score=round(s, 2)) for s, r in hits],
+        "iterations": 1,
+        "tool_calls_made": 1,
+    }
 
 
 # ---- 写 ----
